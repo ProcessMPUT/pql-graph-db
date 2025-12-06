@@ -45,3 +45,13 @@ docs/
 ### AI Agents ###
 junie.md
 claude.md
+
+### Large Data Files ###
+src/main/resources/logs/Hospital_log.xes
+
+### Temporary Output ###
+*.txt
+*.log
+*.py
+docs/
+

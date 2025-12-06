@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -100,6 +101,7 @@
                 opacity: 0;
                 transform: translateY(-20px);
             }
+
             to {
                 opacity: 1;
                 transform: translateY(0);
@@ -107,8 +109,13 @@
         }
 
         @keyframes fadeIn {
-            from { opacity: 0; }
-            to { opacity: 1; }
+            from {
+                opacity: 0;
+            }
+
+            to {
+                opacity: 1;
+            }
         }
 
         .tabs {
@@ -287,7 +294,10 @@
             font-size: 0.95rem;
         }
 
-        input[type="file"], input[type="text"], select, textarea {
+        input[type="file"],
+        input[type="text"],
+        select,
+        textarea {
             width: 100%;
             background: var(--bg-secondary);
             border: 2px solid var(--border-color);
@@ -300,7 +310,9 @@
             transition: all 0.3s;
         }
 
-        input:focus, select:focus, textarea:focus {
+        input:focus,
+        select:focus,
+        textarea:focus {
             outline: none;
             border-color: var(--accent-purple);
             box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
@@ -474,294 +486,456 @@
         .log-actions button {
             padding: 8px 16px;
             font-size: 0.85rem;
-        }
 
-        .quick-start {
-            background: linear-gradient(135deg, rgba(102, 126, 234, 0.1) 0%, rgba(118, 75, 162, 0.1) 100%);
-            border: 1px solid rgba(102, 126, 234, 0.3);
-            border-radius: 16px;
-            padding: 1.5rem;
-            margin-bottom: 2rem;
-        }
+            .quick-start li {
+                margin-bottom: 0.5rem;
+            }
 
-        .quick-start h3 {
-            color: var(--accent-purple);
-            margin-bottom: 1rem;
-            font-size: 1.2rem;
-        }
+            /* Toasts */
+            .toast-container {
+                position: fixed;
+                bottom: 2rem;
+                right: 2rem;
+                z-index: 1000;
+                display: flex;
+                flex-direction: column;
+                gap: 1rem;
+            }
 
-        .quick-start ol {
-            margin-left: 1.5rem;
-            color: var(--text-secondary);
-        }
+            .toast {
+                background: var(--bg-secondary);
+                border: 1px solid var(--border-color);
+                border-left: 4px solid var(--accent-blue);
+                padding: 1rem 1.5rem;
+                border-radius: 8px;
+                box-shadow: var(--shadow-lg);
+                color: var(--text-primary);
+                min-width: 300px;
+                animation: slideIn 0.3s ease-out;
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+            }
 
-        .quick-start li {
-            margin-bottom: 0.5rem;
-        }
+            .toast.success {
+                border-left-color: var(--accent-success);
+            }
+
+            .toast.error {
+                border-left-color: #ff4757;
+            }
+
+            .toast.info {
+                border-left-color: var(--accent-blue);
+            }
+
+            @keyframes slideIn {
+                from {
+                    transform: translateX(100%);
+                    opacity: 0;
+                }
+
+                to {
+                    transform: translateX(0);
+                    opacity: 1;
+                }
+            }
+
+            @keyframes fadeOut {
+                from {
+                    opacity: 1;
+                }
+
+                to {
+                    opacity: 0;
+                }
+            }
+
+            /* Spinner */
+            .spinner {
+                width: 20px;
+                height: 20px;
+                border: 2px solid rgba(255, 255, 255, 0.3);
+                border-radius: 50%;
+                border-top-color: #fff;
+                animation: spin 0.8s linear infinite;
+                display: inline-block;
+                margin-right: 0.5rem;
+                vertical-align: middle;
+            }
+
+            @keyframes spin {
+                to {
+                    transform: rotate(360deg);
+                }
+            }
+
+            /* Table Improvements */
+            .results-table tr:nth-child(even) {
+                background-color: rgba(255, 255, 255, 0.02);
+            }
+
+            /* Code Editor Styling */
+            #pqlQueryText {
+                font-family: 'JetBrains Mono', 'Courier New', monospace;
+                font-size: 1rem;
+                line-height: 1.5;
+                background-color: #1e1e1e;
+                /* Darker editor bg */
+                color: #d4d4d4;
+                border-color: #333;
+            }
     </style>
 </head>
+
 <body>
 
-<div class="container">
-    <h1>ProcessM Interpreter</h1>
-    <p class="subtitle">Neo4j-Based Process Mining Query Engine with PQL Support</p>
-    <div class="demo-badge">
-        <span>🚀 Demo Ready</span>
+    <div class="container">
+        <h1>ProcessM Interpreter</h1>
+        <p class="subtitle">Neo4j-Based Process Mining Query Engine with PQL Support</p>
+        <div class="demo-badge">
+            <span>🚀 Demo Ready</span>
+        </div>
+
+        <div class="tabs">
+            <button class="tab-button active" onclick="openTab('logs')">📊 Log Management</button>
+            <button class="tab-button" onclick="openTab('query')">🔍 PQL Query</button>
+        </div>
+
+        <div id="logs" class="tab-content active">
+            <div class="quick-start">
+                <h3>🚀 Quick Start Guide</h3>
+                <ol>
+                    <li><strong>Load Sample Data:</strong> Click "Load Hospital Log" below to load example dataset</li>
+                    <li><strong>Run Queries:</strong> Switch to "PQL Query" tab</li>
+                    <li><strong>Explore:</strong> Try sample queries or write your own PQL</li>
+                    <li><strong>Export:</strong> Download results as CSV or XES format</li>
+                </ol>
+            </div>
+
+            <div class="endpoint">
+                <h2>Available Logs</h2>
+                <div id="logList"></div>
+                <button id="refreshLogsButton">🔄 Refresh List</button>
+            </div>
+
+            <div class="endpoint">
+                <h2>Load Sample Data</h2>
+                <div class="info-box">
+                    <strong>Hospital Log Dataset:</strong> Real-life event log from a Dutch academic hospital (BPIC
+                    2011).
+                    Contains 1,143 cases and 150,291 events across multiple departments.
+                </div>
+                <button id="loadSampleButton">📥 Load Hospital Log (Recommended for Demo)</button>
+                <button id="loadSampleButton2" class="secondary">Load Sample Process Log</button>
+                <div class="output-block">
+                    <pre id="uploadOutput">Click "Load Hospital Log" to get started...</pre>
+                </div>
+            </div>
+
+            <div class="endpoint">
+                <h2>Upload Custom Log</h2>
+                <div class="form-group">
+                    <label for="xesFileInput">Upload XES File (.xes or .xes.gz, max 500MB)</label>
+                    <input type="file" id="xesFileInput" accept=".xes,.xes.gz">
+                </div>
+                <button id="uploadButton">📤 Upload</button>
+            </div>
+        </div>
+
+        <div id="query" class="tab-content">
+            <div class="endpoint">
+                <h2>Execute PQL Query</h2>
+                <div class="info-box">
+                    <strong>💡 Tip:</strong> Select a sample query below to see examples, or write your own PQL query.
+                    Results can be exported to CSV or XES format.
+                </div>
+                <div class="form-group">
+                    <label for="activeLogSelect">📁 Active Log</label>
+                    <select id="activeLogSelect"></select>
+                </div>
+                <div class="form-group">
+                    <label for="pqlQuerySelect">📝 Sample Queries</label>
+                    <select id="pqlQuerySelect">
+                        <option value="">Select a sample query...</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="pqlQueryText">✏️ PQL Query</label>
+                    <textarea id="pqlQueryText">select event:* limit 20</textarea>
+                </div>
+                <button id="pqlButton">▶️ Run Query</button>
+
+                <div id="queryStatsContainer" style="display: none;"></div>
+
+                <div class="output-block">
+                    <div id="pqlOutput">Select a log and click "Run Query" to see results...</div>
+                </div>
+            </div>
+        </div>
+        <div id="toastContainer" class="toast-container"></div>
     </div>
 
-    <div class="tabs">
-        <button class="tab-button active" onclick="openTab('logs')">📊 Log Management</button>
-        <button class="tab-button" onclick="openTab('query')">🔍 PQL Query</button>
-    </div>
+    <script>
+        // --- API & UI Helpers ---
+        const API_BASE = '/api';
 
-    <div id="logs" class="tab-content active">
-        <div class="quick-start">
-            <h3>🚀 Quick Start Guide</h3>
-            <ol>
-                <li><strong>Load Sample Data:</strong> Click "Load Hospital Log" below to load example dataset</li>
-                <li><strong>Run Queries:</strong> Switch to "PQL Query" tab</li>
-                <li><strong>Explore:</strong> Try sample queries or write your own PQL</li>
-                <li><strong>Export:</strong> Download results as CSV or XES format</li>
-            </ol>
-        </div>
+        function showToast(message, type = 'info') {
+            const container = document.getElementById('toastContainer');
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            toast.innerHTML = `<span>${message}</span>`;
 
-        <div class="endpoint">
-            <h2>Available Logs</h2>
-            <div id="logList"></div>
-            <button id="refreshLogsButton">🔄 Refresh List</button>
-        </div>
+            // Close button
+            const closeBtn = document.createElement('button');
+            closeBtn.innerHTML = '×';
+            closeBtn.style.background = 'none';
+            closeBtn.style.border = 'none';
+            closeBtn.style.color = 'inherit';
+            closeBtn.style.fontSize = '1.2rem';
+            closeBtn.style.padding = '0';
+            closeBtn.style.marginLeft = '1rem';
+            closeBtn.style.cursor = 'pointer';
+            closeBtn.style.boxShadow = 'none';
+            closeBtn.onclick = () => {
+                toast.style.animation = 'fadeOut 0.3s ease-out';
+                setTimeout(() => toast.remove(), 300);
+            };
+            toast.appendChild(closeBtn);
 
-        <div class="endpoint">
-            <h2>Load Sample Data</h2>
-            <div class="info-box">
-                <strong>Hospital Log Dataset:</strong> Real-life event log from a Dutch academic hospital (BPIC 2011).
-                Contains 1,143 cases and 150,291 events across multiple departments.
-            </div>
-            <button id="loadSampleButton">📥 Load Hospital Log (Recommended for Demo)</button>
-            <button id="loadSampleButton2" class="secondary">Load Sample Process Log</button>
-            <div class="output-block">
-                <pre id="uploadOutput">Click "Load Hospital Log" to get started...</pre>
-            </div>
-        </div>
+            container.appendChild(toast);
 
-        <div class="endpoint">
-            <h2>Upload Custom Log</h2>
-            <div class="form-group">
-                <label for="xesFileInput">Upload XES File (.xes or .xes.gz, max 500MB)</label>
-                <input type="file" id="xesFileInput" accept=".xes,.xes.gz">
-            </div>
-            <button id="uploadButton">📤 Upload</button>
-        </div>
-    </div>
-
-    <div id="query" class="tab-content">
-        <div class="endpoint">
-            <h2>Execute PQL Query</h2>
-            <div class="info-box">
-                <strong>💡 Tip:</strong> Select a sample query below to see examples, or write your own PQL query.
-                Results can be exported to CSV or XES format.
-            </div>
-            <div class="form-group">
-                <label for="activeLogSelect">📁 Active Log</label>
-                <select id="activeLogSelect"></select>
-            </div>
-            <div class="form-group">
-                <label for="pqlQuerySelect">📝 Sample Queries</label>
-                <select id="pqlQuerySelect">
-                    <option value="">Select a sample query...</option>
-                </select>
-            </div>
-            <div class="form-group">
-                <label for="pqlQueryText">✏️ PQL Query</label>
-                <textarea id="pqlQueryText">select event:* limit 20</textarea>
-            </div>
-            <button id="pqlButton">▶️ Run Query</button>
-
-            <div id="queryStatsContainer" style="display: none;"></div>
-
-            <div class="output-block">
-                <div id="pqlOutput">Select a log and click "Run Query" to see results...</div>
-            </div>
-        </div>
-    </div>
-</div>
-
-<script>
-    // --- API & UI Helpers ---
-    const API_BASE = '/api';
-
-    async function apiCall(endpoint, options = {}, outputElement) {
-        outputElement.style.color = 'var(--text-color)';
-        outputElement.textContent = 'Executing...';
-        try {
-            const response = await fetch(`${API_BASE}${endpoint}`, options);
-            const resultText = await response.text();
-            let formattedResult;
-            try {
-                const jsonResult = JSON.parse(resultText);
-                formattedResult = JSON.stringify(jsonResult, null, 2);
-            } catch (e) {
-                formattedResult = resultText;
-            }
-            outputElement.textContent = `Status: ${response.status} ${response.statusText}\n\n${formattedResult}`;
-            if (!response.ok) {
-                 outputElement.style.color = 'var(--red-color)';
-            }
-            return JSON.parse(resultText);
-        } catch (error) {
-            outputElement.style.color = 'var(--red-color)';
-            outputElement.textContent = `Error: ${error.message}`;
-            throw error;
+            // Auto remove after 5 seconds
+            setTimeout(() => {
+                if (toast.parentElement) {
+                    toast.style.animation = 'fadeOut 0.3s ease-out';
+                    setTimeout(() => toast.remove(), 300);
+                }
+            }, 5000);
         }
-    }
 
-    function openTab(tabName) {
-        document.querySelectorAll('.tab-content').forEach(tab => tab.classList.remove('active'));
-        document.querySelectorAll('.tab-button').forEach(btn => btn.classList.remove('active'));
-        document.getElementById(tabName).classList.add('active');
-        document.querySelector(`.tab-button[onclick="openTab('${tabName}')"]`).classList.add('active');
-    }
-
-    // --- Log Management ---
-    const logList = document.getElementById('logList');
-    const uploadOutput = document.getElementById('uploadOutput');
-    const activeLogSelect = document.getElementById('activeLogSelect');
-
-    async function refreshLogs() {
-        try {
-            const logs = await apiCall('/logs', {}, uploadOutput);
-            logList.innerHTML = '';
-            activeLogSelect.innerHTML = '';
-            if (logs && logs.length > 0) {
-                logs.forEach(log => {
-                    const logId = log.logId;
-                    const listItem = document.createElement('div');
-                    listItem.className = 'log-list-item';
-                    listItem.innerHTML = `
-                        <span><strong>${log.name || logId}</strong> (${logId})</span>
-                        <div class="log-actions">
-                            <button onclick="getLogStatistics('${logId}')">📊 Stats</button>
-                            <button class="danger" onclick="deleteLog('${logId}')">🗑️ Delete</button>
-                        </div>
-                    `;
-                    logList.appendChild(listItem);
-
-                    const option = document.createElement('option');
-                    option.value = logId;
-                    option.textContent = `${log.name || logId} (${logId})`;
-                    activeLogSelect.appendChild(option);
-                });
+        function setLoading(element, isLoading, loadingText = 'Loading...') {
+            if (isLoading) {
+                element.dataset.originalText = element.innerHTML;
+                element.innerHTML = `<span class="spinner"></span> ${loadingText}`;
+                element.disabled = true;
             } else {
-                logList.innerHTML = '<p>No logs found. Load Hospital Log to get started!</p>';
+                element.innerHTML = element.dataset.originalText || element.innerHTML;
+                element.disabled = false;
             }
-        } catch (error) {
-            console.error("Failed to refresh logs", error);
         }
-    }
 
-    async function getLogStatistics(logId) {
-        await apiCall(`/logs/${logId}/statistics`, {}, uploadOutput);
-    }
-
-    async function deleteLog(logId) {
-        if (confirm(`Are you sure you want to delete log "${logId}"?`)) {
-            await apiCall(`/logs/${logId}?deleteAllData=true`, { method: 'DELETE' }, uploadOutput);
-            refreshLogs();
+        async function apiCall(endpoint, options = {}, outputElement) {
+            outputElement.style.color = 'var(--text-color)';
+            outputElement.textContent = 'Executing...';
+            try {
+                const response = await fetch(`${API_BASE}${endpoint}`, options);
+                const resultText = await response.text();
+                let formattedResult;
+                try {
+                    const jsonResult = JSON.parse(resultText);
+                    formattedResult = JSON.stringify(jsonResult, null, 2);
+                } catch (e) {
+                    formattedResult = resultText;
+                }
+                outputElement.textContent = `Status: ${response.status} ${response.statusText}\n\n${formattedResult}`;
+                if (!response.ok) {
+                    outputElement.style.color = 'var(--red-color)';
+                }
+                return JSON.parse(resultText);
+            } catch (error) {
+                outputElement.style.color = 'var(--red-color)';
+                outputElement.textContent = `Error: ${error.message}`;
+                throw error;
+            }
         }
-    }
 
-    document.getElementById('refreshLogsButton').addEventListener('click', refreshLogs);
-
-    document.getElementById('uploadButton').addEventListener('click', async () => {
-        const fileInput = document.getElementById('xesFileInput');
-        if (fileInput.files.length === 0) {
-            uploadOutput.style.color = 'var(--red-color)';
-            uploadOutput.textContent = 'Please select a file first.';
-            return;
+        function openTab(tabName) {
+            document.querySelectorAll('.tab-content').forEach(tab => tab.classList.remove('active'));
+            document.querySelectorAll('.tab-button').forEach(btn => btn.classList.remove('active'));
+            document.getElementById(tabName).classList.add('active');
+            document.querySelector(`.tab-button[onclick="openTab('${tabName}')"]`).classList.add('active');
         }
-        const formData = new FormData();
-        formData.append('file', fileInput.files[0]);
-        await apiCall('/logs/upload', { method: 'POST', body: formData }, uploadOutput);
-        refreshLogs();
-    });
 
-    document.getElementById('loadSampleButton').addEventListener('click', async () => {
-        uploadOutput.textContent = 'Loading Hospital Log (81MB)... This may take 1-3 minutes...';
-        const params = new URLSearchParams({
-            resourcePath: 'logs/Hospital_log.xes',
-            logId: 'Hospital_log'
+        // --- Log Management ---
+        const logList = document.getElementById('logList');
+        const uploadOutput = document.getElementById('uploadOutput');
+        const activeLogSelect = document.getElementById('activeLogSelect');
+
+        async function refreshLogs() {
+            try {
+                const logs = await apiCall('/logs', {}, uploadOutput);
+                logList.innerHTML = '';
+                activeLogSelect.innerHTML = '';
+                if (logs && logs.length > 0) {
+                    logs.forEach(log => {
+                        const logId = log.logId;
+                        const listItem = document.createElement('div');
+                        listItem.className = 'log-list-item';
+                        listItem.innerHTML = `
+        <span><strong>${log.name || logId}</strong> (${logId})</span>
+        <div class="log-actions">
+            <button onclick="getLogStatistics('${logId}')">📊 Stats</button>
+            <button class="danger" onclick="deleteLog('${logId}')">🗑️ Delete</button>
+        </div>
+        `;
+                        logList.appendChild(listItem);
+
+                        const option = document.createElement('option');
+                        option.value = logId;
+                        option.textContent = `${log.name || logId} (${logId})`;
+                        activeLogSelect.appendChild(option);
+                    });
+                } else {
+                    logList.innerHTML = '<p>No logs found. Load Hospital Log to get started!</p>';
+                }
+            } catch (error) {
+                console.error("Failed to refresh logs", error);
+            }
+        }
+
+        async function getLogStatistics(logId) {
+            await apiCall(`/logs/${logId}/statistics`, {}, uploadOutput);
+        }
+
+        async function deleteLog(logId) {
+            if (confirm(`Are you sure you want to delete log "${logId}"?`)) {
+                try {
+                    await apiCall(`/logs/${logId}?deleteAllData=true`, { method: 'DELETE' }, uploadOutput);
+                    showToast(`Log "${logId}" deleted`, 'success');
+                    refreshLogs();
+                } catch (e) {
+                    showToast('Failed to delete log: ' + e.message, 'error');
+                }
+            }
+        }
+
+        document.getElementById('refreshLogsButton').addEventListener('click', refreshLogs);
+
+        document.getElementById('uploadButton').addEventListener('click', async () => {
+            const fileInput = document.getElementById('xesFileInput');
+            const btn = document.getElementById('uploadButton');
+
+            if (fileInput.files.length === 0) {
+                showToast('Please select a file first.', 'error');
+                return;
+            }
+
+            setLoading(btn, true, 'Uploading...');
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+
+            try {
+                await apiCall('/logs/upload', { method: 'POST', body: formData }, uploadOutput);
+                showToast('Log uploaded successfully!', 'success');
+                refreshLogs();
+            } catch (e) {
+                showToast('Upload failed: ' + e.message, 'error');
+            } finally {
+                setLoading(btn, false);
+            }
         });
-        await apiCall(`/logs/load-sample?${params}`, { method: 'POST' }, uploadOutput);
-        refreshLogs();
-    });
 
-    document.getElementById('loadSampleButton2').addEventListener('click', async () => {
-        const params = new URLSearchParams({
-            resourcePath: 'logs/sample_process.xes',
-            logId: 'sample_process'
+        document.getElementById('loadSampleButton').addEventListener('click', async () => {
+            const btn = document.getElementById('loadSampleButton');
+            setLoading(btn, true, 'Loading...');
+            uploadOutput.textContent = 'Loading Hospital Log (81MB)... This may take 1-3 minutes...';
+
+            const params = new URLSearchParams({
+                resourcePath: 'logs/Hospital_log.xes',
+                logId: 'Hospital_log'
+            });
+
+            try {
+                await apiCall(`/logs/load-sample?${params}`, { method: 'POST' }, uploadOutput);
+                showToast('Hospital log loaded successfully!', 'success');
+                refreshLogs();
+            } catch (e) {
+                showToast('Failed to load sample: ' + e.message, 'error');
+            } finally {
+                setLoading(btn, false);
+            }
         });
-        await apiCall(`/logs/load-sample?${params}`, { method: 'POST' }, uploadOutput);
-        refreshLogs();
-    });
 
-    // --- PQL Query ---
-    const pqlButton = document.getElementById('pqlButton');
-    const pqlQueryText = document.getElementById('pqlQueryText');
-    const pqlOutput = document.getElementById('pqlOutput');
-    const pqlQuerySelect = document.getElementById('pqlQuerySelect');
+        document.getElementById('loadSampleButton2').addEventListener('click', async () => {
+            const btn = document.getElementById('loadSampleButton2');
+            setLoading(btn, true, 'Loading...');
+            const params = new URLSearchParams({
+                resourcePath: 'logs/sample_process.xes',
+                logId: 'sample_process'
+            });
+            try {
+                await apiCall(`/logs/load-sample?${params}`, { method: 'POST' }, uploadOutput);
+                showToast('Sample process log loaded successfully!', 'success');
+                refreshLogs();
+            } catch (e) {
+                showToast('Failed to load sample: ' + e.message, 'error');
+            } finally {
+                setLoading(btn, false);
+            }
+        });
 
-    // Curated sample queries for Hospital_log.xes - guaranteed to work!
-    const sampleQueries = {
-        // === BASICS - Show Different Scopes ===
-        "🔹 Show First 20 Events": "select event:* limit 20",
-        "🔹 Show First 10 Traces": "select trace:* limit 10",
+        // --- PQL Query ---
+        const pqlButton = document.getElementById('pqlButton');
+        const pqlQueryText = document.getElementById('pqlQueryText');
+        const pqlOutput = document.getElementById('pqlOutput');
+        const pqlQuerySelect = document.getElementById('pqlQuerySelect');
 
-        // === SIMPLE FILTERS ===
-        "🏥 Events from Radiology Department": "select event:activity, event:timestamp, event:org_group where event:org_group = 'Radiology' limit 30",
-        "🏥 Events from General Lab": "select event:activity, event:timestamp where event:org_group = 'General Lab Clinical Chemistry' limit 25",
-        "🏥 Events from Operating Rooms": "select event:activity, event:org_group where event:org_group = 'Operating rooms' limit 30",
+        // Curated sample queries for Hospital_log.xes - guaranteed to work!
+        const sampleQueries = {
+            // === BASICS - Show Different Scopes ===
+            "🔹 Show First 20 Events": "select event:* limit 20",
+            "🔹 Show First 10 Traces": "select trace:* limit 10",
+            "🔹 Show Log Attributes": "select log:*",
+            "🔹 Mixed Scope (Trace ID + Event Activity)": "select trace:caseId, event:activity limit 20",
+            "🔹 Hoisting (Event -> Trace)": "select event:activity, ^event:caseId limit 20",
 
-        // === AGGREGATIONS - Show Power of PQL ===
-        "📊 Count All Events": "select count(event:id)",
-        "📊 Events per Department (Top 10)": "select event:org_group, count(event:id) group by event:org_group order by count(event:id) desc limit 10",
-        "📊 Top 15 Most Frequent Activities": "select event:activity, count(event:id) group by event:activity order by count(event:id) desc limit 15",
+            // === SIMPLE FILTERS ===
+            "🏥 Events from Radiology Department": "select event:activity, event:timestamp, event:org_group where event:org_group = 'Radiology' limit 30",
+            "🏥 Events from General Lab": "select event:activity, event:timestamp where event:org_group = 'General Lab Clinical Chemistry' limit 25",
+            "🏥 Events from Operating Rooms": "select event:activity, event:org_group where event:org_group = 'Operating rooms' limit 30",
 
-        // === ADVANCED - Multiple Departments ===
-        "🔬 Compare 3 Departments": "select event:org_group, count(event:id) where event:org_group in ('Radiology', 'Radiotherapy', 'Nuclear Medicine') group by event:org_group order by count(event:id) desc",
+            // === AGGREGATIONS - Show Power of PQL ===
+            "📊 Count All Events": "select count(event:id)",
+            "📊 Events per Department (Top 10)": "select event:org_group, count(event:id) group by event:org_group order by count(event:id) desc limit 10",
+            "📊 Top 15 Most Frequent Activities": "select event:activity, count(event:id) group by event:activity order by count(event:id) desc limit 15",
 
-        // === SHOWCASE QUERIES ===
-        "⭐ All Departments (Sorted)": "select event:org_group group by event:org_group order by event:org_group asc",
-        "⭐ Recent Events (Latest First)": "select event:activity, event:org_group, event:timestamp order by event:timestamp desc limit 25"
-    };
+            // === ADVANCED - Multiple Departments ===
+            "🔬 Compare 3 Departments": "select event:org_group, count(event:id) where event:org_group in ('Radiology', 'Radiotherapy', 'Nuclear Medicine') group by event:org_group order by count(event:id) desc",
 
-    function populateSampleQueries() {
-        for (const [name, query] of Object.entries(sampleQueries)) {
-            const option = document.createElement('option');
-            option.value = query;
-            option.textContent = name;
-            pqlQuerySelect.appendChild(option);
+            // === SHOWCASE QUERIES ===
+            "⭐ All Departments (Sorted)": "select event:org_group group by event:org_group order by event:org_group asc",
+            "⭐ Recent Events (Latest First)": "select event:activity, event:org_group, event:timestamp order by event:timestamp desc limit 25"
+        };
+
+        function populateSampleQueries() {
+            for (const [name, query] of Object.entries(sampleQueries)) {
+                const option = document.createElement('option');
+                option.value = query;
+                option.textContent = name;
+                pqlQuerySelect.appendChild(option);
+            }
         }
-    }
 
-    pqlQuerySelect.addEventListener('change', (e) => {
-        if (e.target.value) {
-            pqlQueryText.value = e.target.value;
-        }
-    });
+        pqlQuerySelect.addEventListener('change', (e) => {
+            if (e.target.value) {
+                pqlQueryText.value = e.target.value;
+            }
+        });
 
-    function renderQueryResults(data, container) {
-        container.innerHTML = '';
+        function renderQueryResults(data, container) {
+            container.innerHTML = '';
 
-        if (!data.success) {
-            container.style.color = 'var(--red-color)';
-            container.textContent = `Error: ${data.error || 'Query failed'}`;
-            return;
-        }
+            if (!data.success) {
+                container.style.color = 'var(--red-color)';
+                container.textContent = `Error: ${data.error || 'Query failed'}`;
+                return;
+            }
 
-        // Stats section
-        const statsDiv = document.createElement('div');
-        statsDiv.className = 'query-stats';
-        statsDiv.innerHTML = `
+            // Stats section
+            const statsDiv = document.createElement('div');
+            statsDiv.className = 'query-stats';
+            statsDiv.innerHTML = `
             <div class="stat-item">
                 <span class="stat-label">Results</span>
                 <span class="stat-value">${data.resultCount}</span>
@@ -774,275 +948,287 @@
                 <span class="stat-label">Query Type</span>
                 <span class="stat-value">${data.query.split(' ')[0].toUpperCase()}</span>
             </div>
-        `;
-        container.appendChild(statsDiv);
+            `;
+            container.appendChild(statsDiv);
 
-        // Action buttons
-        const actionsDiv = document.createElement('div');
-        actionsDiv.className = 'action-buttons';
-        actionsDiv.innerHTML = `
+            // Action buttons
+            const actionsDiv = document.createElement('div');
+            actionsDiv.className = 'action-buttons';
+            actionsDiv.innerHTML = `
             <button class="secondary" onclick="exportToCSV()">📥 Export to CSV</button>
             <button class="secondary" onclick="exportToXES(false)">📥 Export to XES</button>
             <button class="secondary" onclick="exportToXES(true)">📥 Export to XES (gzip)</button>
             <button class="secondary" onclick="copyToClipboard()">📋 Copy JSON</button>
             <button class="secondary" onclick="toggleRawView()">🔄 Toggle Raw View</button>
-        `;
-        container.appendChild(actionsDiv);
+            `;
+            container.appendChild(actionsDiv);
 
-        // Cypher query (collapsible)
-        const cypherSection = document.createElement('div');
-        cypherSection.innerHTML = `
+            // Cypher query (collapsible)
+            const cypherSection = document.createElement('div');
+            cypherSection.innerHTML = `
             <div class="toggle-section" onclick="toggleCollapsible(this)">
                 <span>🔧 Generated Cypher Query</span>
                 <span>▼</span>
             </div>
             <div class="collapsible-content">
-                <pre style="margin: 0.5rem 0; padding: 0.5rem; background-color: var(--input-bg-color); border-radius: 4px;">${data.cypherQuery || 'N/A'}</pre>
+                <pre
+                    style="margin: 0.5rem 0; padding: 0.5rem; background-color: var(--input-bg-color); border-radius: 4px;">${data.cypherQuery || 'N/A'}</pre>
             </div>
-        `;
-        container.appendChild(cypherSection);
+            `;
+            container.appendChild(cypherSection);
 
-        // Results table or raw view
-        const resultsDiv = document.createElement('div');
-        resultsDiv.id = 'resultsContainer';
+            // Results table or raw view
+            const resultsDiv = document.createElement('div');
+            resultsDiv.id = 'resultsContainer';
 
-        if (data.results && data.results.length > 0) {
-            const tableContainer = document.createElement('div');
-            tableContainer.className = 'table-container';
-            tableContainer.id = 'tableView';
+            if (data.results && data.results.length > 0) {
+                const tableContainer = document.createElement('div');
+                tableContainer.className = 'table-container';
+                tableContainer.id = 'tableView';
 
-            const table = document.createElement('table');
-            table.className = 'results-table';
+                const table = document.createElement('table');
+                table.className = 'results-table';
 
-            // Get all unique keys from results
-            const allKeys = new Set();
-            data.results.forEach(row => {
-                Object.keys(row).forEach(key => allKeys.add(key));
-            });
-            const columns = Array.from(allKeys);
-
-            // Header
-            const thead = document.createElement('thead');
-            const headerRow = document.createElement('tr');
-            columns.forEach(col => {
-                const th = document.createElement('th');
-                th.textContent = col;
-                headerRow.appendChild(th);
-            });
-            thead.appendChild(headerRow);
-            table.appendChild(thead);
-
-            // Body
-            const tbody = document.createElement('tbody');
-            data.results.forEach(row => {
-                const tr = document.createElement('tr');
-                columns.forEach(col => {
-                    const td = document.createElement('td');
-                    const value = row[col];
-
-                    // Format complex values
-                    if (value === null || value === undefined) {
-                        td.textContent = 'NULL';
-                        td.style.color = 'var(--red-color)';
-                    } else if (typeof value === 'object') {
-                        td.textContent = JSON.stringify(value);
-                        td.style.fontSize = '0.8rem';
-                    } else {
-                        td.textContent = value;
-                    }
-                    tr.appendChild(td);
+                // Get all unique keys from results
+                const allKeys = new Set();
+                data.results.forEach(row => {
+                    Object.keys(row).forEach(key => allKeys.add(key));
                 });
-                tbody.appendChild(tr);
-            });
-            table.appendChild(tbody);
+                const columns = Array.from(allKeys);
 
-            tableContainer.appendChild(table);
-            resultsDiv.appendChild(tableContainer);
+                // Header
+                const thead = document.createElement('thead');
+                const headerRow = document.createElement('tr');
+                columns.forEach(col => {
+                    const th = document.createElement('th');
+                    th.textContent = col;
+                    headerRow.appendChild(th);
+                });
+                thead.appendChild(headerRow);
+                table.appendChild(thead);
 
-            // Raw view (hidden by default)
-            const rawView = document.createElement('pre');
-            rawView.id = 'rawView';
-            rawView.style.display = 'none';
-            rawView.textContent = JSON.stringify(data.results, null, 2);
-            resultsDiv.appendChild(rawView);
-        } else {
-            resultsDiv.innerHTML = '<p style="color: var(--yellow-color);">No results found.</p>';
-        }
+                // Body
+                const tbody = document.createElement('tbody');
+                data.results.forEach(row => {
+                    const tr = document.createElement('tr');
+                    columns.forEach(col => {
+                        const td = document.createElement('td');
+                        const value = row[col];
 
-        container.appendChild(resultsDiv);
+                        // Format complex values
+                        if (value === null || value === undefined) {
+                            td.textContent = 'NULL';
+                            td.style.color = 'var(--red-color)';
+                        } else if (typeof value === 'object') {
+                            td.textContent = JSON.stringify(value);
+                            td.style.fontSize = '0.8rem';
+                        } else {
+                            td.textContent = value;
+                        }
+                        tr.appendChild(td);
+                    });
+                    tbody.appendChild(tr);
+                });
+                table.appendChild(tbody);
 
-        // Store data globally for export
-        window.currentQueryResults = data;
-    }
+                tableContainer.appendChild(table);
+                resultsDiv.appendChild(tableContainer);
 
-    function toggleCollapsible(element) {
-        const content = element.nextElementSibling;
-        const arrow = element.querySelector('span:last-child');
-        content.classList.toggle('open');
-        arrow.textContent = content.classList.contains('open') ? '▲' : '▼';
-    }
-
-    function toggleRawView() {
-        const tableView = document.getElementById('tableView');
-        const rawView = document.getElementById('rawView');
-        if (tableView && rawView) {
-            const isTableVisible = tableView.style.display !== 'none';
-            tableView.style.display = isTableVisible ? 'none' : 'block';
-            rawView.style.display = isTableVisible ? 'block' : 'none';
-        }
-    }
-
-    function exportToCSV() {
-        if (!window.currentQueryResults || !window.currentQueryResults.results) {
-            alert('No data to export');
-            return;
-        }
-
-        const data = window.currentQueryResults.results;
-        if (data.length === 0) return;
-
-        const headers = Object.keys(data[0]);
-        let csv = headers.join(',') + '\n';
-
-        data.forEach(row => {
-            const values = headers.map(header => {
-                const value = row[header];
-                if (value === null || value === undefined) return '';
-                if (typeof value === 'object') return JSON.stringify(value);
-                return `"${String(value).replace(/"/g, '""')}"`;
-            });
-            csv += values.join(',') + '\n';
-        });
-
-        const blob = new Blob([csv], { type: 'text/csv' });
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `pql_results_${Date.now()}.csv`;
-        a.click();
-        window.URL.revokeObjectURL(url);
-    }
-
-    async function exportToXES(compress = false) {
-        const logId = activeLogSelect.value;
-        const query = pqlQueryText.value;
-
-        if (!logId) {
-            alert('Please select an active log first.');
-            return;
-        }
-
-        if (!query) {
-            alert('Please enter a PQL query first.');
-            return;
-        }
-
-        try {
-            // Show loading indicator
-            const originalText = pqlOutput.textContent;
-            pqlOutput.textContent = `Exporting to XES${compress ? ' (compressed)' : ''}...`;
-            pqlOutput.style.color = 'var(--text-color)';
-
-            // Prepare request URL with query parameters
-            const params = new URLSearchParams({
-                compress: compress.toString(),
-                logName: `PQL Query Result - ${new Date().toISOString()}`
-            });
-
-            // Make request to execute-xes endpoint
-            const response = await fetch(`${API_BASE}/query/execute-xes?${params}`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ logId, query })
-            });
-
-            if (!response.ok) {
-                throw new Error(`Server returned ${response.status}: ${response.statusText}`);
+                // Raw view (hidden by default)
+                const rawView = document.createElement('pre');
+                rawView.id = 'rawView';
+                rawView.style.display = 'none';
+                rawView.textContent = JSON.stringify(data.results, null, 2);
+                resultsDiv.appendChild(rawView);
+            } else {
+                resultsDiv.innerHTML = '<p style="color: var(--yellow-color);">No results found.</p>';
             }
 
-            // Get the blob from response
-            const blob = await response.blob();
+            container.appendChild(resultsDiv);
 
-            // Get filename from Content-Disposition header or generate one
-            const contentDisposition = response.headers.get('Content-Disposition');
-            let filename = `query_result_${Date.now()}.${compress ? 'xes.gz' : 'xes'}`;
+            // Store data globally for export
+            window.currentQueryResults = data;
+        }
 
-            if (contentDisposition) {
-                const filenameMatch = contentDisposition.match(/filename="?([^"]+)"?/);
-                if (filenameMatch) {
-                    filename = filenameMatch[1];
-                }
+        function toggleCollapsible(element) {
+            const content = element.nextElementSibling;
+            const arrow = element.querySelector('span:last-child');
+            content.classList.toggle('open');
+            arrow.textContent = content.classList.contains('open') ? '▲' : '▼';
+        }
+
+        function toggleRawView() {
+            const tableView = document.getElementById('tableView');
+            const rawView = document.getElementById('rawView');
+            if (tableView && rawView) {
+                const isTableVisible = tableView.style.display !== 'none';
+                tableView.style.display = isTableVisible ? 'none' : 'block';
+                rawView.style.display = isTableVisible ? 'block' : 'none';
+            }
+        }
+
+        function exportToCSV() {
+            if (!window.currentQueryResults || !window.currentQueryResults.results) {
+                showToast('No data to export', 'error');
+                return;
             }
 
-            // Create download link
+            const data = window.currentQueryResults.results;
+            if (data.length === 0) return;
+
+            const headers = Object.keys(data[0]);
+            let csv = headers.join(',') + '\n';
+
+            data.forEach(row => {
+                const values = headers.map(header => {
+                    const value = row[header];
+                    if (value === null || value === undefined) return '';
+                    if (typeof value === 'object') return JSON.stringify(value);
+                    return `"${String(value).replace(/"/g, '""')}"`;
+                });
+                csv += values.join(',') + '\n';
+            });
+
+            const blob = new Blob([csv], { type: 'text/csv' });
             const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = filename;
-            document.body.appendChild(a);
+            a.download = `pql_results_${Date.now()}.csv`;
             a.click();
-            document.body.removeChild(a);
             window.URL.revokeObjectURL(url);
-
-            // Show success message
-            pqlOutput.textContent = originalText;
-            alert(`XES file downloaded successfully: ${filename}`);
-
-        } catch (error) {
-            pqlOutput.style.color = 'var(--red-color)';
-            pqlOutput.textContent = `Error exporting to XES: ${error.message}`;
-            alert(`Failed to export to XES: ${error.message}`);
-        }
-    }
-
-    function copyToClipboard() {
-        if (!window.currentQueryResults) {
-            alert('No data to copy');
-            return;
         }
 
-        const text = JSON.stringify(window.currentQueryResults, null, 2);
-        navigator.clipboard.writeText(text).then(() => {
-            alert('Copied to clipboard!');
-        }).catch(err => {
-            console.error('Failed to copy:', err);
-        });
-    }
+        async function exportToXES(compress = false) {
+            const logId = activeLogSelect.value;
+            const query = pqlQueryText.value;
 
-    pqlButton.addEventListener('click', async () => {
-        const logId = activeLogSelect.value;
-        const query = pqlQueryText.value;
-        if (!logId) {
-            pqlOutput.style.color = 'var(--red-color)';
-            pqlOutput.textContent = 'Please select an active log first.';
-            return;
+            if (!logId) {
+                showToast('Please select an active log first.', 'error');
+                return;
+            }
+
+            if (!query) {
+                showToast('Please enter a PQL query first.', 'error');
+                return;
+            }
+
+            try {
+                // Show loading indicator
+                const originalText = pqlOutput.textContent;
+                pqlOutput.textContent = `Exporting to XES${compress ? ' (compressed)' : ''}...`;
+                pqlOutput.style.color = 'var(--text-color)';
+                showToast(`Starting XES export${compress ? ' (compressed)' : ''}...`, 'info');
+
+                // Prepare request URL with query parameters
+                const params = new URLSearchParams({
+                    compress: compress.toString(),
+                    logName: `PQL Query Result - ${new Date().toISOString()}`
+                });
+
+                // Make request to execute-xes endpoint
+                const response = await fetch(`${API_BASE}/query/execute-xes?${params}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ logId, query })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Server returned ${response.status}: ${response.statusText}`);
+                }
+
+                // Get the blob from response
+                const blob = await response.blob();
+
+                // Get filename from Content-Disposition header or generate one
+                const contentDisposition = response.headers.get('Content-Disposition');
+                let filename = `query_result_${Date.now()}.${compress ? 'xes.gz' : 'xes'}`;
+
+                if (contentDisposition) {
+                    const filenameMatch = contentDisposition.match(/filename="?([^"]+)"?/);
+                    if (filenameMatch) {
+                        filename = filenameMatch[1];
+                    }
+                }
+
+                // Create download link
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                window.URL.revokeObjectURL(url);
+
+                // Show success message
+                pqlOutput.textContent = originalText;
+                showToast(`XES file downloaded successfully: ${filename}`, 'success');
+
+            } catch (error) {
+                pqlOutput.style.color = 'var(--red-color)';
+                pqlOutput.textContent = `Error exporting to XES: ${error.message}`;
+                showToast(`Failed to export to XES: ${error.message}`, 'error');
+            }
         }
 
-        pqlOutput.textContent = 'Executing query...';
-        pqlOutput.style.color = 'var(--text-color)';
+        function copyToClipboard() {
+            if (!window.currentQueryResults) {
+                showToast('No data to copy', 'error');
+                return;
+            }
 
-        try {
-            const response = await fetch(`${API_BASE}/query/execute`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ logId, query })
+            const text = JSON.stringify(window.currentQueryResults, null, 2);
+            navigator.clipboard.writeText(text).then(() => {
+                showToast('Copied to clipboard!', 'success');
+            }).catch(err => {
+                console.error('Failed to copy:', err);
+                showToast('Failed to copy to clipboard', 'error');
             });
-
-            const data = await response.json();
-            renderQueryResults(data, pqlOutput);
-        } catch (error) {
-            pqlOutput.style.color = 'var(--red-color)';
-            pqlOutput.textContent = `Error: ${error.message}`;
         }
-    });
 
-    // --- Initial Load ---
-    document.addEventListener('DOMContentLoaded', () => {
-        openTab('logs');
-        refreshLogs();
-        populateSampleQueries();
-    });
+        pqlButton.addEventListener('click', async () => {
+            const logId = activeLogSelect.value;
+            const query = pqlQueryText.value;
+            if (!logId) {
+                showToast('Please select an active log first.', 'error');
+                return;
+            }
 
-</script>
+            setLoading(pqlButton, true, 'Running...');
+            pqlOutput.textContent = 'Executing query...';
+            pqlOutput.style.color = 'var(--text-color)';
+
+            try {
+                const response = await fetch(`${API_BASE}/query/execute`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ logId, query })
+                });
+
+                const data = await response.json();
+                renderQueryResults(data, pqlOutput);
+                if (data.success) {
+                    showToast(`Query executed in ${data.executionTimeMs}ms`, 'success');
+                } else {
+                    showToast('Query failed', 'error');
+                }
+            } catch (error) {
+                pqlOutput.style.color = 'var(--red-color)';
+                pqlOutput.textContent = `Error: ${error.message}`;
+                showToast(`Error: ${error.message}`, 'error');
+            } finally {
+                setLoading(pqlButton, false);
+            }
+        });
+
+        // --- Initial Load ---
+        document.addEventListener('DOMContentLoaded', () => {
+            openTab('logs');
+            refreshLogs();
+            populateSampleQueries();
+        });
+
+    </script>
 </body>
+
 </html>

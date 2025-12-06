@@ -144,10 +144,16 @@ class XESWriter {
             // Try different possible trace ID locations
             when {
                 record.containsKey("traceId") -> record["traceId"]?.toString()
+                record.containsKey("caseId") -> record["caseId"]?.toString()
+                record.containsKey("t_traceId") -> record["t_traceId"]?.toString()
+                record.containsKey("trace_traceId") -> record["trace_traceId"]?.toString()
+                record.containsKey("t_caseId") -> record["t_caseId"]?.toString()
+                record.containsKey("trace_caseId") -> record["trace_caseId"]?.toString()
+                
                 record.containsKey("trace") -> {
                     val trace = record["trace"]
                     when (trace) {
-                        is Map<*, *> -> trace["traceId"]?.toString()
+                        is Map<*, *> -> trace["traceId"]?.toString() ?: trace["caseId"]?.toString()
                         else -> null
                     }
                 }
@@ -155,7 +161,7 @@ class XESWriter {
                 record.containsKey("t") -> {
                     val trace = record["t"]
                     when (trace) {
-                        is Map<*, *> -> trace["traceId"]?.toString()
+                        is Map<*, *> -> trace["traceId"]?.toString() ?: trace["caseId"]?.toString()
                         else -> null
                     }
                 }
@@ -226,6 +232,7 @@ class XESWriter {
             val formattedTimestamp =
                 when (timestamp) {
                     is LocalDateTime -> formatDateTime(timestamp)
+                    is java.time.ZonedDateTime -> timestamp.format(xesDateFormatter)
                     is String -> timestamp
                     else -> timestamp.toString()
                 }
@@ -245,7 +252,8 @@ class XESWriter {
         // Cost (if present)
         val cost = eventData["cost"] ?: eventData["cost:total"]
         if (cost != null) {
-            writer.write("\t\t\t<float key=\"cost:total\" value=\"$cost\"/>\n")
+            val costVal = cost.toString().toDoubleOrNull() ?: cost
+            writer.write("\t\t\t<float key=\"cost:total\" value=\"$costVal\"/>\n")
         }
 
         // Other attributes

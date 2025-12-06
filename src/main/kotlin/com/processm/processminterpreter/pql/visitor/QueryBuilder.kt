@@ -40,8 +40,8 @@ class QueryBuilder : QLParserBaseVisitor<Any>() {
         }
 
         // Validate the query
-        query.validateSelectAll()
-        query.validateGroupByAttributes()
+        // Validate the query
+        query.validate()
 
         logger.debug("Query built successfully")
         return query
@@ -121,9 +121,10 @@ class QueryBuilder : QLParserBaseVisitor<Any>() {
 
             is QLParser.Select_allContext -> {
                 // SELECT * or SELECT *, ...
-                // TODO: Determine which scopes are selected
-                // For now, assume EVENT scope
-                query.setSelectAll(Scope.EVENT, true)
+                // Select all scopes for explicit SELECT *
+                Scope.entries.forEach { scope ->
+                    query.setSelectAll(scope, true)
+                }
 
                 // Process column_list if present
                 ctx.column_list()?.let { processColumnList(it, query) }
@@ -167,7 +168,7 @@ class QueryBuilder : QLParserBaseVisitor<Any>() {
                 // Determine scope from expression
                 val scope = when (expr) {
                     is Attribute -> expr.scope
-                    is com.processm.processminterpreter.pql.model.Function -> expr.scope ?: Scope.EVENT
+                    is com.processm.processminterpreter.pql.model.Function -> expr.scope ?: expr.effectiveScope
                     is Expression -> expr.effectiveScope
                     else -> Scope.EVENT
                 }
@@ -554,20 +555,18 @@ class QueryBuilder : QLParserBaseVisitor<Any>() {
     /**
      * limit: LIMIT limit_number (',' limit_number)*
      */
+    /**
+     * limit: LIMIT limit_number (',' limit_number)*
+     */
     private fun buildLimitClause(ctx: QLParser.LimitContext, query: Query) {
         ctx.limit_number().forEachIndexed { index, limitCtx ->
-            val limitValue = limitCtx.NUMBER().text.toLong()
+            val text = limitCtx.NUMBER().text
+            val (scope, value) = parseScopedNumber(text, index)
 
-            // Map index to scope: 0=EVENT, 1=TRACE, 2=LOG
-            val scope = when (index) {
-                0 -> Scope.EVENT
-                1 -> Scope.TRACE
-                2 -> Scope.LOG
-                else -> return@forEachIndexed // Ignore extra limits
+            if (scope != null) {
+                query.setLimit(scope, value)
+                logger.debug("LIMIT $scope: $value")
             }
-
-            query.setLimit(scope, limitValue)
-            logger.debug("LIMIT $scope: $limitValue")
         }
     }
 
@@ -576,18 +575,44 @@ class QueryBuilder : QLParserBaseVisitor<Any>() {
      */
     private fun buildOffsetClause(ctx: QLParser.OffsetContext, query: Query) {
         ctx.offset_number().forEachIndexed { index, offsetCtx ->
-            val offsetValue = offsetCtx.NUMBER().text.toLong()
+            val text = offsetCtx.NUMBER().text
+            val (scope, value) = parseScopedNumber(text, index)
 
+            if (scope != null) {
+                query.setOffset(scope, value)
+                logger.debug("OFFSET $scope: $value")
+            }
+        }
+    }
+
+    /**
+     * Helper to parse a number that might have a scope prefix (e.g., "l:5", "trace:10")
+     * or be a plain number (positional).
+     *
+     * @param text The token text
+     * @param index The position index (for backward compatibility)
+     * @return Pair of Scope? and Long value
+     */
+    private fun parseScopedNumber(text: String, index: Int): Pair<Scope?, Long> {
+        return if (text.contains(":")) {
+            // Scoped syntax: "l:5", "log:5", "trace:10"
+            val parts = text.split(":")
+            val scopeStr = parts[0]
+            val valueStr = parts[1]
+            val scope = Scope.parse(scopeStr)
+            val value = valueStr.toLong()
+            Pair(scope, value)
+        } else {
+            // Positional syntax: 5, 10 (Legacy)
             // Map index to scope: 0=EVENT, 1=TRACE, 2=LOG
             val scope = when (index) {
                 0 -> Scope.EVENT
                 1 -> Scope.TRACE
                 2 -> Scope.LOG
-                else -> return@forEachIndexed // Ignore extra offsets
+                else -> null // Ignore extra values
             }
-
-            query.setOffset(scope, offsetValue)
-            logger.debug("OFFSET $scope: $offsetValue")
+            val value = text.toLong()
+            Pair(scope, value)
         }
     }
 }

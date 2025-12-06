@@ -27,22 +27,49 @@ class Attribute(
     override val charPositionInLine: Int = -1,
 ) : Expression(line, charPositionInLine) {
 
+    // Handle bracket notation: [^trace:name with spaces]
+    private val wasBracketed = attributeStr.startsWith("[") && attributeStr.endsWith("]")
+    private val cleanAttributeStr = if (wasBracketed) {
+        attributeStr.substring(1, attributeStr.length - 1)
+    } else {
+        attributeStr
+    }
+
     // Regex to parse: [^]* [scope:]name
     // Groups: (hoisting) (scope:) (name)
-    // Using \S (non-whitespace) to prevent spaces while allowing Unicode
-    private val regex = Regex("^(\\^*)(?:([a-zA-Z]+):)?(\\S+)$")
-    private val match = regex.find(attributeStr)
+    // Changed \S+ to .+ to allow spaces and special characters
+    private val regex = Regex("^(\\^*)(?:([a-zA-Z]+):)?(.+)$")
+    private val match = regex.find(cleanAttributeStr)
         ?: throw PQLSyntaxException(
             line,
             charPositionInLine,
             "Invalid attribute syntax: $attributeStr",
         )
+    
+
 
     /**
      * Hoisting prefix: "", "^", or "^^"
      * Each ^ raises the scope by one level (EVENT → TRACE → LOG)
      */
     val hoistingPrefix: String = match.groupValues[1]
+
+    private val parsedScopeAndName: Pair<Scope?, String> = run {
+        val scopeStr = match.groupValues[2]
+        val nameStr = match.groupValues[3]
+
+        if (scopeStr.isEmpty()) {
+            Pair(null, nameStr)
+        } else {
+            try {
+                val s = Scope.parse(scopeStr)
+                Pair(s, nameStr)
+            } catch (e: IllegalArgumentException) {
+                // If scope is invalid (e.g. "org" in "org:group"), treat it as part of the name
+                Pair(null, "$scopeStr:$nameStr")
+            }
+        }
+    }
 
     /**
      * The attribute name (after scope prefix, if any).
@@ -51,8 +78,9 @@ class Attribute(
      * - "e:name" → "name"
      * - "e:org:group" → "org:group"
      * - "customAttr" → "customAttr"
+     * - "org:group" → "org:group" (if org is not a scope)
      */
-    val name: String = match.groupValues[3]
+    val name: String = parsedScopeAndName.second
 
     /**
      * Base scope (before hoisting is applied).
@@ -63,15 +91,13 @@ class Attribute(
      * - "t:timestamp" → TRACE
      * - "name" → null (will default to EVENT)
      */
-    private val baseScope: Scope? = match.groupValues[2]
-        .takeIf { it.isNotEmpty() }
-        ?.let { Scope.parse(it) }
+    private val baseScope: Scope? = parsedScopeAndName.first
 
     /**
      * Actual scope after applying hoisting.
      *
      * Process:
-     * 1. Start with baseScope (or EVENT if not specified)
+     * 1. Start with scope (base)
      * 2. Apply each ^ by moving up the hierarchy
      * 3. Validate we don't hoist beyond LOG
      *
@@ -79,21 +105,36 @@ class Attribute(
      * - "e:name" → EVENT
      * - "^e:name" → TRACE (EVENT.upper)
      * - "^^e:name" → LOG (EVENT.upper.upper)
-     * - "^t:name" → LOG (TRACE.upper)
-     * - "^^^e:name" → ERROR (would go beyond LOG)
-     * - "^l:name" → ERROR (LOG has no parent)
      */
-    override val scope: Scope = run {
-        val initial = baseScope ?: Scope.EVENT
+    /**
+     * Base scope (before hoisting is applied).
+     * Examples:
+     * - "e:name" → EVENT
+     * - "^e:name" → EVENT (hoisting doesn't change declared scope)
+     */
+    override val scope: Scope = baseScope ?: Scope.EVENT
 
-        var currentScope = initial
+    /**
+     * Actual scope after applying hoisting.
+     *
+     * Process:
+     * 1. Start with scope (base)
+     * 2. Apply each ^ by moving up the hierarchy
+     * 3. Validate we don't hoist beyond LOG
+     *
+     * Examples:
+     * - "e:name" → EVENT
+     * - "^e:name" → TRACE (EVENT.upper)
+     * - "^^e:name" → LOG (EVENT.upper.upper)
+     */
+    override val effectiveScope: Scope = run {
+        var currentScope = scope
         for (i in hoistingPrefix.indices) {
             currentScope = currentScope.upper
                 ?: throw InvalidScopeHoistingException(
-                    "Cannot hoist scope '$initial' beyond LOG (hoisting: '$hoistingPrefix')",
+                    "Cannot hoist scope '$scope' beyond LOG (hoisting: '$hoistingPrefix')",
                 )
         }
-
         currentScope
     }
 
@@ -111,6 +152,9 @@ class Attribute(
      * - "e:customAttr" → false
      */
     val isStandard: Boolean = run {
+        // If attribute was bracketed, treat as non-standard (force custom)
+        if (wasBracketed) return@run false
+
         // Use base scope (before hoisting) to check if attribute is standard
         // For example, ^^e:timestamp should check if "timestamp" is standard for EVENT, not LOG
         val scopeToCheck = baseScope ?: Scope.EVENT

@@ -77,8 +77,14 @@ class Function(
     val functionType: FunctionType = when (name) {
         in SCALAR_FUNCTIONS.keys -> FunctionType.SCALAR
         in AGGREGATION_FUNCTIONS.keys -> FunctionType.AGGREGATION
-        else -> throw InvalidFunctionException("Unknown function: $name")
+        else -> throw IllegalArgumentException("Unknown function: $name")
     }
+
+    /**
+     * Whether this function is an aggregation function.
+     */
+    val isAggregation: Boolean
+        get() = functionType == FunctionType.AGGREGATION
 
     /**
      * Return type of this function.
@@ -92,10 +98,10 @@ class Function(
     init {
         // Validate number of arguments
         val expectedArgs = FUNCTION_ARGS[name]
-            ?: throw InvalidFunctionException("Unknown function: $name")
+            ?: throw IllegalArgumentException("Unknown function: $name")
 
         if (children.size != expectedArgs) {
-            throw InvalidFunctionException(
+            throw IllegalArgumentException(
                 "Function '$name' expects $expectedArgs argument(s), got ${children.size}",
             )
         }
@@ -113,7 +119,7 @@ class Function(
         // - EVENT function (2) with TRACE arg (1): 2 > 1 ✗ (function lower in hierarchy)
         if (functionType == FunctionType.SCALAR && scope != null) {
             if (scope.ordinal > effectiveScope.ordinal) {
-                throw PQLSemanticException(
+                throw IllegalArgumentException(
                     "Scope of scalar function '$name' ($scope) cannot be lower in hierarchy than " +
                         "effective scope of its arguments ($effectiveScope)",
                 )

@@ -319,11 +319,29 @@ class QueryBuilderTests {
     }
 
     @Test
+    fun limitScopedSyntaxTest() {
+        val query = parseQuery("select * limit l:5, t:10, e:20")
+
+        assertEquals(20L, query.limit[Scope.EVENT])
+        assertEquals(10L, query.limit[Scope.TRACE])
+        assertEquals(5L, query.limit[Scope.LOG])
+    }
+
+    @Test
     fun offsetSingleScopeTest() {
         val query = parseQuery("select * offset 10")
 
         assertEquals(10L, query.offset[Scope.EVENT])
         assertNull(query.offset[Scope.TRACE])
+    }
+
+    @Test
+    fun offsetScopedSyntaxTest() {
+        val query = parseQuery("select * offset l:1, t:2")
+
+        assertEquals(1L, query.offset[Scope.LOG])
+        assertEquals(2L, query.offset[Scope.TRACE])
+        assertNull(query.offset[Scope.EVENT])
     }
 
     @Test

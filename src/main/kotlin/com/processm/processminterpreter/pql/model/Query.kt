@@ -35,25 +35,25 @@ class Query(
      * False = SELECT with specific attributes
      * null = Not specified for this scope
      */
-    private val _selectAll: MutableMap<Scope, Boolean?> = EnumMap(Scope::class.java)
+    private val _selectAll: MutableMap<Scope, Boolean?> = EnumMap<Scope, Boolean?>(Scope::class.java)
 
     /**
      * Internal mutable map for standard attributes in SELECT.
      */
     private val _selectStandardAttributes: MutableMap<Scope, LinkedHashSet<Attribute>> =
-        EnumMap(Scope::class.java)
+        EnumMap<Scope, LinkedHashSet<Attribute>>(Scope::class.java)
 
     /**
      * Internal mutable map for non-standard attributes in SELECT.
      */
     private val _selectOtherAttributes: MutableMap<Scope, LinkedHashSet<Attribute>> =
-        EnumMap(Scope::class.java)
+        EnumMap<Scope, LinkedHashSet<Attribute>>(Scope::class.java)
 
     /**
      * Internal mutable map for complex expressions in SELECT.
      */
     private val _selectExpressions: MutableMap<Scope, ArrayList<IExpression>> =
-        EnumMap(Scope::class.java)
+        EnumMap<Scope, ArrayList<IExpression>>(Scope::class.java)
 
     /**
      * Internal mutable map for implicit SELECT ALL per scope.
@@ -145,13 +145,13 @@ class Query(
      * Internal mutable map for standard attributes in GROUP BY.
      */
     private val _groupByStandardAttributes: MutableMap<Scope, LinkedHashSet<Attribute>> =
-        EnumMap(Scope::class.java)
+        EnumMap<Scope, LinkedHashSet<Attribute>>(Scope::class.java)
 
     /**
      * Internal mutable map for non-standard attributes in GROUP BY.
      */
     private val _groupByOtherAttributes: MutableMap<Scope, LinkedHashSet<Attribute>> =
-        EnumMap(Scope::class.java)
+        EnumMap<Scope, LinkedHashSet<Attribute>>(Scope::class.java)
 
     /**
      * Internal mutable map for implicit GROUP BY per scope.
@@ -198,6 +198,12 @@ class Query(
     val isImplicitGroupBy: Map<Scope, Boolean>
         get() = Collections.unmodifiableMap(_isImplicitGroupBy)
 
+    /**
+     * All attributes in GROUP BY clause (standard + other), flattened.
+     */
+    val groupByAttributes: Set<Attribute>
+        get() = (groupByStandardAttributes.values.flatten() + groupByOtherAttributes.values.flatten()).toSet()
+
     // ========================================
     // ORDER BY CLAUSE
     // ========================================
@@ -206,7 +212,7 @@ class Query(
      * Internal mutable map for ORDER BY expressions.
      */
     private val _orderByExpressions: MutableMap<Scope, ArrayList<OrderedExpression>> =
-        EnumMap(Scope::class.java)
+        EnumMap<Scope, ArrayList<OrderedExpression>>(Scope::class.java)
 
     /**
      * ORDER BY expressions with their sort direction, organized by scope.
@@ -273,6 +279,10 @@ class Query(
         } else {
             _selectOtherAttributes.getOrPut(scope) { LinkedHashSet() }.add(attr)
         }
+        // If specific attribute is selected, selectAll is false
+        if (_selectAll[scope] != true) {
+            _selectAll[scope] = false
+        }
     }
 
     /**
@@ -283,6 +293,10 @@ class Query(
      */
     internal fun addSelectExpression(expr: IExpression, scope: Scope) {
         _selectExpressions.getOrPut(scope) { ArrayList() }.add(expr)
+        // If specific expression is selected, selectAll is false
+        if (_selectAll[scope] != true) {
+            _selectAll[scope] = false
+        }
     }
 
     /**

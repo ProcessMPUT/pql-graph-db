@@ -253,6 +253,18 @@ class QLToCypherVisitorTest {
     }
 
     @Test
+    fun `test dayofweek function`() {
+        val pql = "select dayofweek(event:timestamp)"
+        val result = translateQuery(pql)
+
+        println("PQL: $pql")
+        println("Cypher: ${result.query}")
+
+        // Should map to something valid in Cypher, e.g., .dayOfWeek
+        assertTrue(result.query.contains("dayOfWeek"), "Should contain dayOfWeek property accessor")
+    }
+
+    @Test
     fun `test string function`() {
         val pql = "select upper(event:activity)"
         val result = translateQuery(pql)
