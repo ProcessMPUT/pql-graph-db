@@ -17,6 +17,8 @@ import org.springframework.web.bind.annotation.RestController
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 
+import com.processm.processminterpreter.service.RemoteProcessMService
+
 /**
  * REST Controller for PQL query operations
  *
@@ -27,6 +29,7 @@ import java.time.format.DateTimeFormatter
 @CrossOrigin(origins = ["*"])
 class PQLQueryController(
     private val pqlQueryService: PQLQueryService,
+    private val remoteProcessMService: RemoteProcessMService,
 ) {
     private val logger = LoggerFactory.getLogger(PQLQueryController::class.java)
 
@@ -256,6 +259,65 @@ class PQLQueryController(
     }
 
     /**
+     * Verify PQL query against ProcessM
+     * POST /api/query/verify
+     */
+    @PostMapping("/verify")
+    fun verifyQuery(
+        @RequestBody request: PQLVerificationRequest,
+    ): ResponseEntity<PQLVerificationResponse> {
+        logger.info("=== Verifying PQL Query ===")
+        logger.info("PQL: ${request.query}")
+        logger.info("LogName: ${request.logName}")
+
+        return try {
+            // 1. Execute Local
+            val localResult = pqlQueryService.executePQLQuery(request.query, request.logId)
+            
+            // 2. Execute Remote
+            val remoteResult = remoteProcessMService.executeQuery(request.logName, request.query)
+
+            // 3. Compare
+            val match = if (localResult.success && remoteResult.success) {
+                localResult.resultCount == remoteResult.resultCount
+            } else {
+                false
+            }
+
+            val details = StringBuilder()
+            details.append("Local: ${if (localResult.success) "Success (${localResult.resultCount} rows)" else "Fail: ${localResult.error}"}\n")
+            details.append("Remote: ${if (remoteResult.success) "Success (${remoteResult.resultCount} rows)" else "Fail: ${remoteResult.message}"}\n")
+            
+            if (match) {
+                details.append("Result: MATCH")
+            } else {
+                details.append("Result: MISMATCH")
+            }
+
+            val response = PQLVerificationResponse(
+                match = match,
+                localSuccess = localResult.success,
+                remoteSuccess = remoteResult.success,
+                localCount = localResult.resultCount,
+                remoteCount = remoteResult.resultCount,
+                details = details.toString()
+            )
+
+            ResponseEntity.ok(response)
+        } catch (e: Exception) {
+            logger.error("Error verifying PQL query", e)
+            ResponseEntity.internalServerError().body(
+                PQLVerificationResponse(
+                    match = false,
+                    localSuccess = false,
+                    remoteSuccess = false,
+                    details = "Internal error: ${e.message}"
+                )
+            )
+        }
+    }
+
+    /**
      * Global exception handler for this controller
      */
     @ExceptionHandler(Exception::class)
@@ -294,6 +356,27 @@ data class PQLQueryResponse(
     val executionTimeMs: Long = 0,
     val error: String? = null,
     val timestamp: LocalDateTime = LocalDateTime.now(),
+)
+
+/**
+ * DTO for PQL verification request
+ */
+data class PQLVerificationRequest(
+    val query: String,
+    val logId: String? = null,
+    val logName: String
+)
+
+/**
+ * DTO for PQL verification response
+ */
+data class PQLVerificationResponse(
+    val match: Boolean,
+    val localSuccess: Boolean,
+    val remoteSuccess: Boolean,
+    val localCount: Int = 0,
+    val remoteCount: Int = 0,
+    val details: String
 )
 
 /**
