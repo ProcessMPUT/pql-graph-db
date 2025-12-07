@@ -1,4 +1,4 @@
-package com.processm.processminterpreter.pql.parser
+package com.processm.processminterpreter.pql.original
 
 import com.processm.processminterpreter.pql.model.Scope
 import org.junit.jupiter.api.Assertions.*
@@ -6,7 +6,7 @@ import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 
 @Tag("PQL")
-class ScopeProcessMTests {
+class ScopeTests {
 
     @Test
     fun testScopeHierarchy() {
@@ -55,5 +55,14 @@ class ScopeProcessMTests {
         assertEquals(Scope.EVENT, Scope.parse("invalid", Scope.EVENT))
         assertEquals(Scope.LOG, Scope.parse("invalid", Scope.LOG))
         assertEquals(Scope.TRACE, Scope.parse("invalid", Scope.TRACE))
+    }
+    
+    @Test
+    fun lowerAndUpperTest() {
+        val scopes = arrayOf(Scope.LOG, Scope.TRACE, Scope.EVENT)
+        for (scope in scopes) {
+            assertEquals(scope, scope.lower?.upper ?: Scope.EVENT)
+            assertEquals(scope, scope.upper?.lower ?: Scope.LOG)
+        }
     }
 }

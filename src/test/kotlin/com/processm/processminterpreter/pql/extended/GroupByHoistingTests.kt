@@ -1,5 +1,6 @@
-package com.processm.processminterpreter.pql.interpreter
+package com.processm.processminterpreter.pql.extended
 
+import com.processm.processminterpreter.pql.interpreter.BaseInterpreterTest
 import com.processm.processminterpreter.pql.model.Scope
 import com.processm.processminterpreter.service.LogService
 import com.processm.processminterpreter.xes.XESLoader
@@ -130,7 +131,7 @@ class GroupByHoistingTests : BaseInterpreterTest() {
             executeQuery(query, logId)
         }
         
-        assertTrue(exception.message!!.contains("Attributes in SELECT must appear in GROUP BY"))
+        assertTrue(exception.message!!.contains("must be present in GROUP BY clause"))
         assertTrue(exception.message!!.contains("t:concept:name"))
     }
 }

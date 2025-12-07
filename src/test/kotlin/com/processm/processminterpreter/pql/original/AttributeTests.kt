@@ -1,4 +1,4 @@
-package com.processm.processminterpreter.pql.parser
+package com.processm.processminterpreter.pql.original
 
 import com.processm.processminterpreter.pql.model.Attribute
 import com.processm.processminterpreter.pql.model.Scope

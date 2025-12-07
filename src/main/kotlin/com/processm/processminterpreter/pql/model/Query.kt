@@ -71,7 +71,9 @@ class Query(
      * - null: Not specified for this scope
      */
     val selectAll: Map<Scope, Boolean?>
-        get() = Collections.unmodifiableMap(_selectAll)
+        get() = Scope.entries.associateWith { scope ->
+            _selectAll[scope] == true || isImplicitSelectAll[scope] == true
+        }
 
     /**
      * Standard attributes to select, organized by scope.
@@ -107,7 +109,32 @@ class Query(
      * defaulting to selecting all attributes.
      */
     val isImplicitSelectAll: Map<Scope, Boolean>
-        get() = Collections.unmodifiableMap(_isImplicitSelectAll)
+        get() = Scope.entries.associateWith { scope ->
+            // If explicit SELECT * is set, it's not implicit
+            if (_selectAll[scope] == true) return@associateWith false
+            
+            // If specific attributes/expressions are selected, it's not implicit
+            if ((_selectStandardAttributes[scope]?.isNotEmpty() == true) ||
+                (_selectOtherAttributes[scope]?.isNotEmpty() == true) ||
+                (_selectExpressions[scope]?.isNotEmpty() == true)) {
+                return@associateWith false
+            }
+
+            // If we are grouping by this scope, implicit select all is disabled
+            // Also disabled if any upper scope is grouped (because lower scope attributes would need aggregation)
+            var currentScope: Scope? = scope
+            while (currentScope != null) {
+                if (isGroupBy[currentScope] == true) {
+                    return@associateWith false
+                }
+                currentScope = currentScope.upper
+            }
+
+            // Reverting to simple check + explicit flag
+            val result = _isImplicitSelectAll[scope] == true
+
+            result
+        }
 
     // ========================================
     // DELETE CLAUSE
@@ -196,7 +223,24 @@ class Query(
      * without an explicit GROUP BY clause.
      */
     val isImplicitGroupBy: Map<Scope, Boolean>
-        get() = Collections.unmodifiableMap(_isImplicitGroupBy)
+        get() = Scope.entries.associateWith { scope ->
+            // If explicit GROUP BY is present, it's not implicit
+            if (isGroupBy[scope] == true) return@associateWith false
+
+            val explicit = _isImplicitGroupBy[scope] == true
+            
+            // Check for aggregations in SELECT
+            val hasAggSelect = selectExpressions[scope]?.any { expr ->
+                (expr as? Expression)?.filterRecursively { it is com.processm.processminterpreter.pql.model.Function && it.functionType == FunctionType.AGGREGATION }?.isNotEmpty() == true
+            } == true
+
+            // Check for aggregations in ORDER BY
+            val hasAggOrder = _orderByExpressions[scope]?.any { orderedExpr ->
+                (orderedExpr.expression as? Expression)?.filterRecursively { it is com.processm.processminterpreter.pql.model.Function && it.functionType == FunctionType.AGGREGATION }?.isNotEmpty() == true
+            } == true
+
+            explicit || hasAggSelect || hasAggOrder
+        }
 
     /**
      * All attributes in GROUP BY clause (standard + other), flattened.
@@ -325,7 +369,8 @@ class Query(
      * @param attr the attribute to add
      */
     internal fun addGroupByAttribute(attr: Attribute) {
-        val scope = attr.scope
+        // Use effectiveScope to handle hoisting correctly
+        val scope = attr.effectiveScope ?: attr.scope
         if (attr.isStandard) {
             _groupByStandardAttributes.getOrPut(scope) { LinkedHashSet() }.add(attr)
         } else {
@@ -402,44 +447,7 @@ class Query(
         }
     }
 
-    /**
-     * Validate GROUP BY attributes when aggregation functions are used.
-     *
-     * Rule: When using aggregation functions, all non-aggregated attributes
-     * in SELECT must appear in GROUP BY.
-     *
-     * @throws PQLSemanticException if validation fails
-     */
-    fun validateGroupByAttributes() {
-        // Check if any aggregation functions are used in SELECT
-        val hasAggregation = selectExpressions.values.any { expressions ->
-            expressions.any { expr ->
-                expr is Expression && expr.filter { it is Function && it.functionType == FunctionType.AGGREGATION }.isNotEmpty()
-            }
-        }
 
-        if (!hasAggregation) {
-            return // No aggregation, no need to validate GROUP BY
-        }
-
-        // For each scope with SELECT attributes, verify they're in GROUP BY
-        Scope.entries.forEach { scope ->
-            val selectedAttrs = (selectStandardAttributes[scope] ?: emptySet()) +
-                (selectOtherAttributes[scope] ?: emptySet())
-
-            val groupedAttrs = (groupByStandardAttributes[scope] ?: emptySet()) +
-                (groupByOtherAttributes[scope] ?: emptySet())
-
-            val ungroupedAttrs = selectedAttrs - groupedAttrs
-
-            if (ungroupedAttrs.isNotEmpty()) {
-                throw PQLSemanticException(
-                    "Attributes in SELECT must appear in GROUP BY when using aggregation functions. " +
-                        "Missing in GROUP BY for scope $scope: ${ungroupedAttrs.joinToString { it.toString() }}",
-                )
-            }
-        }
-    }
 
     /**
      * Validate that classifiers are used correctly.
@@ -506,7 +514,7 @@ class Query(
         }
 
         // Check that no SELECT clause is present
-        if (selectAll.values.any { it == true } ||
+        if (_selectAll.values.any { it == true } ||
             selectStandardAttributes.values.any { it.isNotEmpty() } ||
             selectOtherAttributes.values.any { it.isNotEmpty() } ||
             selectExpressions.values.any { it.isNotEmpty() }
@@ -620,11 +628,137 @@ class Query(
      */
     fun validate() {
         validateSelectAll()
-        validateGroupByAttributes()
+        validateGroupBy()
         validateClassifiers()
         validateHoisting()
         validateWhereClause()
         validateDeleteConstraints()
+    }
+
+    /**
+     * Validate GROUP BY clause constraints.
+     *
+     * Rules:
+     * - If GROUP BY is present, all non-aggregated attributes in SELECT must be in GROUP BY.
+     * - This applies per scope.
+     *
+     * @throws PQLSemanticException if validation fails
+     */
+    fun validateGroupBy() {
+        // Iterate over all scopes
+        Scope.entries.forEach { scope ->
+            val isGrouped = isGroupBy[scope] == true
+
+            // Check if there is any aggregation in the query
+            val hasAggregation = selectExpressions.values.flatten().any { expr ->
+                 (expr as? Expression)?.filterRecursively { it is com.processm.processminterpreter.pql.model.Function && it.functionType == FunctionType.AGGREGATION }?.isNotEmpty() == true
+            }
+
+            if (hasAggregation) {
+                // If we have aggregation, all non-aggregated attributes must be grouped
+                // OR belong to a scope that is implicitly grouped.
+                // For now, we enforce strict grouping: if aggregation exists, everything else must be grouped or aggregated.
+                
+                // Check standard attributes in SELECT
+                selectStandardAttributes[scope]?.forEach { attr ->
+                    validateAttributeInGroupBy(attr)
+                }
+
+                // Check other attributes in SELECT
+                selectOtherAttributes[scope]?.forEach { attr ->
+                    validateAttributeInGroupBy(attr)
+                }
+                
+                // Check expressions in SELECT
+                selectExpressions[scope]?.forEach { expr ->
+                     validateExpressionInGroupBy(expr)
+                }
+            } else if (isGrouped) {
+                // If no aggregation but we have GROUP BY, then selected attributes must be in GROUP BY
+                
+                 // Check standard attributes in SELECT
+                selectStandardAttributes[scope]?.forEach { attr ->
+                    validateAttributeInGroupBy(attr)
+                }
+
+                // Check other attributes in SELECT
+                selectOtherAttributes[scope]?.forEach { attr ->
+                    validateAttributeInGroupBy(attr)
+                }
+                
+                // Check expressions in SELECT
+                selectExpressions[scope]?.forEach { expr ->
+                     validateExpressionInGroupBy(expr)
+                }
+            }
+        }
+    }
+
+    private fun validateAttributeInGroupBy(attr: Attribute) {
+        // Attribute is valid if:
+        // 1. It is present in GROUP BY for its scope
+        // 2. OR any LOWER scope is grouped (implicit grouping of upper scopes)
+        
+        val scope = attr.effectiveScope ?: attr.scope
+        
+        // Check 1: Present in GROUP BY
+        val groupAttributes = groupByStandardAttributes[scope].orEmpty() +
+            groupByOtherAttributes[scope].orEmpty()
+            
+        if (groupAttributes.contains(attr)) {
+            return
+        }
+        
+        // Check 2: Lower scope is grouped (Only for LOG scope)
+        // If we are selecting a LOG attribute (which is constant for the whole log),
+        // and we group by TRACE or EVENT (which implies we are inside the log), it's valid.
+        // For TRACE scope, grouping by EVENT does NOT imply TRACE is constant (unless grouping by traceId),
+        // so we enforce strict GROUP BY for TRACE.
+        if (scope == Scope.LOG) {
+            val lowerScopes = Scope.entries.filter { it.ordinal > scope.ordinal }
+            if (lowerScopes.any { isGroupBy[it] == true }) {
+                return
+            }
+        }
+
+        // Check 3: Hoisted version is grouped
+        // Example: select e:name group by ^e:name
+        // We check if ^e:name, ^^e:name, etc. are in GROUP BY
+        var currentAttrStr = attr.toString()
+        var currentScope = scope
+        
+        while (currentScope.upper != null) {
+            currentAttrStr = "^$currentAttrStr"
+            currentScope = currentScope.upper!!
+            
+            val hoistedAttr = Attribute(currentAttrStr)
+            val hoistedGroupAttributes = groupByStandardAttributes[currentScope].orEmpty() +
+                groupByOtherAttributes[currentScope].orEmpty()
+                
+            if (hoistedGroupAttributes.contains(hoistedAttr)) {
+                return
+            }
+        }
+        
+        throw PQLSemanticException(
+            "Attribute '$attr' must be present in GROUP BY clause or used in an aggregation function.",
+        )
+    }
+
+    private fun validateExpressionInGroupBy(expr: IExpression) {
+        if (expr is com.processm.processminterpreter.pql.model.Function && expr.functionType == FunctionType.AGGREGATION) {
+            return // Aggregations are valid
+        }
+
+        if (expr is Attribute) {
+            validateAttributeInGroupBy(expr)
+            return
+        }
+
+        // For other expressions, check children recursively
+        expr.children.forEach { child ->
+            validateExpressionInGroupBy(child)
+        }
     }
 
     /**

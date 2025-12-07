@@ -1,4 +1,4 @@
-package com.processm.processminterpreter.pql.parser
+package com.processm.processminterpreter.pql.original
 
 import QLLexer
 import QLParser
@@ -35,7 +35,7 @@ class QueryProcessMTests {
         try {
             errorListener.throwIfErrors()
         } catch (e: Exception) {
-            println("PQL Parse Error: ${e.message}")
+
             throw e
         }
         

@@ -168,8 +168,8 @@ class QueryBuilder : QLParserBaseVisitor<Any>() {
                 // Determine scope from expression
                 val scope = when (expr) {
                     is Attribute -> expr.scope
-                    is com.processm.processminterpreter.pql.model.Function -> expr.scope ?: expr.effectiveScope
-                    is Expression -> expr.effectiveScope
+                    is com.processm.processminterpreter.pql.model.Function -> expr.scope ?: expr.effectiveScope ?: Scope.EVENT
+                    is Expression -> expr.effectiveScope ?: Scope.EVENT
                     else -> Scope.EVENT
                 }
 
@@ -200,6 +200,7 @@ class QueryBuilder : QLParserBaseVisitor<Any>() {
         val scope = Scope.parse(scopeText)
 
         query.deleteScope = scope
+        query.setImplicitSelectAll(scope, true)
         logger.debug("DELETE scope: $scope")
     }
 
@@ -478,7 +479,7 @@ class QueryBuilder : QLParserBaseVisitor<Any>() {
             ctx.BOOLEAN() != null -> BooleanLiteral.parse(ctx.BOOLEAN().text, line, charPos)
             ctx.DATETIME() != null -> DateTimeLiteral.parse(ctx.DATETIME().text, line, charPos)
             ctx.UUID() != null -> UUIDLiteral.parse(ctx.UUID().text, line, charPos)
-            ctx.NULL() != null -> NullLiteral(line, charPos)
+            ctx.NULL() != null -> NullLiteral.parse(ctx.NULL().text, line, charPos)
             else -> throw PQLSyntaxException(line, charPos, "Unknown scalar type: ${ctx.text}")
         }
     }
@@ -491,7 +492,7 @@ class QueryBuilder : QLParserBaseVisitor<Any>() {
             text.startsWith("\"") || text.startsWith("'") -> StringLiteral.parse(text, line, charPos)
             text.equals("true", ignoreCase = true) || text.equals("false", ignoreCase = true) ->
                 BooleanLiteral.parse(text, line, charPos)
-            text.equals("null", ignoreCase = true) -> NullLiteral(line, charPos)
+            text.equals("null", ignoreCase = true) -> NullLiteral.parse(text, line, charPos)
             text.startsWith("D") || text.startsWith("d") -> DateTimeLiteral.parse(text, line, charPos)
             text.contains("-") && text.length > 10 -> UUIDLiteral.parse(text, line, charPos)
             else -> NumberLiteral.parse(text, line, charPos)
@@ -537,8 +538,8 @@ class QueryBuilder : QLParserBaseVisitor<Any>() {
 
             val scope = when (expr) {
                 is Attribute -> expr.scope
-                is com.processm.processminterpreter.pql.model.Function -> expr.scope ?: Scope.EVENT
-                is Expression -> expr.effectiveScope
+                is com.processm.processminterpreter.pql.model.Function -> expr.scope ?: expr.effectiveScope ?: Scope.EVENT
+                is Expression -> expr.effectiveScope ?: Scope.EVENT
                 else -> Scope.EVENT
             }
 
@@ -600,7 +601,7 @@ class QueryBuilder : QLParserBaseVisitor<Any>() {
             val scopeStr = parts[0]
             val valueStr = parts[1]
             val scope = Scope.parse(scopeStr)
-            val value = valueStr.toLong()
+            val value = Math.round(valueStr.toDouble())
             Pair(scope, value)
         } else {
             // Positional syntax: 5, 10 (Legacy)

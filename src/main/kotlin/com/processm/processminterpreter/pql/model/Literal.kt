@@ -2,6 +2,7 @@ package com.processm.processminterpreter.pql.model
 
 import java.time.LocalDate
 import java.time.LocalDateTime
+import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
 import java.util.UUID
 
@@ -20,6 +21,7 @@ import java.util.UUID
  */
 sealed class Literal<T>(
     val value: T,
+    override val scope: Scope? = null,
     line: Int = -1,
     charPositionInLine: Int = -1,
 ) : Expression(line, charPositionInLine) {
@@ -51,9 +53,10 @@ sealed class Literal<T>(
  */
 class StringLiteral(
     value: String,
+    scope: Scope? = null,
     line: Int = -1,
     charPositionInLine: Int = -1,
-) : Literal<String>(value, line, charPositionInLine) {
+) : Literal<String>(value, scope, line, charPositionInLine) {
 
     companion object {
         /**
@@ -66,26 +69,42 @@ class StringLiteral(
          * @return parsed StringLiteral
          */
         fun parse(s: String, line: Int = -1, charPos: Int = -1): StringLiteral {
-            if (s.length < 2) {
+            // Strip scope prefix if present (e.g. l:'abc')
+            val colonIndex = s.indexOf(':')
+            var scope: Scope? = null
+            var content = s
+            if (colonIndex >= 0) {
+                val scopeStr = s.substring(0, colonIndex)
+                try {
+                    scope = Scope.parse(scopeStr)
+                    content = s.substring(colonIndex + 1)
+                } catch (e: IllegalArgumentException) {
+                    // Not a valid scope, treat as content
+                    scope = null
+                    content = s
+                }
+            }
+
+            if (content.length < 2) {
                 throw PQLSyntaxException(line, charPos, "String literal too short: $s")
             }
 
             // Determine quote type
-            val quoteChar = s[0]
+            val quoteChar = content[0]
             if (quoteChar != '"' && quoteChar != '\'') {
                 throw PQLSyntaxException(line, charPos, "String literal must start with quote: $s")
             }
 
             // Find the closing quote by scanning and skipping escaped quotes
             // This handles edge cases like "abc\"" where the closing quote is escaped
-            val closingQuoteIndex = findClosingQuote(s, quoteChar)
+            val closingQuoteIndex = findClosingQuote(content, quoteChar)
 
             // Extract content between quotes
-            val unquoted = s.substring(1, closingQuoteIndex)
+            val unquoted = content.substring(1, closingQuoteIndex)
 
             // Unescape Java escape sequences
             val unescaped = unescapeJava(unquoted)
-            return StringLiteral(unescaped, line, charPos)
+            return StringLiteral(unescaped, scope, line, charPos)
         }
 
         /**
@@ -158,9 +177,10 @@ class StringLiteral(
  */
 class NumberLiteral(
     value: Double,
+    scope: Scope? = null,
     line: Int = -1,
     charPositionInLine: Int = -1,
-) : Literal<Double>(value, line, charPositionInLine) {
+) : Literal<Double>(value, scope, line, charPositionInLine) {
 
     companion object {
         /**
@@ -172,8 +192,21 @@ class NumberLiteral(
          * @return parsed NumberLiteral
          */
         fun parse(s: String, line: Int = -1, charPos: Int = -1): NumberLiteral {
+            val colonIndex = s.indexOf(':')
+            var scope: Scope? = null
+            var content = s
+            if (colonIndex >= 0) {
+                val scopeStr = s.substring(0, colonIndex)
+                try {
+                    scope = Scope.parse(scopeStr)
+                    content = s.substring(colonIndex + 1)
+                } catch (e: IllegalArgumentException) {
+                    scope = null
+                    content = s
+                }
+            }
             return try {
-                NumberLiteral(s.toDouble(), line, charPos)
+                NumberLiteral(content.toDouble(), scope, line, charPos)
             } catch (e: NumberFormatException) {
                 throw PQLSyntaxException(line, charPos, "Invalid number: $s", e)
             }
@@ -186,9 +219,10 @@ class NumberLiteral(
  */
 class BooleanLiteral(
     value: Boolean,
+    scope: Scope? = null,
     line: Int = -1,
     charPositionInLine: Int = -1,
-) : Literal<Boolean>(value, line, charPositionInLine) {
+) : Literal<Boolean>(value, scope, line, charPositionInLine) {
 
     companion object {
         /**
@@ -200,9 +234,22 @@ class BooleanLiteral(
          * @return parsed BooleanLiteral
          */
         fun parse(s: String, line: Int = -1, charPos: Int = -1): BooleanLiteral {
-            return when (s.lowercase()) {
-                "true" -> BooleanLiteral(true, line, charPos)
-                "false" -> BooleanLiteral(false, line, charPos)
+            val colonIndex = s.indexOf(':')
+            var scope: Scope? = null
+            var content = s
+            if (colonIndex >= 0) {
+                val scopeStr = s.substring(0, colonIndex)
+                try {
+                    scope = Scope.parse(scopeStr)
+                    content = s.substring(colonIndex + 1)
+                } catch (e: IllegalArgumentException) {
+                    scope = null
+                    content = s
+                }
+            }
+            return when (content.lowercase()) {
+                "true" -> BooleanLiteral(true, scope, line, charPos)
+                "false" -> BooleanLiteral(false, scope, line, charPos)
                 else -> throw PQLSyntaxException(line, charPos, "Invalid boolean: $s (expected 'true' or 'false')")
             }
         }
@@ -221,43 +268,83 @@ class BooleanLiteral(
  */
 class DateTimeLiteral(
     value: LocalDateTime,
+    scope: Scope? = null,
     line: Int = -1,
     charPositionInLine: Int = -1,
-) : Literal<LocalDateTime>(value, line, charPositionInLine) {
+) : Literal<LocalDateTime>(value, scope, line, charPositionInLine) {
 
     companion object {
-        private val dateTimeFormatter = DateTimeFormatter.ISO_DATE_TIME
+        private val dateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm[:ss][.SSS][XXX][XX][X]")
         private val dateFormatter = DateTimeFormatter.ISO_DATE
 
-        /**
-         * Parse a datetime literal from PQL.
-         *
-         * @param s the datetime string (e.g., "D2020-01-01" or "D2020-01-01T12:30:00")
-         * @param line line number for error reporting
-         * @param charPos character position for error reporting
-         * @return parsed DateTimeLiteral
-         */
-        fun parse(s: String, line: Int = -1, charPos: Int = -1): DateTimeLiteral {
-            // Remove 'D' or 'd' prefix if present
-            val cleaned = s.removePrefix("D").removePrefix("d").removePrefix("'").removeSuffix("'")
+        private val formatters = listOf(
+            // Standard ISO with separators
+            DateTimeFormatter.ISO_DATE_TIME,
+            DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm[:ss][.SSS][XXX][XX][X]"),
 
-            return try {
-                val dateTime = try {
-                    // Try full datetime format first
-                    LocalDateTime.parse(cleaned, dateTimeFormatter)
-                } catch (e: Exception) {
-                    // Fall back to date only (default time to 00:00:00)
-                    LocalDate.parse(cleaned, dateFormatter).atStartOfDay()
+            // Basic ISO (compact)
+            DateTimeFormatter.BASIC_ISO_DATE,
+            DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmm[ss][.SSS][XXX][XX][X]"),
+
+            // Compact without T
+            DateTimeFormatter.ofPattern("yyyyMMddHHmmss[.SSS][XXX][XX][X]"),
+            DateTimeFormatter.ofPattern("yyyyMMddHHmm[XXX][XX][X]")
+        )
+
+        fun parse(s: String, line: Int = -1, charPos: Int = -1): DateTimeLiteral {
+            // Strip scope prefix if present
+            val colonIndex = s.indexOf(':')
+            var scope: Scope? = null
+            var content = s
+            if (colonIndex >= 0) {
+                val scopeStr = s.substring(0, colonIndex)
+                try {
+                    scope = Scope.parse(scopeStr)
+                    content = s.substring(colonIndex + 1)
+                } catch (e: IllegalArgumentException) {
+                    scope = null
+                    content = s
                 }
-                DateTimeLiteral(dateTime, line, charPos)
-            } catch (e: Exception) {
-                throw PQLSyntaxException(
-                    line,
-                    charPos,
-                    "Invalid datetime: $s (expected format: D2020-01-01 or D2020-01-01T12:30:00)",
-                    e,
-                )
             }
+
+            // Remove 'D' or 'd' prefix if present
+            val cleaned = content.removePrefix("D").removePrefix("d").removePrefix("'").removeSuffix("'")
+
+            var lastException: Exception? = null
+
+            // Try all formatters
+            for (formatter in formatters) {
+                try {
+                    val dateTime = if (formatter == DateTimeFormatter.BASIC_ISO_DATE || formatter == dateFormatter) {
+                         LocalDate.parse(cleaned, formatter).atStartOfDay()
+                    } else {
+                        try {
+                            LocalDateTime.parse(cleaned, formatter)
+                        } catch (e: Exception) {
+                            // Try as OffsetDateTime and convert
+                            OffsetDateTime.parse(cleaned, formatter).toLocalDateTime()
+                        }
+                    }
+                    return DateTimeLiteral(dateTime, scope, line, charPos)
+                } catch (e: Exception) {
+                    lastException = e
+                }
+            }
+
+            // Fallback to simple date formatter if all else fails (legacy support)
+            try {
+                val date = LocalDate.parse(cleaned, dateFormatter)
+                return DateTimeLiteral(date.atStartOfDay(), scope, line, charPos)
+            } catch (e: Exception) {
+                // Ignore
+            }
+
+            throw PQLSyntaxException(
+                line,
+                charPos,
+                "Invalid datetime: $s (expected format: D2020-01-01 or D2020-01-01T12:30:00)",
+                lastException ?: Exception("Unknown parsing error"),
+            )
         }
     }
 
@@ -269,9 +356,10 @@ class DateTimeLiteral(
  */
 class UUIDLiteral(
     value: UUID,
+    scope: Scope? = null,
     line: Int = -1,
     charPositionInLine: Int = -1,
-) : Literal<UUID>(value, line, charPositionInLine) {
+) : Literal<UUID>(value, scope, line, charPositionInLine) {
 
     companion object {
         /**
@@ -283,8 +371,21 @@ class UUIDLiteral(
          * @return parsed UUIDLiteral
          */
         fun parse(s: String, line: Int = -1, charPos: Int = -1): UUIDLiteral {
+            val colonIndex = s.indexOf(':')
+            var scope: Scope? = null
+            var content = s
+            if (colonIndex >= 0) {
+                val scopeStr = s.substring(0, colonIndex)
+                try {
+                    scope = Scope.parse(scopeStr)
+                    content = s.substring(colonIndex + 1)
+                } catch (e: IllegalArgumentException) {
+                    scope = null
+                    content = s
+                }
+            }
             return try {
-                UUIDLiteral(UUID.fromString(s), line, charPos)
+                UUIDLiteral(UUID.fromString(content), scope, line, charPos)
             } catch (e: Exception) {
                 throw PQLSyntaxException(
                     line,
@@ -301,9 +402,26 @@ class UUIDLiteral(
  * Null literal.
  */
 class NullLiteral(
+    scope: Scope? = null,
     line: Int = -1,
     charPositionInLine: Int = -1,
-) : Literal<Nothing?>(null, line, charPositionInLine) {
+) : Literal<Nothing?>(null, scope, line, charPositionInLine) {
 
     override fun toString(): String = "null"
+
+    companion object {
+        fun parse(s: String, line: Int = -1, charPos: Int = -1): NullLiteral {
+            val colonIndex = s.indexOf(':')
+            var scope: Scope? = null
+            if (colonIndex >= 0) {
+                val scopeStr = s.substring(0, colonIndex)
+                try {
+                    scope = Scope.parse(scopeStr)
+                } catch (e: IllegalArgumentException) {
+                    scope = null
+                }
+            }
+            return NullLiteral(scope, line, charPos)
+        }
+    }
 }

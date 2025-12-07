@@ -43,11 +43,11 @@ abstract class Expression(
      * - Attribute with TRACE scope → TRACE (uses own scope because it's terminal)
      * - Function with EVENT scope and TRACE arguments → TRACE (from arguments)
      */
-    open val effectiveScope: Scope by lazy {
+    open val effectiveScope: Scope? by lazy {
         // If this expression is terminal (no children) and has its own scope, use it
         // This is important for Attribute which has a scope but no children
         if (isTerminal && scope != null) {
-            return@lazy scope!!
+            return@lazy scope
         }
 
         // Otherwise, compute from children
@@ -59,7 +59,8 @@ abstract class Expression(
         }
 
         // Find minimum scope (lowest in hierarchy = highest ordinal)
-        childScopes.maxByOrNull { it.ordinal } ?: Scope.EVENT
+        // If no children have scope (e.g. literals), return null (universal/neutral scope)
+        childScopes.maxByOrNull { it.ordinal }
     }
 
     /**

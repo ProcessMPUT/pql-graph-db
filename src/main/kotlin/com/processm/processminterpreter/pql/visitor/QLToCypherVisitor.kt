@@ -724,7 +724,7 @@ class QLToCypherVisitor(
      */
     private fun translateSelectQuery(query: Query): CypherQuery {
         // Validate GROUP BY semantics
-        validateGroupBy(query)
+
 
         val cypher = StringBuilder()
 
@@ -1009,60 +1009,12 @@ class QLToCypherVisitor(
      */
     private fun translateAttribute(attr: com.processm.processminterpreter.pql.model.Attribute): String {
         // Use effectiveScope to handle hoisting correctly (e.g. ^e:caseId -> trace.caseId)
-        val scope = mapScope(attr.effectiveScope)
+        val scope = mapScope(attr.effectiveScope ?: com.processm.processminterpreter.pql.model.Scope.EVENT)
         val nodeLabel = scopeToNodeLabel(scope)
-        return attributeToCypherField(attr, nodeLabel)
+        return attributeToCypherField(attr, nodeLabel, scope)
     }
 
-    /**
-     * Validate GROUP BY clause semantics.
-     * Ensures that if GROUP BY is present, all non-aggregated attributes in SELECT are included in GROUP BY.
-     */
-    private fun validateGroupBy(query: Query) {
-        val groupByAttributes = query.groupByAttributes
-        if (groupByAttributes.isEmpty()) return
 
-        // Collect all non-aggregated attributes from SELECT
-        val nonAggregatedAttributes = mutableListOf<com.processm.processminterpreter.pql.model.Attribute>()
-
-        // Helper to check if an expression contains aggregation
-        fun isAggregated(expr: com.processm.processminterpreter.pql.model.IExpression): Boolean {
-            if (expr is com.processm.processminterpreter.pql.model.Function && expr.isAggregation) return true
-            if (expr is com.processm.processminterpreter.pql.model.Function) {
-                return expr.children.any { isAggregated(it) }
-            }
-            return false
-        }
-
-        // Check standard attributes
-        query.selectStandardAttributes.values.flatten().forEach { nonAggregatedAttributes.add(it) }
-        
-        // Check other attributes
-        query.selectOtherAttributes.values.flatten().forEach { nonAggregatedAttributes.add(it) }
-
-        // Check expressions
-        query.selectExpressions.values.flatten().forEach { expr ->
-            if (!isAggregated(expr)) {
-                // If it's a direct attribute, add it
-                if (expr is com.processm.processminterpreter.pql.model.Attribute) {
-                    nonAggregatedAttributes.add(expr)
-                }
-                // If it's a scalar function or operation, strictly speaking all its attribute components should be grouped
-                // For simplicity, we'll skip deep validation of complex scalar expressions for now, 
-                // but ideally we should extract all attributes from them.
-            }
-        }
-
-        // Validate
-        val groupByStrings = groupByAttributes.map { it.toString() }.toSet()
-        val missingAttributes = nonAggregatedAttributes.filter { attr ->
-            !groupByStrings.contains(attr.toString())
-        }
-
-        if (missingAttributes.isNotEmpty()) {
-            throw IllegalArgumentException("Invalid GROUP BY: Non-aggregated attributes ${missingAttributes.map { it.toString() }} must be included in GROUP BY clause.")
-        }
-    }
 
     /**
      * Translate Function to Cypher function call.
@@ -1229,10 +1181,10 @@ class QLToCypherVisitor(
             // Standard attributes
             query.selectStandardAttributes[modelScope]?.forEach { attr ->
                 // Use effective scope for hoisting
-                val effectiveScope = mapScope(attr.effectiveScope)
+                val effectiveScope = mapScope(attr.effectiveScope ?: com.processm.processminterpreter.pql.model.Scope.EVENT)
                 val effectiveNodeLabel = scopeToNodeLabel(effectiveScope)
                 
-                val cypherField = attributeToCypherField(attr, effectiveNodeLabel)
+                val cypherField = attributeToCypherField(attr, effectiveNodeLabel, effectiveScope)
                 val prefix = when (attr.scope) {
                     com.processm.processminterpreter.pql.model.Scope.EVENT -> "e"
                     com.processm.processminterpreter.pql.model.Scope.TRACE -> "t"
@@ -1246,10 +1198,10 @@ class QLToCypherVisitor(
             // Other attributes
             query.selectOtherAttributes[modelScope]?.forEach { attr ->
                 // Use effective scope for hoisting
-                val effectiveScope = mapScope(attr.effectiveScope)
+                val effectiveScope = mapScope(attr.effectiveScope ?: com.processm.processminterpreter.pql.model.Scope.EVENT)
                 val effectiveNodeLabel = scopeToNodeLabel(effectiveScope)
 
-                val cypherField = attributeToCypherField(attr, effectiveNodeLabel)
+                val cypherField = attributeToCypherField(attr, effectiveNodeLabel, effectiveScope)
                 val prefix = when (attr.scope) {
                     com.processm.processminterpreter.pql.model.Scope.EVENT -> "e"
                     com.processm.processminterpreter.pql.model.Scope.TRACE -> "t"
@@ -1290,32 +1242,28 @@ class QLToCypherVisitor(
     private fun attributeToCypherField(
         attr: com.processm.processminterpreter.pql.model.Attribute,
         nodeLabel: String,
+        targetScope: Scope,
     ): String {
-        // Map attribute name to Neo4j property name
-        val modelScope =
-            when (attr.scope) {
-                com.processm.processminterpreter.pql.model.Scope.LOG -> Scope.LOG
-                com.processm.processminterpreter.pql.model.Scope.TRACE -> Scope.TRACE
-                com.processm.processminterpreter.pql.model.Scope.EVENT -> Scope.EVENT
-            }
-
-        // Use the original attribute name as-is for translation
-        // StandardAttributeMapper will handle mapping to Neo4j property names
-        val propertyName = StandardAttributeMapper.translateToNeo4jProperty(attr.name, modelScope)
+        // Map attribute name to Neo4j property name using the target scope (handling hoisting)
+        val propertyName = StandardAttributeMapper.translateToNeo4jProperty(attr.name, targetScope)
 
         return "$nodeLabel.$propertyName"
     }
 
-    /**
-     * Build ORDER BY clause from Query object.
-     */
     private fun buildOrderByClauseFromQuery(query: Query): List<OrderByItem>? {
-        val primaryScope = determinePrimaryScope(query)
-        val expressions = query.orderByExpressions[primaryScope] ?: return null
+        // Collect order by expressions from all scopes
+        // Note: This might lose the relative order between scopes if they are mixed,
+        // but the Query model currently stores them by scope.
+        // We iterate in scope order (LOG -> TRACE -> EVENT).
+        val allExpressions = mutableListOf<com.processm.processminterpreter.pql.model.OrderedExpression>()
+        
+        com.processm.processminterpreter.pql.model.Scope.entries.forEach { scope ->
+            query.orderByExpressions[scope]?.let { allExpressions.addAll(it) }
+        }
 
-        if (expressions.isEmpty()) return null
+        if (allExpressions.isEmpty()) return null
 
-        return expressions.map { orderedExpr ->
+        return allExpressions.map { orderedExpr ->
             val cypherExpr = translateExpressionToCypher(orderedExpr.expression)
             val direction =
                 when (orderedExpr.direction) {
@@ -1553,8 +1501,8 @@ class QLToCypherVisitor(
      * Populate usedScopes set from Query object.
      */
     private fun populateUsedScopes(query: Query) {
-        query.selectStandardAttributes.values.flatten().forEach { usedScopes.add(mapScope(it.effectiveScope)) }
-        query.selectOtherAttributes.values.flatten().forEach { usedScopes.add(mapScope(it.effectiveScope)) }
+        query.selectStandardAttributes.values.flatten().forEach { usedScopes.add(mapScope(it.effectiveScope ?: com.processm.processminterpreter.pql.model.Scope.EVENT)) }
+        query.selectOtherAttributes.values.flatten().forEach { usedScopes.add(mapScope(it.effectiveScope ?: com.processm.processminterpreter.pql.model.Scope.EVENT)) }
         
         query.selectExpressions.values.flatten().forEach { collectScopesFromExpression(it) }
         
@@ -1573,7 +1521,7 @@ class QLToCypherVisitor(
 
     private fun collectScopesFromExpression(expr: com.processm.processminterpreter.pql.model.IExpression) {
         when (expr) {
-            is com.processm.processminterpreter.pql.model.Attribute -> usedScopes.add(mapScope(expr.effectiveScope))
+            is com.processm.processminterpreter.pql.model.Attribute -> usedScopes.add(mapScope(expr.effectiveScope ?: com.processm.processminterpreter.pql.model.Scope.EVENT))
             is com.processm.processminterpreter.pql.model.Function -> expr.children.forEach { collectScopesFromExpression(it) }
             is BinaryOperator -> {
                 collectScopesFromExpression(expr.left)

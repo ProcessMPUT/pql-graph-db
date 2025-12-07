@@ -1,9 +1,10 @@
-package com.processm.processminterpreter.pql.parser
+package com.processm.processminterpreter.pql.original
 
 import com.processm.processminterpreter.pql.model.Attribute
 import com.processm.processminterpreter.pql.model.DateTimeLiteral
 import com.processm.processminterpreter.pql.model.Function
 import com.processm.processminterpreter.pql.model.FunctionType
+import com.processm.processminterpreter.pql.model.InvalidFunctionException
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Test
@@ -28,8 +29,8 @@ class FunctionProcessMTests {
 
     @Test
     fun invalidFunctionTest() {
-        assertThrows(IllegalArgumentException::class.java) { Function("XYZ", 0, 0) }
-        assertThrows(IllegalArgumentException::class.java) { Function("avg", 0, 0) }
-        assertThrows(IllegalArgumentException::class.java) { Function("year", 0, 0) }
+        assertThrows(InvalidFunctionException::class.java) { Function("XYZ", 0, 0) }
+        assertThrows(InvalidFunctionException::class.java) { Function("avg", 0, 0) }
+        assertThrows(InvalidFunctionException::class.java) { Function("year", 0, 0) }
     }
 }

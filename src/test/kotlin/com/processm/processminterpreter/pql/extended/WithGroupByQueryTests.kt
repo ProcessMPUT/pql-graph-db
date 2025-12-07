@@ -1,5 +1,6 @@
-package com.processm.processminterpreter.pql.interpreter
+package com.processm.processminterpreter.pql.extended
 
+import com.processm.processminterpreter.pql.interpreter.BaseInterpreterTest
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
@@ -54,7 +55,7 @@ class WithGroupByQueryTests : BaseInterpreterTest() {
         assertEquals(3, result.resultCount)
         
         val results = result.results
-        println("Results: $results")
+
         
         // Check Activity A
         val rowA = results.find { it["e_name"] == "A" }
@@ -108,7 +109,7 @@ class WithGroupByQueryTests : BaseInterpreterTest() {
         assertEquals(4, result.resultCount)
         
         val results = result.results
-        println("Results: $results")
+
         val countKey = results[0].keys.find { it.contains("count") } ?: "count"
         
         val case1A = results.find { it["t_name"] == "Case 1" && it["e_name"] == "A" }

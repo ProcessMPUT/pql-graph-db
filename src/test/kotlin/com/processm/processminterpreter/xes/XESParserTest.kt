@@ -44,18 +44,9 @@ class XESParserTest {
         assertEquals("complete", firstEvent.eventNode.lifecycle)
         assertEquals(50.0, firstEvent.eventNode.cost)
 
-        println("[DEBUG_LOG] Successfully parsed XES file:")
-        println("[DEBUG_LOG] - Log ID: ${result.logNode.logId}")
-        println("[DEBUG_LOG] - Log Name: ${result.logNode.name}")
-        println("[DEBUG_LOG] - Traces: ${result.traces.size}")
-        println("[DEBUG_LOG] - Total Events: ${result.traces.sumOf { it.events.size }}")
 
-        result.traces.forEachIndexed { traceIndex, trace ->
-            println("[DEBUG_LOG] - Trace ${traceIndex + 1}: ${trace.traceNode.caseId} (${trace.events.size} events)")
-            trace.events.forEachIndexed { eventIndex, event ->
-                println("[DEBUG_LOG]   - Event ${eventIndex + 1}: ${event.eventNode.activity} by ${event.eventNode.resource}")
-            }
-        }
+
+
     }
 
     @Test
@@ -76,7 +67,7 @@ class XESParserTest {
         assertTrue(result.logNode.logId.startsWith("log-"))
         assertEquals("Sample Process Log", result.logNode.name)
 
-        println("[DEBUG_LOG] Generated log ID: ${result.logNode.logId}")
+
     }
 
     @Test
@@ -98,10 +89,7 @@ class XESParserTest {
         assertEquals("Variant_B", secondTrace.traceNode.attributes["case:variant"])
         assertEquals(2, secondTrace.traceNode.attributes["case:priority"])
 
-        println("[DEBUG_LOG] Trace attributes for ${secondTrace.traceNode.caseId}:")
-        secondTrace.traceNode.attributes.forEach { (key, value) ->
-            println("[DEBUG_LOG] - $key: $value (${value::class.simpleName})")
-        }
+
     }
 
     @Test
@@ -125,10 +113,7 @@ class XESParserTest {
         assertEquals(50.0, firstEvent.eventNode.cost)
         assertNotNull(firstEvent.eventNode.timestamp)
 
-        println("[DEBUG_LOG] Event attributes for ${firstEvent.eventNode.activity}:")
-        firstEvent.eventNode.attributes.forEach { (key, value) ->
-            println("[DEBUG_LOG] - $key: $value (${value::class.simpleName})")
-        }
+
     }
 
     @Test
@@ -155,8 +140,6 @@ class XESParserTest {
         assertEquals(allTraceIds.size, allTraceIds.toSet().size, "All trace IDs should be unique")
         assertEquals(allEventIds.size, allEventIds.toSet().size, "All event IDs should be unique")
 
-        println("[DEBUG_LOG] Generated IDs:")
-        println("[DEBUG_LOG] - Trace IDs: $allTraceIds")
-        println("[DEBUG_LOG] - Event IDs (first 5): ${allEventIds.take(5)}")
+
     }
 }

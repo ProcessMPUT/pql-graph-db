@@ -25,7 +25,11 @@ class QueryTests {
         assertNull(query.whereExpression)
 
         // All maps should be empty
-        assertTrue(query.selectAll.isEmpty())
+        // selectAll contains all scopes by default (false)
+        assertEquals(3, query.selectAll.size)
+        assertFalse(query.selectAll[Scope.EVENT]!!)
+        assertFalse(query.selectAll[Scope.TRACE]!!)
+        assertFalse(query.selectAll[Scope.LOG]!!)
         assertTrue(query.selectStandardAttributes.isEmpty())
         assertTrue(query.selectOtherAttributes.isEmpty())
         assertTrue(query.selectExpressions.isEmpty())
@@ -112,7 +116,7 @@ class QueryTests {
 
         assertEquals(true, query.selectAll[Scope.EVENT])
         assertEquals(false, query.selectAll[Scope.TRACE])
-        assertNull(query.selectAll[Scope.LOG])
+        assertEquals(false, query.selectAll[Scope.LOG])
     }
 
     @Test
@@ -352,7 +356,7 @@ class QueryTests {
 
         // Should not throw - e:name is in GROUP BY
         assertDoesNotThrow {
-            query.validateGroupByAttributes()
+            query.validateGroupBy()
         }
     }
 
@@ -370,7 +374,7 @@ class QueryTests {
 
         // Should throw - e:name is not in GROUP BY but aggregation is used
         assertThrows(PQLSemanticException::class.java) {
-            query.validateGroupByAttributes()
+            query.validateGroupBy()
         }
     }
 
@@ -383,7 +387,7 @@ class QueryTests {
 
         // Should not throw - no aggregation, so GROUP BY not required
         assertDoesNotThrow {
-            query.validateGroupByAttributes()
+            query.validateGroupBy()
         }
     }
 

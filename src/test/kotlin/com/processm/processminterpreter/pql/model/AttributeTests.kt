@@ -40,13 +40,13 @@ class AttributeTests {
 
         assertEquals("org:group", attr1.name, "Should preserve multi-part name")
         assertEquals("^", attr1.hoistingPrefix, "Should extract hoisting prefix")
-        assertEquals(Scope.TRACE, attr1.scope, "^e should hoist to TRACE")
+        assertEquals(Scope.TRACE, attr1.effectiveScope, "^e should hoist to TRACE")
         assertTrue(attr1.isStandard, "org:group is a standard attribute")
 
         // Test double hoisting
         val attr2 = Attribute("^^e:timestamp")
         assertEquals("^^", attr2.hoistingPrefix)
-        assertEquals(Scope.LOG, attr2.scope, "^^e should hoist to LOG")
+        assertEquals(Scope.LOG, attr2.effectiveScope, "^^e should hoist to LOG")
         assertTrue(attr2.isStandard, "timestamp is a standard attribute")
     }
 
@@ -89,17 +89,17 @@ class AttributeTests {
 
         // Single hoist: EVENT → TRACE
         val eHoist1 = Attribute("^e:name")
-        assertEquals(Scope.TRACE, eHoist1.scope)
+        assertEquals(Scope.TRACE, eHoist1.effectiveScope)
         assertEquals("^", eHoist1.hoistingPrefix)
 
         // Double hoist: EVENT → LOG
         val eHoist2 = Attribute("^^e:name")
-        assertEquals(Scope.LOG, eHoist2.scope)
+        assertEquals(Scope.LOG, eHoist2.effectiveScope)
         assertEquals("^^", eHoist2.hoistingPrefix)
 
         // Single hoist from TRACE: TRACE → LOG
         val tHoist = Attribute("^t:name")
-        assertEquals(Scope.LOG, tHoist.scope)
+        assertEquals(Scope.LOG, tHoist.effectiveScope)
 
         // No hoisting from LOG
         val l = Attribute("l:name")

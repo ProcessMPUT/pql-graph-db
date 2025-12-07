@@ -72,6 +72,8 @@ object StandardAttributeMapper {
                     "id" to ("identity:id" to "logId"),
                     "version" to ("xes:version" to "xes_version"),
                     "features" to ("xes:features" to "xes_features"),
+                    "currency" to ("cost:currency" to "cost_currency"),
+                    "total" to ("cost:total" to "cost_total"),
                 ),
             Scope.TRACE to
                 mapOf(

@@ -1,5 +1,6 @@
-package com.processm.processminterpreter.pql.interpreter
+package com.processm.processminterpreter.pql.extended
 
+import com.processm.processminterpreter.pql.interpreter.BaseInterpreterTest
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
@@ -38,7 +39,7 @@ class WithWhereQueryTests : BaseInterpreterTest() {
         assertEquals("A", result.results[0]["e_name"])
         
         // Verify generated Cypher
-        println("Generated Cypher WhereEquals: ${result.cypherQuery}")
+
         assertTrue(result.cypherQuery!!.contains("WHERE"))
         assertTrue(result.cypherQuery!!.contains("event.activity = "))
     }
@@ -50,7 +51,7 @@ class WithWhereQueryTests : BaseInterpreterTest() {
         assertTrue(result.success)
         assertEquals(2, result.resultCount)
         
-        println("Generated Cypher WhereIn: ${result.cypherQuery}")
+
         assertTrue(result.cypherQuery!!.contains("IN"))
     }
 
@@ -62,15 +63,15 @@ class WithWhereQueryTests : BaseInterpreterTest() {
         assertEquals(1, result.resultCount)
         assertEquals("A", result.results[0]["e_name"])
         
-        println("Generated Cypher WhereLike: ${result.cypherQuery}")
-        assertTrue(result.cypherQuery!!.contains("CONTAINS"))
+
+        assertTrue(result.cypherQuery!!.contains("=~"))
     }
     
     @Test
     fun testWhereAnd() {
         val result = pqlQueryService.executePQLQuery("select e:name where e:name = 'A' and e:timestamp > D2022-01-01")
         
-        println("Generated Cypher WhereAnd: ${result.cypherQuery}")
+
         assertTrue(result.success)
         assertEquals(1, result.resultCount)
         

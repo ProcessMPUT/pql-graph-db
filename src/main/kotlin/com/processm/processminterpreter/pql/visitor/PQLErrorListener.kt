@@ -1,5 +1,6 @@
 package com.processm.processminterpreter.pql.visitor
 
+import com.processm.processminterpreter.pql.model.PQLSyntaxException
 import org.antlr.v4.runtime.BaseErrorListener
 import org.antlr.v4.runtime.RecognitionException
 import org.antlr.v4.runtime.Recognizer
@@ -14,6 +15,8 @@ class PQLErrorListener : BaseErrorListener() {
 
     private val logger = LoggerFactory.getLogger(PQLErrorListener::class.java)
     private val errors = mutableListOf<String>()
+    private var firstErrorLine = -1
+    private var firstErrorCharPos = -1
 
     override fun syntaxError(
         recognizer: Recognizer<*, *>?,
@@ -23,6 +26,10 @@ class PQLErrorListener : BaseErrorListener() {
         msg: String?,
         e: RecognitionException?,
     ) {
+        if (errors.isEmpty()) {
+            firstErrorLine = line
+            firstErrorCharPos = charPositionInLine
+        }
         val error = "Syntax error at line $line:$charPositionInLine - $msg"
         logger.error(error)
         errors.add(error)
@@ -43,7 +50,7 @@ class PQLErrorListener : BaseErrorListener() {
      */
     fun throwIfErrors() {
         if (hasErrors()) {
-            throw IllegalArgumentException("PQL parsing failed:\n${errors.joinToString("\n")}")
+            throw PQLSyntaxException(firstErrorLine, firstErrorCharPos, "PQL parsing failed:\n${errors.joinToString("\n")}")
         }
     }
 }

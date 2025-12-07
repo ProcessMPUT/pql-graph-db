@@ -1,8 +1,9 @@
-package com.processm.processminterpreter.pql.visitor
+package com.processm.processminterpreter.pql.extended
 
 import QLLexer
 import QLParser
 import com.processm.processminterpreter.pql.model.*
+import com.processm.processminterpreter.pql.visitor.*
 import org.antlr.v4.runtime.CharStreams
 import org.antlr.v4.runtime.CommonTokenStream
 import org.junit.jupiter.api.Assertions.*
@@ -56,6 +57,7 @@ class QueryBuilderTests {
         val query = parseQuery("")
 
         // Implicit select * for all scopes
+        // Implicit select * is TRUE for empty query (defaults to select *)
         assertTrue(query.isImplicitSelectAll[Scope.EVENT] == true)
         assertTrue(query.isImplicitSelectAll[Scope.TRACE] == true)
         assertTrue(query.isImplicitSelectAll[Scope.LOG] == true)
@@ -126,7 +128,7 @@ class QueryBuilderTests {
         val query = parseQuery("select e:*")
 
         assertEquals(true, query.selectAll[Scope.EVENT])
-        assertNull(query.selectAll[Scope.TRACE])
+        assertEquals(false, query.selectAll[Scope.TRACE])
     }
 
     // ========================================

@@ -1,5 +1,6 @@
-package com.processm.processminterpreter.pql.interpreter
+package com.processm.processminterpreter.pql.extended
 
+import com.processm.processminterpreter.pql.interpreter.BaseInterpreterTest
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach

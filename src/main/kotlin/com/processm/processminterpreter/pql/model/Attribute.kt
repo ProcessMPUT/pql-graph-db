@@ -39,12 +39,15 @@ class Attribute(
     // Groups: (hoisting) (scope:) (name)
     // Changed \S+ to .+ to allow spaces and special characters
     private val regex = Regex("^(\\^*)(?:([a-zA-Z]+):)?(.+)$")
-    private val match = regex.find(cleanAttributeStr)
-        ?: throw PQLSyntaxException(
+    private val match = if (cleanAttributeStr.isBlank()) {
+        throw PQLSyntaxException(line, charPositionInLine, "Attribute name cannot be empty")
+    } else {
+        regex.find(cleanAttributeStr) ?: throw PQLSyntaxException(
             line,
             charPositionInLine,
             "Invalid attribute syntax: $attributeStr",
         )
+    }
     
 
 
@@ -80,7 +83,11 @@ class Attribute(
      * - "customAttr" → "customAttr"
      * - "org:group" → "org:group" (if org is not a scope)
      */
-    val name: String = parsedScopeAndName.second
+    val name: String = parsedScopeAndName.second.also {
+        if (!wasBracketed && it.contains(" ")) {
+            throw PQLSyntaxException(line, charPositionInLine, "Attribute name cannot contain spaces unless bracketed: $attributeStr")
+        }
+    }
 
     /**
      * Base scope (before hoisting is applied).
@@ -127,7 +134,7 @@ class Attribute(
      * - "^e:name" → TRACE (EVENT.upper)
      * - "^^e:name" → LOG (EVENT.upper.upper)
      */
-    override val effectiveScope: Scope = run {
+    override val effectiveScope: Scope? = run {
         var currentScope = scope
         for (i in hoistingPrefix.indices) {
             currentScope = currentScope.upper
@@ -235,8 +242,10 @@ class Attribute(
      * @return the Neo4j property name
      */
     fun toNeo4jProperty(): String {
+        // Use effectiveScope to handle hoisting (e.g. ^e:name -> TRACE scope -> caseId)
+        val targetScope = effectiveScope ?: scope
         return if (isStandard) {
-            StandardAttributes.getNeo4jPropertyFromShorthand(scope, name)
+            StandardAttributes.getNeo4jPropertyFromShorthand(targetScope, name)
                 ?: name.replace(":", "_")
         } else {
             name.replace(":", "_")

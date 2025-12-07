@@ -1,5 +1,6 @@
-package com.processm.processminterpreter.pql.interpreter
+package com.processm.processminterpreter.pql.extended
 
+import com.processm.processminterpreter.pql.interpreter.BaseInterpreterTest
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
@@ -38,12 +39,11 @@ class WithSelectQueryTests : BaseInterpreterTest() {
         assertEquals(3, result.resultCount)
         
         val names = result.results.map { it["e_name"] as String }.sorted()
-        println("Actual names: $names")
-        println("Full results: ${result.results}")
+
         assertEquals(listOf("A", "B", "C"), names)
         
         // Verify generated Cypher contains expected clauses
-        println("Generated Cypher: ${result.cypherQuery}")
+
         assertTrue(result.cypherQuery!!.contains("MATCH"))
         assertTrue(result.cypherQuery!!.contains("RETURN"))
         assertTrue(result.cypherQuery!!.contains("event.activity AS e_name"))
@@ -54,14 +54,14 @@ class WithSelectQueryTests : BaseInterpreterTest() {
         val result = pqlQueryService.executePQLQuery("select t:name")
         
         assertTrue(result.success)
-        assertEquals(3, result.resultCount)
+        assertEquals(2, result.resultCount)
         
         val names = result.results.map { it["t_name"] as String }.sorted()
-        println("Actual trace names: $names")
-        assertEquals(listOf("Case 1", "Case 1", "Case 2"), names)
+
+        assertEquals(listOf("Case 1", "Case 2"), names)
         
         // Verify generated Cypher
-        println("Generated Cypher Trace: ${result.cypherQuery}")
+
         assertTrue(result.cypherQuery!!.contains("trace.caseId AS t_name"))
     }
 }

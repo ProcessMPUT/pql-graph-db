@@ -238,8 +238,6 @@ class PQLQueryController(
                 ),
                 limitations =
                 listOf(
-                    "GROUP BY not yet supported",
-                    "Aggregation functions not yet supported",
                     "Complex joins not yet supported",
                     "Subqueries not yet supported",
                 ),
@@ -249,6 +247,8 @@ class PQLQueryController(
                     "SELECT * FROM trace WHERE caseId = 'case-123'",
                     "SELECT activity, timestamp FROM event WHERE activity = 'Task A'",
                     "SELECT * FROM event WHERE resource LIKE 'John' AND timestamp > '2023-01-01'",
+                    "SELECT t:caseId, count(e:id) GROUP BY t:caseId",
+                    "SELECT avg(e:cost:total) WHERE e:activity = 'Surgery'",
                 ),
             )
 

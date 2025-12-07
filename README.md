@@ -241,8 +241,8 @@ src/main/kotlin/com/processm/processminterpreter/
 System składa się z następujących komponentów:
 - **Neo4j Database** - graf baza danych do przechowywania logów XES
 - **Spring Boot Application** - REST API dla operacji CRUD i wykonywania zapytań PQL
-- **PQL Parser** - parser języka zapytań PQL (integracja z ProcessM)
-- **Query Model** - obiektowa reprezentacja zapytań PQL → Cypher
+- **PQL Parser** - parser języka zapytań PQL (integracja z ProcessM, ANTLR4)
+- **Query Model** - obiektowa reprezentacja zapytań PQL → Cypher (Visitor Pattern)
 - **XES Loader** - moduł do ładowania plików XES do Neo4j
 - **XES Writer** - moduł do eksportu wyników zapytań do formatu XES (zgodność z IEEE 1849-2016)
 
