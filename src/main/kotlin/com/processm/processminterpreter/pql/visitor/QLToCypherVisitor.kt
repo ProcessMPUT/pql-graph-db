@@ -1420,9 +1420,9 @@ class QLToCypherVisitor(
             // All three scopes needed
             needsLog && needsTrace && needsEvent -> {
                 if (logId != null) {
-                    "MATCH (log:Log {logId: \$logId})-[:CONTAINS]->(trace:Trace)-[:HAS_EVENT]->(event:Event)"
+                    "MATCH (log:Log {logId: \$logId})-[:CONTAINS]->(trace:Trace) WITH log, trace MATCH (trace)-[:HAS_EVENT]->(event:Event)"
                 } else {
-                    "MATCH (log:Log)-[:CONTAINS]->(trace:Trace)-[:HAS_EVENT]->(event:Event)"
+                    "MATCH (log:Log)-[:CONTAINS]->(trace:Trace) WITH log, trace MATCH (trace)-[:HAS_EVENT]->(event:Event)"
                 }
             }
             // LOG and TRACE

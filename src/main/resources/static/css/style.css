@@ -647,7 +647,7 @@ textarea {
     color: var(--text-muted);
 }
 
-#pqlQueryText {
+.query-editor {
     width: 100%;
     min-height: 200px;
     padding: 16px;
@@ -722,4 +722,85 @@ textarea {
     font-size: 0.9rem;
     color: #d4d4d4;
     min-height: 100px;
+}
+
+/* JSON Viewer */
+.json-viewer {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    color: #d4d4d4;
+}
+
+.json-item {
+    padding-left: 0;
+}
+
+.json-children {
+    padding-left: 1.5rem;
+    display: block;
+}
+
+.json-item.collapsed .json-children {
+    display: none;
+}
+
+.json-item.collapsed .json-ellipsis {
+    display: inline;
+}
+
+.json-ellipsis {
+    display: none;
+    color: #888;
+    margin: 0 4px;
+    cursor: pointer;
+}
+
+.json-toggle {
+    display: inline-block;
+    width: 1rem;
+    cursor: pointer;
+    user-select: none;
+    color: #888;
+    font-size: 0.7rem;
+    vertical-align: middle;
+    margin-right: 2px;
+}
+
+.json-toggle:hover {
+    color: #fff;
+}
+
+.json-key {
+    color: #9cdcfe;
+}
+
+.json-value.type-string {
+    color: #ce9178;
+}
+
+.json-value.type-number {
+    color: #b5cea8;
+}
+
+.json-value.type-boolean {
+    color: #569cd6;
+}
+
+.json-value.type-null {
+    color: #569cd6;
+}
+
+.json-bracket,
+.json-comma {
+    color: #888;
+}
+
+.json-header {
+    display: inline-block;
+    cursor: pointer;
+}
+
+.json-row {
+    white-space: nowrap;
 }

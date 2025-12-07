@@ -45,14 +45,42 @@ class RemoteProcessMService(
             .build()
     }
 
-    fun executeQuery(logName: String, query: String): RemoteResult {
+    fun executeQuery(logName: String, query: String, includeTraces: Boolean = false, includeEvents: Boolean = false): RemoteResult {
         try {
             val token = login() ?: return RemoteResult(false, "Could not log in to ProcessM")
             val dataStoreId = findDataStore(token, logName) 
                 ?: return RemoteResult(false, "Could not find data store for log: $logName")
 
-            val encodedQuery = URLEncoder.encode(query, StandardCharsets.UTF_8)
-            val uri = URI.create("$baseUrl/data-stores/$dataStoreId/logs?query=$encodedQuery&includeTraces=true&includeEvents=true")
+            // Fix PQL Dialect Differences
+            // 1. Force scoped limit if global limit is used (e.g., "limit 20" -> "limit l:20")
+            // Remote ProcessM requires scoped limits.
+            // 1. Force scoped limit if global limit is used or if 'limit l:N' is used but we are querying events
+            // Heuristic: If querying events, 'limit l:1' usually triggers a huge dump of the whole log.
+            // We want 'limit e:1' (1 event) in that case.
+            var adaptedQuery = query
+            
+            // Check for explicit or implicit limit
+            val limitRegex = Regex("(?i)\\blimit\\s+(?:[lte]:)?(\\d+)")
+            val match = limitRegex.find(query)
+            
+            if (match != null) {
+                val limitValue = match.groupValues[1]
+                val inferredScope = when {
+                    query.contains(Regex("(?i)\\bevent:|\\be:")) -> "e"
+                    query.contains(Regex("(?i)\\btrace:|\\bt:")) -> "t"
+                    else -> "l"
+                }
+                
+                // If we inferred 'e' (event) or 't' (trace), we should force that scope
+                // overriding whatever the user wrote (e.g. they wrote 'limit l:5' but meant 5 rows of events)
+                adaptedQuery = adaptedQuery.replace(limitRegex, "limit $inferredScope:$limitValue")
+            }
+            
+            // 2. Map 'event:activity' to 'event:name' (common mismatch)
+            adaptedQuery = adaptedQuery.replace("event:activity", "event:name")
+
+            val encodedQuery = URLEncoder.encode(adaptedQuery, StandardCharsets.UTF_8)
+            val uri = URI.create("$baseUrl/data-stores/$dataStoreId/logs?query=$encodedQuery&includeTraces=$includeTraces&includeEvents=$includeEvents")
 
             val request = HttpRequest.newBuilder()
                 .uri(uri)
@@ -67,9 +95,9 @@ class RemoteProcessMService(
                 val data = if (json.isArray) json else json.get("data")
                 
                 val count = if (data != null && data.isArray) data.size() else 0
-                return RemoteResult(true, "Success", count, data as? ArrayNode)
+                return RemoteResult(true, "Success", count, data as? ArrayNode, uri.toString(), adaptedQuery, dataStoreId)
             } else {
-                return RemoteResult(false, "Remote API Error: ${response.statusCode()} - ${response.body()}")
+                return RemoteResult(false, "Remote API Error: ${response.statusCode()} - ${response.body()}", 0, null, uri.toString(), adaptedQuery, dataStoreId)
             }
 
         } catch (e: Exception) {
@@ -134,5 +162,8 @@ data class RemoteResult(
     val success: Boolean,
     val message: String,
     val resultCount: Int = 0,
-    val data: ArrayNode? = null
+    val data: ArrayNode? = null,
+    val requestUrl: String? = null,
+    val adaptedQuery: String? = null,
+    val remoteLogId: String? = null
 )
