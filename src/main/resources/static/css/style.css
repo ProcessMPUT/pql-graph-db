@@ -705,6 +705,12 @@ textarea {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 1.5rem;
+    min-width: 0;
+}
+
+.verification-col {
+    min-width: 0;
+    overflow: hidden;
 }
 
 .verification-col h4 {
@@ -803,4 +809,27 @@ textarea {
 
 .json-row {
     white-space: nowrap;
+}
+/* Copy button for verification results */
+.copy-btn {
+    background: var(--bg-secondary);
+    border: 1px solid var(--accent-blue);
+    color: var(--accent-blue);
+    padding: 4px 12px;
+    font-size: 0.85rem;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    box-shadow: none;
+}
+
+.copy-btn:hover {
+    background: var(--accent-blue);
+    color: var(--text-primary);
+    box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
+    transform: translateY(-1px);
+}
+
+.copy-btn:active {
+    transform: translateY(0);
 }

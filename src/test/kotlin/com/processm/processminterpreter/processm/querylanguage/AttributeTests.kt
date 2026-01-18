@@ -1,13 +1,14 @@
-package com.processm.processminterpreter.pql.original
+package com.processm.processminterpreter.processm.querylanguage
 
-import com.processm.processminterpreter.pql.model.Attribute
+import kotlin.test.Test
+import com.processm.processminterpreter.pql.model.Query
 import com.processm.processminterpreter.pql.model.Scope
-import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertFalse
-import org.junit.jupiter.api.Assertions.assertTrue
-import org.junit.jupiter.api.Test
+import com.processm.processminterpreter.pql.model.Attribute
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
-class AttributeProcessMTests {
+class AttributeTests {
 
     @Test
     fun unicodeCustomAttributeTest() {
@@ -32,14 +33,14 @@ class AttributeProcessMTests {
     @Test
     fun specialCharactersCustomAttributeTest() {
         val attribute = Attribute(
-            "[^trace:!@#\\$%^&*():-=]",
+            "[^trace:!@#$%^&*():-=]",
             0,
             0
         )
         assertEquals("^", attribute.hoistingPrefix)
         assertEquals(Scope.TRACE, attribute.scope)
         assertEquals(Scope.LOG, attribute.effectiveScope)
-        assertEquals("!@#\\$%^&*():-=", attribute.name)
+        assertEquals("!@#\$%^&*():-=", attribute.name)
         assertEquals("", attribute.standardName)
         assertFalse(attribute.isStandard)
         assertFalse(attribute.isClassifier)

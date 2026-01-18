@@ -12,9 +12,10 @@ services:
       - NEO4J_PLUGINS=["apoc"]
       - NEO4J_dbms_security_procedures_unrestricted=apoc.*
       - NEO4J_dbms_security_procedures_allowlist=apoc.*
-      - NEO4J_dbms_memory_heap_initial__size=512m
-      - NEO4J_dbms_memory_heap_max__size=2G
+      - NEO4J_dbms_memory_heap_initial__size=1G
+      - NEO4J_dbms_memory_heap_max__size=6G
       - NEO4J_dbms_memory_pagecache_size=1G
+      - NEO4J_dbms_memory_transaction_total_max=8G
     volumes:
       - neo4j_data:/data
       - neo4j_logs:/logs
@@ -28,6 +29,21 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
+
+  processm:
+    image: processm/processm-server-full:latest
+    container_name: processm-server
+    ports:
+      - "80:2080"
+      - "443:2443"
+    networks:
+      - processm-network
+    environment:
+      - POSTGRES_DB=processm
+      - POSTGRES_USER=postgres
+      - PROCESSM_DEMOMODE=true
+      - PROCESSM_BASEURL=http://localhost:80/
+    restart: unless-stopped
 
 
 volumes:

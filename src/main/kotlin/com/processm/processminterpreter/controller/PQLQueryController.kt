@@ -1,8 +1,10 @@
 package com.processm.processminterpreter.controller
 
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.fasterxml.jackson.databind.JsonNode
 import com.processm.processminterpreter.dto.ErrorResponse
 import com.processm.processminterpreter.service.PQLQueryService
+import com.processm.processminterpreter.service.PQLQueryResult
 import org.slf4j.LoggerFactory
 import org.springframework.http.HttpHeaders
 import org.springframework.http.MediaType
@@ -15,10 +17,12 @@ import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RestController
+import org.springframework.web.multipart.MultipartFile
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 
 import com.processm.processminterpreter.service.RemoteProcessMService
+import com.processm.processminterpreter.util.XESJsonConverter
 
 /**
  * REST Controller for PQL query operations
@@ -38,14 +42,19 @@ class PQLQueryController(
     /**
      * Execute PQL query
      * POST /api/query/execute
+     *
+     * @param request PQL query request
+     * @param format Response format: "json" (default, simple hierarchical JSON) or "xes" (XES JSON format matching ProcessM)
      */
     @PostMapping("/execute")
     fun executeQuery(
         @RequestBody request: PQLQueryRequest,
+        @RequestParam(defaultValue = "json") format: String,
     ): ResponseEntity<PQLQueryResponse> {
         logger.info("=== Executing PQL Query ===")
         logger.info("PQL: ${request.query}")
         logger.info("LogId: ${request.logId ?: "ALL"}")
+        logger.info("Format: $format")
 
         return try {
             val result = pqlQueryService.executePQLQuery(request.query, request.logId)
@@ -58,12 +67,33 @@ class PQLQueryController(
                 logger.warn("Query failed: ${result.error}")
             }
 
+            // Determine results format based on parameter
+            val results = when (format.lowercase()) {
+                "xes" -> {
+                    // Convert to XES JSON format (matching ProcessM)
+                    logger.debug("Converting ${result.logs.size} logs to XES JSON format")
+
+                    // Detect if this is a projected query (SELECT specific fields vs SELECT *)
+                    val isProjectedQuery = result.results.firstOrNull()?.keys?.any { key ->
+                        key.startsWith("l_") || key.startsWith("t_") || key.startsWith("e_") ||
+                        key.startsWith("log_") || key.startsWith("trace_") || key.startsWith("event_")
+                    } ?: false
+
+                    val xesJson = XESJsonConverter.convertToXESJson(result.logs, isProjectedQuery)
+                    listOf(xesJson)  // Wrap in list for consistency
+                }
+                else -> {
+                    // Default: simple hierarchical JSON (flat results for backward compatibility)
+                    result.results
+                }
+            }
+
             val response =
                 PQLQueryResponse(
                     success = result.success,
                     query = result.query,
                     cypherQuery = result.cypherQuery,
-                    results = result.results,
+                    results = results,
                     resultCount = result.resultCount,
                     executionTimeMs = result.executionTimeMs,
                     error = result.error,
@@ -264,6 +294,27 @@ class PQLQueryController(
      * Verify PQL query against ProcessM
      * POST /api/query/verify
      */
+    /**
+     * Upload log to local ProcessM instance
+     * POST /api/query/processm/upload
+     */
+    @PostMapping("/processm/upload", consumes = [MediaType.MULTIPART_FORM_DATA_VALUE])
+    fun uploadToProcessM(
+        @RequestParam("file") file: MultipartFile,
+        @RequestParam("logName") logName: String
+    ): ResponseEntity<Map<String, String>> {
+        val result = remoteProcessMService.uploadLog(file, logName)
+        return if (result.startsWith("Success")) {
+            ResponseEntity.ok(mapOf("message" to result))
+        } else {
+            ResponseEntity.badRequest().body(mapOf("error" to result))
+        }
+    }
+
+    /**
+     * Verify PQL query against ProcessM
+     * POST /api/query/verify
+     */
     @PostMapping("/verify")
     fun verifyQuery(
         @RequestBody request: PQLVerificationRequest,
@@ -274,26 +325,45 @@ class PQLQueryController(
 
         return try {
             // 1. Execute Local
-            val localResult = pqlQueryService.executePQLQuery(request.query, request.logId)
-            
+            var localResult: PQLQueryResult
+            try {
+                localResult = pqlQueryService.executePQLQuery(request.query, request.logId)
+            } catch (e: Exception) {
+                logger.warn("Local execution failed: ${e.message}")
+                localResult = PQLQueryResult(
+                    success = false,
+                    query = request.query,
+                    error = "Local Syntax/Execution Error: ${e.message}",
+                    resultCount = 0,
+                    results = emptyList()
+                )
+            }
+
             // 2. Execute Remote
             val remoteResult = remoteProcessMService.executeQuery(
-                request.logName, 
+                request.logName,
                 request.query,
                 request.includeTraces,
                 request.includeEvents
             )
 
 
-
-            // Convert RemoteResult (ArrayNode) to List<Map>
+            // Convert RemoteResult (JsonNode) to List<Map>
             val remoteResultsList: List<Map<String, Any?>> = if (remoteResult.data != null) {
                 try {
-                    val rawList = objectMapper.convertValue(
-                        remoteResult.data,
-                        object : com.fasterxml.jackson.core.type.TypeReference<List<Map<String, Any?>>>() {}
-                    )
-                    flattenRemoteXes(rawList)
+                    if (remoteResult.data.isArray) {
+                        objectMapper.convertValue(
+                            remoteResult.data,
+                            object : com.fasterxml.jackson.core.type.TypeReference<List<Map<String, Any?>>>() {}
+                        )
+                    } else {
+                        // Handle single object response (e.g. select * returning root object)
+                        val map = objectMapper.convertValue(
+                            remoteResult.data,
+                            object : com.fasterxml.jackson.core.type.TypeReference<Map<String, Any?>>() {}
+                        )
+                        listOf(map)
+                    }
                 } catch (e: Exception) {
                     logger.warn("Failed to convert remote data to list: ${e.message}")
                     emptyList()
@@ -303,49 +373,53 @@ class PQLQueryController(
                 emptyList()
             }
 
-            // Client-side Limit Enforcement
-            // ProcessM API might return full traces even if 'limit e:N' is requested.
-            // We need to trim the flattened results to match the requested limit.
-            val limitRegex = Regex("(?i)\\blimit\\s+(?:[lte]:)?(\\d+)")
-            val limitMatch = limitRegex.find(request.query)
-            if (limitMatch != null) {
-                val limitVal = limitMatch.groupValues[1].toIntOrNull()
-                if (limitVal != null && remoteResultsList.size > limitVal) {
-                    remoteResultsList = remoteResultsList.take(limitVal)
-                }
-            }
 
-            // 3. Compare
+
+            // 3. Compare hierarchical structure (number of logs)
             val match = if (localResult.success && remoteResult.success) {
-                localResult.resultCount == remoteResult.resultCount
+                localResult.logs.size == remoteResult.resultCount
             } else {
                 false
             }
 
             val details = StringBuilder()
-            details.append("Local: ${if (localResult.success) "Success (${localResult.resultCount} rows)" else "Fail: ${localResult.error}"}\n")
-            details.append("Remote: ${if (remoteResult.success) "Success (${remoteResult.resultCount} rows)" else "Fail: ${remoteResult.message}"}\n")
-            
+            details.append("Local: ${if (localResult.success) "Success (${localResult.logs.size} logs)" else "Fail: ${localResult.error}"}\n")
+            details.append("Remote: ${if (remoteResult.success) "Success (${remoteResult.resultCount} logs)" else "Fail: ${remoteResult.message}"}\n")
+
             if (match) {
                 details.append("Result: MATCH")
             } else {
                 details.append("Result: MISMATCH")
             }
 
+            // Convert hierarchical logs to XES JSON format for comparison
+            val localXESResults = if (localResult.logs.isNotEmpty()) {
+                // Detect if this is a projected query
+                val isProjectedQuery = localResult.results.firstOrNull()?.keys?.any { key ->
+                    key.startsWith("l_") || key.startsWith("t_") || key.startsWith("e_") ||
+                    key.startsWith("log_") || key.startsWith("trace_") || key.startsWith("event_")
+                } ?: false
+
+                val xesJson = XESJsonConverter.convertToXESJson(localResult.logs, isProjectedQuery)
+                listOf(xesJson)
+            } else {
+                emptyList()
+            }
+
             val response = PQLVerificationResponse(
                 match = match,
                 localSuccess = localResult.success,
                 remoteSuccess = remoteResult.success,
-                localCount = localResult.resultCount,
+                localCount = localResult.logs.size,  // Count logs, not flat rows
                 remoteCount = remoteResult.resultCount,
-                localResults = localResult.results,
+                localResults = localXESResults,
                 remoteResults = remoteResultsList,
                 remoteRequestUrl = remoteResult.requestUrl,
                 remoteAdaptedQuery = remoteResult.adaptedQuery,
                 remoteLogId = remoteResult.remoteLogId,
                 details = details.toString()
             )
-            
+
             ResponseEntity.ok(response)
         } catch (e: Exception) {
             logger.error("Error verifying PQL query", e)
@@ -360,101 +434,22 @@ class PQLQueryController(
         }
     }
 
-    private fun flattenRemoteXes(rawList: List<Map<String, Any?>>): List<Map<String, Any?>> {
-        val flattened = mutableListOf<Map<String, Any?>>()
-
-        // Heuristic: Check if it's an XES structure (contains "log")
-        // The raw list usually looks like [ { "log": { ... } } ]
-        
-        for (item in rawList) {
-            if (item.containsKey("log")) {
-                val log = item["log"] as? Map<String, Any?> ?: continue
-                
-                // Check if Log object itself has query results (e.g. global count)
-                // Heuristic: If log has attributes other than metadata, it might be the result.
-                val logAttributes = extractSimpleAttributes(log)
-                
-                // If the user query is an aggregation (count, sum, avg) and we found a match in log attributes, 
-                // we probably want this single row, NOT the traces.
-                val hasAggregateKeys = logAttributes.keys.any { it.startsWith("count(") || it.startsWith("sum(") || it.startsWith("avg(") || it.startsWith("min(") || it.startsWith("max(") }
-                
-                if (hasAggregateKeys) {
-                    flattened.add(logAttributes)
-                    continue // Stop processing this log's traces
-                }
-                
-                // Check if traces exist
-                val traces = when (val t = log["trace"]) {
-                    is List<*> -> t
-                    is Map<*, *> -> listOf(t) // Single trace case?
-                    else -> emptyList<Any?>()
-                }
-
-                for (traceObj in traces) {
-                    val trace = traceObj as? Map<String, Any?> ?: continue
-                    
-                    // If the user query asked for Events, we should flatten to events
-                    // If no events, maybe just return trace info?
-                    
-                    val events = when (val e = trace["event"]) {
-                        is List<*> -> e
-                        is Map<*, *> -> listOf(e)
-                        else -> emptyList<Any?>()
-                    }
-
-                    if (events.isNotEmpty()) {
-                        for (eventObj in events) {
-                            val event = eventObj as? Map<String, Any?> ?: continue
-                            flattened.add(extractSimpleAttributes(event))
-                        }
-                    } else {
-                        // Just trace attributes if no events
-                        flattened.add(extractSimpleAttributes(trace))
-                    }
-                }
-            } else {
-                // Not XES or unknown structure, keep as is
-                flattened.add(item)
-            }
-        }
-        
-        return if (flattened.isNotEmpty()) flattened else rawList
-    }
-
-    private fun extractSimpleAttributes(col: Map<String, Any?>): Map<String, Any?> {
-        val result = mutableMapOf<String, Any?>()
-        
-        // Handle XES "string", "date", "int" etc. containers
-        // Example: "concept:name": "value" (if simplified) OR
-        // "string": [{"@key": "concept:name", "@value": "foo"}]
-        
-        // Check for "string" key which is a list of attributes in some XES JSON parsers
-        // The user snippet shows: 
-        // "string": [ { "@key": "concept:name", "@value": "ER Registration" }, ... ]
-        
-        processAttributes(col, result)
-        
-        return result
-    }
-
-    private fun processAttributes(source: Map<String, Any?>, target: MutableMap<String, Any?>) {
-        // Direct keys (if simple JSON)
-        for ((k, v) in source) {
-            if (v !is Map<*, *> && v !is List<*>) {
-                target[k] = v
-            }
-            // Handle XES typed lists like "string": [], "date": [], "int": []
-            if (k == "string" || k == "date" || k == "int" || k == "boolean" || k == "float") {
-                 val list = if (v is List<*>) v else if (v is Map<*, *>) listOf(v) else emptyList<Any?>()
-                 for (attr in list) {
-                     val attrMap = attr as? Map<String, Any?> ?: continue
-                     val key = attrMap["@key"] as? String
-                     val value = attrMap["@value"]
-                     if (key != null) {
-                         target[key] = value
-                     }
-                 }
-            }
+    /**
+     * Convert hierarchical logs to maps for API response
+     */
+    private fun convertLogsToMaps(logs: List<com.processm.processminterpreter.model.hierarchical.Log>): List<Map<String, Any?>> {
+        return logs.map { log ->
+            mapOf(
+                "log" to log.attributes,
+                "traces" to log.traces.map { trace ->
+                    mapOf(
+                        "trace" to trace.attributes,
+                        "events" to trace.events.map { event ->
+                            event.attributes
+                        }.toList()
+                    )
+                }.toList()
+            )
         }
     }
 

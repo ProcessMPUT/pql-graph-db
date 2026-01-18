@@ -22,7 +22,7 @@ class XESLoader(
 
     private val logger = LoggerFactory.getLogger(XESLoader::class.java)
     private val objectMapper = ObjectMapper()
-    private val BATCH_SIZE = 100 // Process 100 traces at a time
+    private val BATCH_SIZE = 25 // Process 25 traces at a time - balance between memory and performance
 
     init {
         createIndexes()
@@ -52,7 +52,9 @@ class XESLoader(
      * Replaces colons in keys and converts complex values to JSON strings.
      */
     private fun sanitizeAttributes(attributes: Map<String, Any>): Map<String, Any> {
-        return attributes.mapKeys { it.key.replace(":", "_").replace(".", "_") }
+        // NOTE: Keep colons in attribute keys to match ProcessM format
+        // Only replace dots as they conflict with Neo4j property path notation
+        return attributes.mapKeys { it.key.replace(".", "_") }
             .mapValues { (_, value) ->
                 when (value) {
                     is Map<*, *>, is Collection<*> -> objectMapper.writeValueAsString(value)

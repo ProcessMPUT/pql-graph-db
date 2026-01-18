@@ -89,13 +89,15 @@
                                     <span class="editor-title">Comparison Editor</span>
                                     <select id="sampleQueriesSelect"
                                         style="background: #333; color: #ccc; border: 1px solid #444; padding: 2px 8px; border-radius: 4px; font-size: 0.8rem; margin-left: auto;">
-                                        <option value="">-- Load Sample Query --</option>
-                                        <option value="select count(event:id)">Count Events (1 row)</option>
-                                        <option value="select event:name limit e:1">Single Event Name (1 row)</option>
-                                        <option value="select trace:id limit t:1">Single Trace ID (1 row)</option>
-                                        <option
-                                            value="select event:name where event:name matches '.*Registration.*' limit e:5">
-                                            Regex Filter (5 rows)</option>
+                                        <option value="">-- Load Test Query --</option>
+                                        <option value="select t:concept:name, e:concept:name limit l:1, t:2, e:1">1. Projected Columns (t+e)</option>
+                                        <option value="select t:concept:name, e:concept:name, e:time:timestamp limit l:1, t:2, e:2">2. With Timestamp</option>
+                                        <option value="select t:concept:name limit l:1, t:3">3. Only Trace Attrs</option>
+                                        <option value="select e:concept:name, e:time:timestamp limit l:1, t:1, e:3">4. Only Event Attrs</option>
+                                        <option value="select * limit l:1, t:1, e:2">5. SELECT * (all attrs)</option>
+                                        <option value="select e:concept:name limit l:1, t:1, e:1">6. Single Event (object)</option>
+                                        <option value="select t:concept:name limit l:1, t:1, e:1">7. Single Trace (object)</option>
+                                        <option value="select e:concept:name limit l:1, t:1, e:5">8. Multiple Events (array)</option>
                                     </select>
                                 </div>
                                 <textarea id="compareQueryText" class="query-editor" spellcheck="false"
@@ -113,8 +115,21 @@
                             </label>
                         </div>
 
+                        <div class="processm-upload"
+                            style="margin-bottom: 1rem; border-top: 1px solid #444; padding-top: 1rem;">
+                            <div style="display: flex; align-items: center; gap: 10px;">
+                                <span style="font-size: 0.9em; color: #aaa;">Sync Data:</span>
+                                <input type="file" id="processmLogUpload" style="display: none" accept=".xes,.xes.gz">
+                                <button id="uploadToProcessMButton" class="secondary-button"
+                                    style="background-color: #6c757d; padding: 4px 12px; font-size: 0.9em;">📤 Upload
+                                    Log to ProcessM (Docker)</button>
+                                <span id="processmUploadStatus" style="font-size: 0.85em; color: #aaa;"></span>
+                            </div>
+                        </div>
+
                         <div class="action-buttons">
                             <button id="verifyButtonNew">⚖️ Verify with ProcessM</button>
+                            <button id="downloadComparisonButton" class="secondary" style="display: none;">💾 Download Comparison Snapshot</button>
                         </div>
                     </div>
 

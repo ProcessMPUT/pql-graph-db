@@ -62,7 +62,8 @@ class XESParser {
      * Parse log element
      */
     private fun parseLog(logElement: Element, logId: String?): XESLog {
-        val attributes = parseAttributes(logElement)
+        val attributes = parseAttributes(logElement).toMutableMap()
+        ensureIdentityId(attributes) // Auto-generate identity:id if missing
 
         val finalLogId = logId ?: generateLogId()
         val logName = attributes["concept:name"] as? String ?: "Unnamed Log"
@@ -93,6 +94,7 @@ class XESParser {
      */
     private fun parseTrace(traceElement: Element, logId: String, index: Int): XESTrace {
         val attributes = parseAttributes(traceElement)
+        logger.debug("Parsed trace attributes: {}", attributes)
 
         val caseId = attributes["concept:name"] as? String ?: "Case_$index"
         val traceId = generateTraceId(logId, caseId)
@@ -204,10 +206,28 @@ class XESParser {
                             attributes[key] = value.toBoolean()
                         }
                     }
+                    "id" -> {
+                        // XES Identity extension - stores UUID values
+                        val key = childElement.getAttribute("key")
+                        val value = childElement.getAttribute("value")
+                        if (key.isNotEmpty()) {
+                            attributes[key] = value // Store as string (UUID format)
+                        }
+                    }
                 }
             }
         }
 
+        return attributes
+    }
+
+    /**
+     * Ensure identity:id exists in attributes, generate UUID if missing
+     */
+    private fun ensureIdentityId(attributes: MutableMap<String, Any>): MutableMap<String, Any> {
+        if (!attributes.containsKey("identity:id")) {
+            attributes["identity:id"] = UUID.randomUUID().toString()
+        }
         return attributes
     }
 

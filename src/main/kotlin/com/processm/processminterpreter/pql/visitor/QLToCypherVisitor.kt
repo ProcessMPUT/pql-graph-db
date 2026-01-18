@@ -723,9 +723,27 @@ class QLToCypherVisitor(
      * Translate SELECT query from Query object to Cypher.
      */
     private fun translateSelectQuery(query: Query): CypherQuery {
-        // Validate GROUP BY semantics
+        val hierarchicalLimits = mutableMapOf<String, Int?>()
 
+        query.limit[com.processm.processminterpreter.pql.model.Scope.LOG]?.let {
+            hierarchicalLimits["log"] = it.toInt()
+        }
+        query.limit[com.processm.processminterpreter.pql.model.Scope.TRACE]?.let {
+            hierarchicalLimits["trace"] = it.toInt()
+        }
+        query.limit[com.processm.processminterpreter.pql.model.Scope.EVENT]?.let {
+            hierarchicalLimits["event"] = it.toInt()
+        }
 
+        logger.debug("Query.limit map: {}", query.limit)
+        logger.debug("Extracted hierarchicalLimits: {}", hierarchicalLimits)
+
+        // Use hierarchical query structure with COLLECT/UNWIND for 100% ProcessM compatibility
+        if (hierarchicalLimits.isNotEmpty()) {
+            return buildHierarchicalQueryWithLimits(query, hierarchicalLimits)
+        }
+
+        // Fallback to old approach for queries without LIMIT
         val cypher = StringBuilder()
 
         // Determine primary scope (scope with lowest ordinal = highest priority)
@@ -770,26 +788,130 @@ class QLToCypherVisitor(
         }
 
         // Build SKIP (OFFSET) clause
-        // Robust lookup: Primary Scope -> EVENT Scope -> Any Scope
-        val offset = query.offset[primaryScope] 
+        val offset = query.offset[primaryScope]
             ?: query.offset[com.processm.processminterpreter.pql.model.Scope.EVENT]
             ?: query.offset.values.firstOrNull()
-            
+
         if (offset != null) {
             cypher.append(" SKIP $offset")
         }
 
-        // Build LIMIT clause
-        // Robust lookup: Primary Scope -> EVENT Scope -> Any Scope
-        val limit = query.limit[primaryScope] 
-            ?: query.limit[com.processm.processminterpreter.pql.model.Scope.EVENT]
-            ?: query.limit.values.firstOrNull()
-            
-        if (limit != null) {
-            cypher.append(" LIMIT $limit")
+        return CypherQuery(cypher.toString(), parameters.toMap(), emptyMap())
+    }
+
+    /**
+     * Build hierarchical query using COLLECT/UNWIND for ProcessM-compatible LIMIT behavior.
+     *
+     * This ensures limits are applied hierarchically:
+     * - limit l:1, t:2, e:3 = 1 log with max 2 traces, each trace with max 3 events
+     *
+     * Uses COLLECT to limit at each level, then UNWIND to continue processing.
+     */
+    private fun buildHierarchicalQueryWithLimits(
+        query: Query,
+        hierarchicalLimits: Map<String, Int?>
+    ): CypherQuery {
+        val cypher = StringBuilder()
+
+        val primaryScope = determinePrimaryScope(query)
+        val mappedScope = mapScope(primaryScope)
+        currentScope = mappedScope
+
+        populateUsedScopes(query)
+
+        val needsLog = usedScopes.contains(Scope.LOG) || logId != null
+        val needsTrace = usedScopes.contains(Scope.TRACE)
+        val needsEvent = usedScopes.contains(Scope.EVENT)
+
+        val logLimit = hierarchicalLimits["log"]
+        val traceLimit = hierarchicalLimits["trace"]
+        val eventLimit = hierarchicalLimits["event"]
+
+        // Build WHERE conditions
+        val whereConditions = mutableListOf<String>()
+        if (logId != null) {
+            whereConditions.add("log.logId = \$logId")
+            parameters["logId"] = logId
+        }
+        val whereClause = buildWhereClauseFromQuery(query)
+        if (whereClause != null) {
+            whereConditions.add(whereClause)
         }
 
-        return CypherQuery(cypher.toString(), parameters.toMap())
+        // Step 1: MATCH logs
+        if (needsLog) {
+            if (logId != null) {
+                cypher.append("MATCH (log:Log {logId: \$logId})")
+            } else {
+                cypher.append("MATCH (log:Log)")
+            }
+
+            // Apply log-level WHERE if any
+            if (whereConditions.isNotEmpty()) {
+                cypher.append(" WHERE ").append(whereConditions.joinToString(" AND "))
+            }
+
+            // Apply log LIMIT using COLLECT with deterministic ordering (by insertion order)
+            if (logLimit != null) {
+                cypher.append(" WITH log ORDER BY log.createdAt")
+                cypher.append(" WITH collect(log)[0..${logLimit}] as logs")
+                cypher.append(" UNWIND logs as log")
+            }
+        }
+
+        // Step 2: MATCH traces
+        if (needsTrace || needsEvent) {
+            cypher.append(" MATCH (log)-[:CONTAINS]->(trace:Trace)")
+
+            // Apply trace LIMIT using COLLECT with deterministic ordering (by insertion order)
+            if (traceLimit != null) {
+                cypher.append(" WITH log, trace ORDER BY log.createdAt, trace.createdAt")
+                cypher.append(" WITH log, collect(trace)[0..${traceLimit}] as traces")
+                cypher.append(" UNWIND traces as trace")
+            } else if (eventLimit == null || eventLimit == 0) {
+                // Only add WITH if we don't have an event limit to apply
+                // This avoids interfering with subsequent event collection grouping
+                cypher.append(" WITH log, trace")
+            }
+            // else: no WITH needed, we'll go straight to matching events and collect there
+        }
+
+        // Step 3: MATCH events
+        if (needsEvent) {
+            if (eventLimit == 0) {
+                // For limit e:0, we don't need to MATCH events at all
+                // Just continue with log and trace - no event in RETURN will return NULL for event fields
+                // This is ProcessM-compatible: traces without events
+            } else {
+                // Normal case: MATCH events
+                cypher.append(" MATCH (trace)-[:HAS_EVENT]->(event:Event)")
+
+                // Apply event LIMIT using COLLECT with deterministic ordering (by insertion order)
+                if (eventLimit != null) {
+                    cypher.append(" WITH log, trace, event ORDER BY log.createdAt, trace.createdAt, event.createdAt")
+                    cypher.append(" WITH log, trace, collect(event)[0..${eventLimit}] as events")
+                    cypher.append(" UNWIND events as event")
+                }
+            }
+        }
+
+        // Build RETURN clause - exclude event if eventLimit == 0
+        cypher.append(" RETURN ")
+        val returnClause = buildReturnClauseFromQuery(query, eventLimit)
+        cypher.append(returnClause)
+
+        // Build ORDER BY clause
+        val orderByClause = buildOrderByClauseFromQuery(query)
+        if (orderByClause != null && orderByClause.isNotEmpty()) {
+            cypher.append(" ORDER BY ")
+            cypher.append(orderByClause.joinToString(", ") { "${it.expression} ${it.direction}" })
+        }
+
+        // Note: No need to pass hierarchicalLimits to HierarchyReconstructor
+        // because limits are already applied in Cypher
+        val generatedCypher = cypher.toString()
+        logger.debug("Generated hierarchical Cypher: $generatedCypher")
+        return CypherQuery(generatedCypher, parameters.toMap(), hierarchicalLimits)
     }
 
     /**
@@ -1138,7 +1260,7 @@ class QLToCypherVisitor(
      * Build RETURN clause from Query object.
      * Iterates through all scopes that have SELECT attributes and includes them in the RETURN.
      */
-    private fun buildReturnClauseFromQuery(query: Query): String {
+    private fun buildReturnClauseFromQuery(query: Query, eventLimit: Int? = null): String {
         val allParts = mutableListOf<String>()
 
         // Collect all scopes that have SELECT attributes
@@ -1157,6 +1279,11 @@ class QLToCypherVisitor(
         if (scopesWithSelects.isEmpty()) {
             val primaryScope = determinePrimaryScope(query)
             scopesWithSelects.add(primaryScope)
+        }
+
+        // Exclude EVENT scope if eventLimit == 0 (event wasn't matched in Cypher)
+        if (eventLimit == 0) {
+            scopesWithSelects.remove(com.processm.processminterpreter.pql.model.Scope.EVENT)
         }
 
         // Process each scope in order (LOG -> TRACE -> EVENT)
@@ -1183,7 +1310,7 @@ class QLToCypherVisitor(
                 // Use effective scope for hoisting
                 val effectiveScope = mapScope(attr.effectiveScope ?: com.processm.processminterpreter.pql.model.Scope.EVENT)
                 val effectiveNodeLabel = scopeToNodeLabel(effectiveScope)
-                
+
                 val cypherField = attributeToCypherField(attr, effectiveNodeLabel, effectiveScope)
                 val prefix = when (attr.scope) {
                     com.processm.processminterpreter.pql.model.Scope.EVENT -> "e"
@@ -1210,6 +1337,19 @@ class QLToCypherVisitor(
                 val alias = "${prefix}_${attr.name.replace(":", "_")}"
                 logger.debug("Other attr: ${attr.name} -> $cypherField AS $alias")
                 allParts.add("$cypherField AS $alias")
+            }
+
+            // IMPORTANT: For TRACE scope with projected columns, always include traceId
+            // This allows HierarchyReconstructor to extract trace name from traceId
+            if (modelScope == com.processm.processminterpreter.pql.model.Scope.TRACE) {
+                val hasProjectedAttributes =
+                    (query.selectStandardAttributes[modelScope]?.isNotEmpty() == true) ||
+                    (query.selectOtherAttributes[modelScope]?.isNotEmpty() == true)
+
+                if (hasProjectedAttributes && query.selectAll[modelScope] != true && query.isImplicitSelectAll[modelScope] != true) {
+                    allParts.add("$nodeLabel.traceId AS t_traceId")
+                    logger.debug("Added traceId for trace scope: $nodeLabel.traceId AS t_traceId")
+                }
             }
 
             // Expressions (functions, etc.)
@@ -1247,7 +1387,14 @@ class QLToCypherVisitor(
         // Map attribute name to Neo4j property name using the target scope (handling hoisting)
         val propertyName = StandardAttributeMapper.translateToNeo4jProperty(attr.name, targetScope)
 
-        return "$nodeLabel.$propertyName"
+        // Neo4j requires backticks for property names with special characters (like colons)
+        val escapedProperty = if (propertyName.contains(":")) {
+            "`$propertyName`"
+        } else {
+            propertyName
+        }
+
+        return "$nodeLabel.$escapedProperty"
     }
 
     private fun buildOrderByClauseFromQuery(query: Query): List<OrderByItem>? {
@@ -1342,7 +1489,8 @@ class QLToCypherVisitor(
             cypher.append(" SKIP ${offsetClause.first()}")
         }
 
-        // LIMIT
+        // LIMIT - This deprecated function doesn't support hierarchical limits
+        // Use translateSelectQuery instead
         if (limitClause != null && limitClause.isNotEmpty()) {
             cypher.append(" LIMIT ${limitClause.first()}")
         }

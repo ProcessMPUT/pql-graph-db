@@ -150,12 +150,13 @@ object StandardAttributeMapper {
 
         // Not a standard shorthand - check if it's already a full XES name (e.g., "concept:name")
         if (fieldName.contains(":")) {
-            // It's an XES attribute name - sanitize it for Neo4j (replace : with _)
-            return fieldName.replace(":", "_").replace(".", "_")
+            // It's an XES attribute name - keep colons for Neo4j compatibility
+            // Only replace dots as they conflict with Neo4j property path notation
+            return fieldName.replace(".", "_")
         }
 
-        // It's a custom attribute - use as-is
-        return fieldName
+        // It's a custom attribute - use as-is (also replace dots only)
+        return fieldName.replace(".", "_")
     }
 
     /**

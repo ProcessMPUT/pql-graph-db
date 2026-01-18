@@ -673,12 +673,18 @@ function renderVerificationResult(data) {
             
              <div class="verification-content" style="padding-top: 1rem;">
                 <div class="verification-col">
-                    <h4>Local Output</h4>
-                    <div id="local-results-viewer" style="max-height: 400px; overflow: auto; background: #111; padding: 1rem; border-radius: 8px;"></div>
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                        <h4 style="margin: 0;">Local Output</h4>
+                        <button onclick="copyVerificationOutput('local')" class="copy-btn" title="Copy to clipboard">📋 Copy</button>
+                    </div>
+                    <div id="local-results-viewer" style="max-height: 400px; overflow-x: auto; overflow-y: auto; background: #111; padding: 1rem; border-radius: 8px;"></div>
                 </div>
                 <div class="verification-col">
-                    <h4>Remote Output</h4>
-                     <div id="remote-results-viewer" style="max-height: 400px; overflow: auto; background: #111; padding: 1rem; border-radius: 8px;"></div>
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                        <h4 style="margin: 0;">Remote Output</h4>
+                        <button onclick="copyVerificationOutput('remote')" class="copy-btn" title="Copy to clipboard">📋 Copy</button>
+                    </div>
+                     <div id="remote-results-viewer" style="max-height: 400px; overflow-x: auto; overflow-y: auto; background: #111; padding: 1rem; border-radius: 8px;"></div>
                 </div>
             </div>
 
@@ -687,6 +693,19 @@ function renderVerificationResult(data) {
     `;
 
     verificationResultNew.innerHTML = html;
+
+    // Store verification data globally for copy functionality and snapshot download
+    window.currentVerificationData = {
+        local: data.localResults,
+        remote: data.remoteResults,
+        fullData: data  // Store full verification data for snapshot
+    };
+
+    // Show download comparison button
+    const downloadButton = document.getElementById('downloadComparisonButton');
+    if (downloadButton) {
+        downloadButton.style.display = 'inline-block';
+    }
 
     // Initialize viewers
     if (typeof JsonViewer !== 'undefined') {
@@ -708,6 +727,141 @@ function renderVerificationResult(data) {
         document.getElementById('local-results-viewer').innerHTML = `<pre>${JSON.stringify(data.localResults || {}, null, 2)}</pre>`;
         document.getElementById('remote-results-viewer').innerHTML = `<pre>${JSON.stringify(data.remoteResults || {}, null, 2)}</pre>`;
     }
+}
+
+// Copy verification output to clipboard
+function copyVerificationOutput(type) {
+    if (!window.currentVerificationData) {
+        showToast('No verification data to copy', 'error');
+        return;
+    }
+
+    const data = type === 'local' ? window.currentVerificationData.local : window.currentVerificationData.remote;
+    if (!data) {
+        showToast(`No ${type} data available`, 'error');
+        return;
+    }
+
+    const text = JSON.stringify(data, null, 2);
+    navigator.clipboard.writeText(text).then(() => {
+        showToast(`${type === 'local' ? 'Local' : 'Remote'} output copied to clipboard!`, 'success');
+    }).catch(err => {
+        console.error('Failed to copy:', err);
+        showToast('Failed to copy to clipboard', 'error');
+    });
+}
+
+// ProcessM Docker Upload Logic
+const uploadToProcessMButton = document.getElementById('uploadToProcessMButton');
+const processmLogUpload = document.getElementById('processmLogUpload');
+const processmUploadStatus = document.getElementById('processmUploadStatus');
+
+if (uploadToProcessMButton && processmLogUpload) {
+    uploadToProcessMButton.addEventListener('click', () => {
+        processmLogUpload.click();
+    });
+
+    processmLogUpload.addEventListener('change', async (e) => {
+        if (!e.target.files.length) return;
+        const file = e.target.files[0];
+        const logNameText = compareLogSelect.options[compareLogSelect.selectedIndex]?.text || "log.xes";
+
+        uploadToProcessMButton.disabled = true;
+        processmUploadStatus.textContent = 'Uploading...';
+        processmUploadStatus.style.color = '#aaa';
+
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('logName', logNameText);
+
+        try {
+            const response = await fetch('/api/query/processm/upload', {
+                method: 'POST',
+                body: formData
+            });
+
+            const result = await response.json();
+            if (response.ok) {
+                processmUploadStatus.textContent = 'Upload Success! ' + (result.message || '');
+                processmUploadStatus.style.color = '#4caf50';
+                showToast('Log uploaded to local ProcessM!', 'success');
+            } else {
+                throw new Error(result.error || 'Unknown error');
+            }
+        } catch (error) {
+            console.error('Upload failed:', error);
+            processmUploadStatus.textContent = 'Failed: ' + error.message;
+            processmUploadStatus.style.color = '#ff6b6b';
+            showToast('Failed to upload log: ' + error.message, 'error');
+        } finally {
+            uploadToProcessMButton.disabled = false;
+            // Clear input so change event fires again if same file selected
+            processmLogUpload.value = '';
+        }
+    });
+}
+
+// Download comparison snapshot as text file
+const downloadComparisonButton = document.getElementById('downloadComparisonButton');
+if (downloadComparisonButton) {
+    downloadComparisonButton.addEventListener('click', () => {
+        if (!window.currentVerificationData || !window.currentVerificationData.fullData) {
+            showToast('No verification data to download', 'error');
+            return;
+        }
+
+        const data = window.currentVerificationData.fullData;
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+
+        // Format the snapshot text
+        let snapshot = `ProcessM Verification Comparison Snapshot\n`;
+        snapshot += `Generated: ${new Date().toLocaleString()}\n`;
+        snapshot += `=`.repeat(80) + `\n\n`;
+
+        snapshot += `VERIFICATION STATUS: ${data.match ? 'MATCH ✓' : 'MISMATCH ✗'}\n\n`;
+
+        snapshot += `QUERY:\n${data.remoteAdaptedQuery || 'N/A'}\n\n`;
+
+        snapshot += `LOCAL EXECUTION:\n`;
+        snapshot += `  Success: ${data.localSuccess}\n`;
+        snapshot += `  Row Count: ${data.localCount}\n\n`;
+
+        snapshot += `REMOTE PROCESSM:\n`;
+        snapshot += `  Success: ${data.remoteSuccess}\n`;
+        snapshot += `  Row Count: ${data.remoteCount}\n`;
+        snapshot += `  Remote Log ID: ${data.remoteLogId || 'Unknown'}\n`;
+        snapshot += `  Request URL: ${data.remoteRequestUrl || 'N/A'}\n\n`;
+
+        snapshot += `=`.repeat(80) + `\n`;
+        snapshot += `LOCAL OUTPUT (JSON):\n`;
+        snapshot += `=`.repeat(80) + `\n`;
+        snapshot += JSON.stringify(data.localResults, null, 2) + `\n\n`;
+
+        snapshot += `=`.repeat(80) + `\n`;
+        snapshot += `REMOTE OUTPUT (JSON):\n`;
+        snapshot += `=`.repeat(80) + `\n`;
+        snapshot += JSON.stringify(data.remoteResults, null, 2) + `\n\n`;
+
+        if (data.details) {
+            snapshot += `=`.repeat(80) + `\n`;
+            snapshot += `DETAILS:\n`;
+            snapshot += `=`.repeat(80) + `\n`;
+            snapshot += data.details + `\n`;
+        }
+
+        // Download as text file
+        const blob = new Blob([snapshot], { type: 'text/plain' });
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `comparison_snapshot_${timestamp}.txt`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+
+        showToast('Comparison snapshot downloaded!', 'success');
+    });
 }
 
 // --- Initial Load ---

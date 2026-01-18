@@ -3,6 +3,8 @@ package com.processm.processminterpreter.service
 import com.processm.processminterpreter.pql.CypherQuery
 import com.processm.processminterpreter.pql.PQLTranslator
 import com.processm.processminterpreter.xes.XESWriter
+import com.processm.processminterpreter.model.hierarchical.Log
+import com.processm.processminterpreter.util.HierarchyReconstructor
 import org.neo4j.driver.Driver
 import org.neo4j.driver.Record
 import org.neo4j.driver.Result
@@ -39,15 +41,19 @@ class PQLQueryService(
             val cypherQuery = pqlTranslator.translateToCypher(pqlQuery, logId)
             logger.debug("Translated to Cypher: {}", cypherQuery)
 
-            // Execute Cypher query
-            val results = executeCypherQuery(cypherQuery)
+            // Execute Cypher query (flat results)
+            val flatResults = executeCypherQuery(cypherQuery)
+
+            // Reconstruct hierarchical structure with limits
+            val hierarchicalLogs = HierarchyReconstructor.reconstruct(flatResults, cypherQuery.hierarchicalLimits)
 
             PQLQueryResult(
                 success = true,
                 query = pqlQuery,
                 cypherQuery = cypherQuery.query,
-                results = results,
-                resultCount = results.size,
+                results = flatResults,
+                logs = hierarchicalLogs,
+                resultCount = flatResults.size,
                 executionTimeMs = 0, // TODO: Add timing
             )
         } catch (e: Exception) {
@@ -291,16 +297,39 @@ class PQLQueryService(
 
 /**
  * Result of PQL query execution
+ *
+ * Contains both flat results (for backward compatibility) and hierarchical logs (ProcessM compatible)
  */
 data class PQLQueryResult(
     val success: Boolean,
     val query: String,
     val cypherQuery: String? = null,
     val results: List<Map<String, Any?>> = emptyList(),
+    val logs: List<Log> = emptyList(),
     val resultCount: Int = 0,
     val executionTimeMs: Long = 0,
     val error: String? = null,
-)
+) {
+    /**
+     * Get first log (convenience method for tests)
+     */
+    fun first(): Log = logs.first()
+
+    /**
+     * Get count of logs
+     */
+    fun count(): Int = logs.size
+
+    /**
+     * Check if result is empty
+     */
+    fun isEmpty(): Boolean = logs.isEmpty()
+
+    /**
+     * Iterate over logs (for compatibility with ProcessM DBHierarchicalXESInputStream)
+     */
+    operator fun iterator(): Iterator<Log> = logs.iterator()
+}
 
 /**
  * Result of PQL query validation

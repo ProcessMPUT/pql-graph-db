@@ -69,7 +69,7 @@ class QLToCypherVisitorTest {
 
     @Test
     fun `test select specific fields`() {
-        val pql = "select event:activity, event:timestamp"
+        val pql = "select event:name, event:timestamp"
         val result = translateQuery(pql)
 
 
@@ -86,7 +86,7 @@ class QLToCypherVisitorTest {
 
     @Test
     fun `test select with simple where clause`() {
-        val pql = "where event:activity = 'Registration'"
+        val pql = "where event:name = 'Registration'"
         val result = translateQuery(pql)
 
 
@@ -100,7 +100,7 @@ class QLToCypherVisitorTest {
 
     @Test
     fun `test where with AND condition`() {
-        val pql = "where event:activity = 'Registration' and event:resource = 'Nurse'"
+        val pql = "where event:name = 'Registration' and event:resource = 'Nurse'"
         val result = translateQuery(pql)
 
 
@@ -115,7 +115,7 @@ class QLToCypherVisitorTest {
 
     @Test
     fun `test where with OR condition`() {
-        val pql = "where event:activity = 'Registration' or event:activity = 'Triage'"
+        val pql = "where event:name = 'Registration' or event:name = 'Triage'"
         val result = translateQuery(pql)
 
 
@@ -130,7 +130,7 @@ class QLToCypherVisitorTest {
 
     @Test
     fun `test where with IN operator`() {
-        val pql = "where event:activity in ('Registration', 'Triage', 'Consultation')"
+        val pql = "where event:name in ('Registration', 'Triage', 'Consultation')"
         val result = translateQuery(pql)
 
 
@@ -228,7 +228,7 @@ class QLToCypherVisitorTest {
 
     @Test
     fun `test select with group by`() {
-        val pql = "select event:activity, count(event:id) group by event:activity"
+        val pql = "select event:name, count(event:id) group by event:name"
         val result = translateQuery(pql)
 
 
@@ -267,7 +267,7 @@ class QLToCypherVisitorTest {
 
     @Test
     fun `test string function`() {
-        val pql = "select upper(event:activity)"
+        val pql = "select upper(event:name)"
         val result = translateQuery(pql)
 
 
@@ -323,7 +323,7 @@ class QLToCypherVisitorTest {
 
     @Test
     fun `test delete with limit`() {
-        val pql = "delete event where event:activity = 'Test' limit 5"
+        val pql = "delete event where event:name = 'Test' limit 5"
         val result = translateQuery(pql)
 
 
@@ -359,9 +359,9 @@ class QLToCypherVisitorTest {
     @Test
     fun `test complex query with multiple clauses`() {
         val pql = """
-            select event:activity, count(event:id)
+            select event:name, count(event:id)
             where event:resource is not null and event:timestamp > 'D2020-01-01'
-            group by event:activity
+            group by event:name
             order by count(event:id) desc
             limit 10
         """.trimIndent()
@@ -382,7 +382,7 @@ class QLToCypherVisitorTest {
 
     @Test
     fun `test org_group field mapping`() {
-        val pql = "select event:org_group, event:activity where event:org_group = 'Radiotherapy' limit 5"
+        val pql = "select event:org_group, event:name where event:org_group = 'Radiotherapy' limit 5"
         val result = translateQuery(pql)
 
 
@@ -397,10 +397,10 @@ class QLToCypherVisitorTest {
     @Test
     fun `test user query from UI`() {
         val pql = """
-            select event:org_group, event:activity, count(event:id)
+            select event:org_group, event:name, count(event:id)
             where event:timestamp > 'D2005-01-01'
             and event:org_group in ('Radiotherapy', 'Obstetrics & Gynaecology clinic')
-            group by event:org_group, event:activity
+            group by event:org_group, event:name
             order by count(event:id) desc
             limit 20
         """.trimIndent().replace("\n", " ")
