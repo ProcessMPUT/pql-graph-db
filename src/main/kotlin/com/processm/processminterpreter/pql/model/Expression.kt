@@ -31,36 +31,66 @@ abstract class Expression(
 
     /**
      * The effective scope of this expression - the lowest (most specific) scope
-     * in the expression tree.
+     * needed to evaluate the expression.
      *
      * Scope hierarchy: LOG (0) > TRACE (1) > EVENT (2)
-     * Lower ordinal = higher in hierarchy, so we want the MIN ordinal (lowest in hierarchy).
+     * Lower ordinal = higher in hierarchy (more encompassing).
+     * Higher ordinal = lower in hierarchy (more specific).
+     *
+     * ProcessM Rule: The effective scope is the LOWEST scope (highest ordinal) among
+     * all scoped children. Literals and literal-only expressions are ignored in
+     * parent calculations but return EVENT as their own effectiveScope.
      *
      * Examples:
-     * - Expression with only EVENT attributes → EVENT
-     * - Expression mixing TRACE and EVENT → EVENT (lower in hierarchy)
-     * - Expression with no scoped children → EVENT (default)
-     * - Attribute with TRACE scope → TRACE (uses own scope because it's terminal)
-     * - Function with EVENT scope and TRACE arguments → TRACE (from arguments)
+     * - Expression with only EVENT attributes → EVENT (ordinal 2)
+     * - Expression with ^^e:timestamp (hoisted to LOG) → LOG (ordinal 0)
+     *   (because ^^e:timestamp's effectiveScope is already LOG due to hoisting)
+     * - Expression mixing TRACE and EVENT → EVENT (ordinal 2, lowest in hierarchy)
+     * - Literal → EVENT (but ignored when computing parent scope)
+     * - Attribute with effectiveScope LOG (due to hoisting) → LOG
      */
-    open val effectiveScope: Scope? by lazy {
-        // If this expression is terminal (no children) and has its own scope, use it
-        // This is important for Attribute which has a scope but no children
-        if (isTerminal && scope != null) {
-            return@lazy scope
+    override val effectiveScope: Scope? by lazy {
+        // If this expression is terminal (no children), use its own scope or default to EVENT
+        // For Attribute, this is overridden to compute hoisting
+        // For Literal, scope is null → defaults to EVENT
+        if (isTerminal) {
+            return@lazy scope ?: Scope.Event
         }
 
-        // Otherwise, compute from children
+        // Otherwise, compute from children - find the LOWEST scope (highest ordinal)
+        // among explicitly scoped children. Unscoped literals are ignored.
         val childScopes = children.mapNotNull { child ->
             when (child) {
-                is Expression -> child.effectiveScope
-                else -> child.scope
+                is Literal<*> -> child.scope  // Only include scoped literals (e.g., l:1), ignore unscoped
+                is Expression -> {
+                    // Check if this child only contains unscoped literals (scope-neutral)
+                    val scope = child.effectiveScope
+                    if (scope == Scope.Event && child.hasOnlyUnscopedLiterals()) null else scope
+                }
+                else -> child.effectiveScope ?: child.scope
             }
         }
 
-        // Find minimum scope (lowest in hierarchy = highest ordinal)
-        // If no children have scope (e.g. literals), return null (universal/neutral scope)
-        childScopes.maxByOrNull { it.ordinal }
+        // Find lowest scope (highest ordinal) among scoped children
+        // If no children have explicit scope, default to EVENT
+        childScopes.maxByOrNull { it.ordinal } ?: Scope.Event
+    }
+
+    /**
+     * Check if this expression contains only unscoped literals (no attributes or scoped elements).
+     * Used to determine if the expression is scope-neutral.
+     * Scoped literals like l:1 are NOT considered unscoped.
+     */
+    private fun hasOnlyUnscopedLiterals(): Boolean {
+        if (this is Literal<*>) return this.scope == null
+        if (children.isEmpty()) return false
+        return children.all { child ->
+            when (child) {
+                is Literal<*> -> child.scope == null
+                is Expression -> child.hasOnlyUnscopedLiterals()
+                else -> false
+            }
+        }
     }
 
     /**

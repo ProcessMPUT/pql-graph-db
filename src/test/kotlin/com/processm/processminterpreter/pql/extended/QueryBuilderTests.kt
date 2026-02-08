@@ -58,9 +58,9 @@ class QueryBuilderTests {
 
         // Implicit select * for all scopes
         // Implicit select * is TRUE for empty query (defaults to select *)
-        assertTrue(query.isImplicitSelectAll[Scope.EVENT] == true)
-        assertTrue(query.isImplicitSelectAll[Scope.TRACE] == true)
-        assertTrue(query.isImplicitSelectAll[Scope.LOG] == true)
+        assertTrue(query.isImplicitSelectAll[Scope.Event] == true)
+        assertTrue(query.isImplicitSelectAll[Scope.Trace] == true)
+        assertTrue(query.isImplicitSelectAll[Scope.Log] == true)
     }
 
     @Test
@@ -68,19 +68,19 @@ class QueryBuilderTests {
         val query = parseQuery("select *")
 
         // Explicit select *
-        assertEquals(true, query.selectAll[Scope.EVENT])
+        assertEquals(true, query.selectAll[Scope.Event])
     }
 
     @Test
     fun selectSingleAttributeTest() {
         val query = parseQuery("select e:name")
 
-        val eventAttrs = query.selectStandardAttributes[Scope.EVENT]
+        val eventAttrs = query.selectStandardAttributes[Scope.Event]
         assertEquals(1, eventAttrs?.size)
 
         val attr = eventAttrs?.first()
         assertEquals("name", attr?.name)
-        assertEquals(Scope.EVENT, attr?.scope)
+        assertEquals(Scope.Event, attr?.scope)
         assertTrue(attr?.isStandard == true)
     }
 
@@ -89,11 +89,11 @@ class QueryBuilderTests {
         val query = parseQuery("select e:name, e:timestamp, t:name")
 
         // EVENT scope: 2 attributes
-        val eventAttrs = query.selectStandardAttributes[Scope.EVENT]
+        val eventAttrs = query.selectStandardAttributes[Scope.Event]
         assertEquals(2, eventAttrs?.size)
 
         // TRACE scope: 1 attribute
-        val traceAttrs = query.selectStandardAttributes[Scope.TRACE]
+        val traceAttrs = query.selectStandardAttributes[Scope.Trace]
         assertEquals(1, traceAttrs?.size)
     }
 
@@ -101,7 +101,7 @@ class QueryBuilderTests {
     fun selectCustomAttributeTest() {
         val query = parseQuery("select e:customAttr")
 
-        val eventAttrs = query.selectOtherAttributes[Scope.EVENT]
+        val eventAttrs = query.selectOtherAttributes[Scope.Event]
         assertEquals(1, eventAttrs?.size)
 
         val attr = eventAttrs?.first()
@@ -113,22 +113,22 @@ class QueryBuilderTests {
     fun selectFunctionTest() {
         val query = parseQuery("select count(e:id)")
 
-        val eventExprs = query.selectExpressions[Scope.EVENT]
+        val eventExprs = query.selectExpressions[Scope.Event]
         assertEquals(1, eventExprs?.size)
 
         val expr = eventExprs?.first()
         assertTrue(expr is com.processm.processminterpreter.pql.model.Function)
         val func = expr as com.processm.processminterpreter.pql.model.Function
         assertEquals("count", func.name)
-        assertEquals(FunctionType.AGGREGATION, func.functionType)
+        assertEquals(FunctionType.Aggregation, func.functionType)
     }
 
     @Test
     fun selectScopedAllTest() {
         val query = parseQuery("select e:*")
 
-        assertEquals(true, query.selectAll[Scope.EVENT])
-        assertEquals(false, query.selectAll[Scope.TRACE])
+        assertEquals(true, query.selectAll[Scope.Event])
+        assertEquals(false, query.selectAll[Scope.Trace])
     }
 
     // ========================================
@@ -139,14 +139,14 @@ class QueryBuilderTests {
     fun deleteDefaultScopeTest() {
         val query = parseQuery("delete")
 
-        assertEquals(Scope.EVENT, query.deleteScope)
+        assertEquals(Scope.Event, query.deleteScope)
     }
 
     @Test
     fun deleteExplicitScopeTest() {
         val query = parseQuery("delete trace")
 
-        assertEquals(Scope.TRACE, query.deleteScope)
+        assertEquals(Scope.Trace, query.deleteScope)
     }
 
     // ========================================
@@ -235,12 +235,12 @@ class QueryBuilderTests {
     fun groupBySingleAttributeTest() {
         val query = parseQuery("select e:name, count(e:id) group by e:name")
 
-        val eventGroupBy = query.groupByStandardAttributes[Scope.EVENT]
+        val eventGroupBy = query.groupByStandardAttributes[Scope.Event]
         assertEquals(1, eventGroupBy?.size)
 
         val attr = eventGroupBy?.first()
         assertEquals("name", attr?.name)
-        assertEquals(Scope.EVENT, attr?.scope)
+        assertEquals(Scope.Event, attr?.scope)
     }
 
     @Test
@@ -248,16 +248,16 @@ class QueryBuilderTests {
         val query = parseQuery("select e:name, t:name, count(e:id) group by e:name, t:name")
 
         // EVENT scope
-        val eventGroupBy = query.groupByStandardAttributes[Scope.EVENT]
+        val eventGroupBy = query.groupByStandardAttributes[Scope.Event]
         assertEquals(1, eventGroupBy?.size)
 
         // TRACE scope
-        val traceGroupBy = query.groupByStandardAttributes[Scope.TRACE]
+        val traceGroupBy = query.groupByStandardAttributes[Scope.Trace]
         assertEquals(1, traceGroupBy?.size)
 
         // isGroupBy should be true
-        assertTrue(query.isGroupBy[Scope.EVENT] == true)
-        assertTrue(query.isGroupBy[Scope.TRACE] == true)
+        assertTrue(query.isGroupBy[Scope.Event] == true)
+        assertTrue(query.isGroupBy[Scope.Trace] == true)
     }
 
     // ========================================
@@ -268,34 +268,34 @@ class QueryBuilderTests {
     fun orderBySingleAttributeTest() {
         val query = parseQuery("select * order by e:timestamp")
 
-        val eventOrderBy = query.orderByExpressions[Scope.EVENT]
+        val eventOrderBy = query.orderByExpressions[Scope.Event]
         assertEquals(1, eventOrderBy?.size)
 
         val ordered = eventOrderBy?.first()
-        assertTrue(ordered?.expression is Attribute)
-        assertEquals(OrderDirection.ASCENDING, ordered?.direction) // Default
+        assertTrue(ordered?.base is Attribute)
+        assertEquals(OrderDirection.Ascending, ordered?.direction) // Default
     }
 
     @Test
     fun orderByWithDirectionTest() {
         val query = parseQuery("select * order by e:timestamp desc")
 
-        val eventOrderBy = query.orderByExpressions[Scope.EVENT]
+        val eventOrderBy = query.orderByExpressions[Scope.Event]
         assertEquals(1, eventOrderBy?.size)
 
         val ordered = eventOrderBy?.first()
-        assertEquals(OrderDirection.DESCENDING, ordered?.direction)
+        assertEquals(OrderDirection.Descending, ordered?.direction)
     }
 
     @Test
     fun orderByMultipleExpressionsTest() {
         val query = parseQuery("select * order by e:timestamp asc, e:name desc")
 
-        val eventOrderBy = query.orderByExpressions[Scope.EVENT]
+        val eventOrderBy = query.orderByExpressions[Scope.Event]
         assertEquals(2, eventOrderBy?.size)
 
-        assertEquals(OrderDirection.ASCENDING, eventOrderBy?.get(0)?.direction)
-        assertEquals(OrderDirection.DESCENDING, eventOrderBy?.get(1)?.direction)
+        assertEquals(OrderDirection.Ascending, eventOrderBy?.get(0)?.direction)
+        assertEquals(OrderDirection.Descending, eventOrderBy?.get(1)?.direction)
     }
 
     // ========================================
@@ -306,53 +306,53 @@ class QueryBuilderTests {
     fun limitSingleScopeTest() {
         val query = parseQuery("select * limit 100")
 
-        assertEquals(100L, query.limit[Scope.EVENT])
-        assertNull(query.limit[Scope.TRACE])
-        assertNull(query.limit[Scope.LOG])
+        assertEquals(100L, query.limit[Scope.Event])
+        assertNull(query.limit[Scope.Trace])
+        assertNull(query.limit[Scope.Log])
     }
 
     @Test
     fun limitMultipleScopesTest() {
         val query = parseQuery("select * limit 100, 50, 10")
 
-        assertEquals(100L, query.limit[Scope.EVENT])
-        assertEquals(50L, query.limit[Scope.TRACE])
-        assertEquals(10L, query.limit[Scope.LOG])
+        assertEquals(100L, query.limit[Scope.Event])
+        assertEquals(50L, query.limit[Scope.Trace])
+        assertEquals(10L, query.limit[Scope.Log])
     }
 
     @Test
     fun limitScopedSyntaxTest() {
         val query = parseQuery("select * limit l:5, t:10, e:20")
 
-        assertEquals(20L, query.limit[Scope.EVENT])
-        assertEquals(10L, query.limit[Scope.TRACE])
-        assertEquals(5L, query.limit[Scope.LOG])
+        assertEquals(20L, query.limit[Scope.Event])
+        assertEquals(10L, query.limit[Scope.Trace])
+        assertEquals(5L, query.limit[Scope.Log])
     }
 
     @Test
     fun offsetSingleScopeTest() {
         val query = parseQuery("select * offset 10")
 
-        assertEquals(10L, query.offset[Scope.EVENT])
-        assertNull(query.offset[Scope.TRACE])
+        assertEquals(10L, query.offset[Scope.Event])
+        assertNull(query.offset[Scope.Trace])
     }
 
     @Test
     fun offsetScopedSyntaxTest() {
         val query = parseQuery("select * offset l:1, t:2")
 
-        assertEquals(1L, query.offset[Scope.LOG])
-        assertEquals(2L, query.offset[Scope.TRACE])
-        assertNull(query.offset[Scope.EVENT])
+        assertEquals(1L, query.offset[Scope.Log])
+        assertEquals(2L, query.offset[Scope.Trace])
+        assertNull(query.offset[Scope.Event])
     }
 
     @Test
     fun offsetMultipleScopesTest() {
         val query = parseQuery("select * offset 10, 5, 1")
 
-        assertEquals(10L, query.offset[Scope.EVENT])
-        assertEquals(5L, query.offset[Scope.TRACE])
-        assertEquals(1L, query.offset[Scope.LOG])
+        assertEquals(10L, query.offset[Scope.Event])
+        assertEquals(5L, query.offset[Scope.Trace])
+        assertEquals(1L, query.offset[Scope.Log])
     }
 
     // ========================================
@@ -373,22 +373,22 @@ class QueryBuilderTests {
         val query = parseQuery(pql)
 
         // select
-        assertEquals(2, query.selectStandardAttributes[Scope.EVENT]?.size)
-        assertEquals(1, query.selectExpressions[Scope.EVENT]?.size)
+        assertEquals(2, query.selectStandardAttributes[Scope.Event]?.size)
+        assertEquals(1, query.selectExpressions[Scope.Event]?.size)
 
         // where
         assertNotNull(query.whereExpression)
         assertTrue(query.whereExpression is BinaryOperator)
 
         // group by
-        assertEquals(2, query.groupByStandardAttributes[Scope.EVENT]?.size)
+        assertEquals(2, query.groupByStandardAttributes[Scope.Event]?.size)
 
         // order by
-        assertEquals(1, query.orderByExpressions[Scope.EVENT]?.size)
+        assertEquals(1, query.orderByExpressions[Scope.Event]?.size)
 
         // limit/offset
-        assertEquals(100L, query.limit[Scope.EVENT])
-        assertEquals(10L, query.offset[Scope.EVENT])
+        assertEquals(100L, query.limit[Scope.Event])
+        assertEquals(10L, query.offset[Scope.Event])
     }
 
     @Test
@@ -403,16 +403,16 @@ class QueryBuilderTests {
         val query = parseQuery(pql)
 
         // delete
-        assertEquals(Scope.TRACE, query.deleteScope)
+        assertEquals(Scope.Trace, query.deleteScope)
 
         // where
         assertNotNull(query.whereExpression)
 
         // order by
-        assertNotNull(query.orderByExpressions[Scope.TRACE])
+        assertNotNull(query.orderByExpressions[Scope.Trace])
 
         // limit
-        assertEquals(10L, query.limit[Scope.EVENT]) // First limit goes to EVENT
+        assertEquals(10L, query.limit[Scope.Event]) // First limit goes to EVENT
     }
 
     // ========================================
@@ -424,7 +424,7 @@ class QueryBuilderTests {
         val query = parseQuery("select e:cost + e:tax where e:cost + e:tax > 100")
 
         // select has one expression (addition)
-        val selectExpr = query.selectExpressions[Scope.EVENT]?.first()
+        val selectExpr = query.selectExpressions[Scope.Event]?.first()
         assertTrue(selectExpr is BinaryOperator)
         assertEquals("+", (selectExpr as BinaryOperator).operator)
 
@@ -438,7 +438,7 @@ class QueryBuilderTests {
     fun arithExprParenthesesTest() {
         val query = parseQuery("select (e:cost + e:tax) * e:quantity")
 
-        val expr = query.selectExpressions[Scope.EVENT]?.first()
+        val expr = query.selectExpressions[Scope.Event]?.first()
         assertTrue(expr is BinaryOperator)
         assertEquals("*", (expr as BinaryOperator).operator)
 
@@ -479,9 +479,9 @@ class QueryBuilderTests {
     fun scalarFunctionYearTest() {
         val query = parseQuery("select year(e:timestamp)")
 
-        val func = query.selectExpressions[Scope.EVENT]?.first() as com.processm.processminterpreter.pql.model.Function
+        val func = query.selectExpressions[Scope.Event]?.first() as com.processm.processminterpreter.pql.model.Function
         assertEquals("year", func.name)
-        assertEquals(FunctionType.SCALAR, func.functionType)
+        assertEquals(FunctionType.Scalar, func.functionType)
         assertEquals(1, func.children.size)
     }
 
@@ -489,9 +489,9 @@ class QueryBuilderTests {
     fun scalarFunctionNowTest() {
         val query = parseQuery("select now()")
 
-        val func = query.selectExpressions[Scope.EVENT]?.first() as com.processm.processminterpreter.pql.model.Function
+        val func = query.selectExpressions[Scope.Event]?.first() as com.processm.processminterpreter.pql.model.Function
         assertEquals("now", func.name)
-        assertEquals(FunctionType.SCALAR, func.functionType)
+        assertEquals(FunctionType.Scalar, func.functionType)
         assertEquals(0, func.children.size)
     }
 
@@ -499,9 +499,9 @@ class QueryBuilderTests {
     fun aggregationFunctionCountTest() {
         val query = parseQuery("select count(e:id) group by e:name")
 
-        val func = query.selectExpressions[Scope.EVENT]?.first() as com.processm.processminterpreter.pql.model.Function
+        val func = query.selectExpressions[Scope.Event]?.first() as com.processm.processminterpreter.pql.model.Function
         assertEquals("count", func.name)
-        assertEquals(FunctionType.AGGREGATION, func.functionType)
+        assertEquals(FunctionType.Aggregation, func.functionType)
         assertEquals(1, func.children.size)
     }
 

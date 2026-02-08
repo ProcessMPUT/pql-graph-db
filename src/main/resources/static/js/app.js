@@ -633,6 +633,37 @@ if (verifyButtonNew) {
     });
 }
 
+function formatComparisonDetails(details) {
+    if (!details) return '';
+    return details.split('\n').map(line => {
+        const escaped = line.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        // MATCH line (green)
+        if (/MATCH/i.test(line) && !/MISMATCH/i.test(line)) {
+            return `<div class="diff-match">${escaped}</div>`;
+        }
+        // MISMATCH line (red)
+        if (/MISMATCH/i.test(line)) {
+            return `<div class="diff-mismatch">${escaped}</div>`;
+        }
+        // Difference items (red, with indent)
+        if (line.trimStart().startsWith('- ')) {
+            return `<div class="diff-item">${escaped}</div>`;
+        }
+        // "Differences:" header (yellow)
+        if (/^Differences:/i.test(line.trim())) {
+            return `<div class="diff-header">${escaped}</div>`;
+        }
+        // Comparison summary
+        if (/^Comparison:/i.test(line.trim())) {
+            const hasMatch = /MATCH:/i.test(line);
+            const cls = hasMatch ? 'diff-match' : 'diff-mismatch';
+            return `<div class="${cls}">${escaped}</div>`;
+        }
+        // Default
+        return `<div>${escaped}</div>`;
+    }).join('');
+}
+
 function renderVerificationResult(data) {
     const matchClass = data.match ? 'match-success' : 'match-fail';
     const matchText = data.match ? 'MATCH' : 'MISMATCH';
@@ -688,7 +719,7 @@ function renderVerificationResult(data) {
                 </div>
             </div>
 
-            <div style="padding: 0 1.5rem 1.5rem; color: var(--text-secondary); font-size: 0.85rem; white-space: pre-wrap; font-family: monospace;">${data.details}</div>
+            <div class="comparison-details" style="padding: 0 1.5rem 1.5rem; font-size: 0.85rem; font-family: monospace;">${formatComparisonDetails(data.details)}</div>
         </div>
     `;
 
@@ -701,10 +732,14 @@ function renderVerificationResult(data) {
         fullData: data  // Store full verification data for snapshot
     };
 
-    // Show download comparison button
+    // Show download buttons
     const downloadButton = document.getElementById('downloadComparisonButton');
     if (downloadButton) {
         downloadButton.style.display = 'inline-block';
+    }
+    const lightSnapshotButton = document.getElementById('downloadLightSnapshotButton');
+    if (lightSnapshotButton) {
+        lightSnapshotButton.style.display = 'inline-block';
     }
 
     // Initialize viewers
@@ -861,6 +896,52 @@ if (downloadComparisonButton) {
         window.URL.revokeObjectURL(url);
 
         showToast('Comparison snapshot downloaded!', 'success');
+    });
+}
+
+// Download light comparison snapshot (diffs only, no full output)
+const downloadLightSnapshotButton = document.getElementById('downloadLightSnapshotButton');
+if (downloadLightSnapshotButton) {
+    downloadLightSnapshotButton.addEventListener('click', () => {
+        if (!window.currentVerificationData || !window.currentVerificationData.fullData) {
+            showToast('No verification data to download', 'error');
+            return;
+        }
+
+        const data = window.currentVerificationData.fullData;
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+
+        let snapshot = `ProcessM Verification - Light Snapshot\n`;
+        snapshot += `Generated: ${new Date().toLocaleString()}\n`;
+        snapshot += `=`.repeat(80) + `\n\n`;
+
+        snapshot += `VERIFICATION STATUS: ${data.match ? 'MATCH' : 'MISMATCH'}\n\n`;
+
+        snapshot += `QUERY:\n${data.remoteAdaptedQuery || 'N/A'}\n\n`;
+
+        snapshot += `LOCAL:  Success=${data.localSuccess}, Count=${data.localCount}\n`;
+        snapshot += `REMOTE: Success=${data.remoteSuccess}, Count=${data.remoteCount}\n`;
+        snapshot += `Remote Log ID: ${data.remoteLogId || 'Unknown'}\n\n`;
+
+        if (data.details) {
+            snapshot += `=`.repeat(80) + `\n`;
+            snapshot += `COMPARISON DETAILS:\n`;
+            snapshot += `=`.repeat(80) + `\n`;
+            snapshot += data.details + `\n`;
+        }
+
+        // Download as text file
+        const blob = new Blob([snapshot], { type: 'text/plain' });
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `comparison_light_${timestamp}.txt`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+
+        showToast('Light snapshot downloaded!', 'success');
     });
 }
 

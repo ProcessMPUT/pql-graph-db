@@ -36,7 +36,22 @@ sealed class Literal<T>(
             is NullLiteral -> Type.UNKNOWN
         }
 
-    override fun toString(): String = value.toString()
+    /**
+     * String representation of the literal.
+     *
+     * ProcessM compatibility: Includes scope prefix if present.
+     * Format: {scope:}value
+     */
+    override fun toString(): String {
+        val prefix = scope?.let { "${it}:" } ?: ""
+        return "$prefix${valueToString()}"
+    }
+
+    /**
+     * Convert value to string representation.
+     * Override in subclasses for custom formatting.
+     */
+    protected open fun valueToString(): String = value.toString()
 }
 
 /**
@@ -98,12 +113,14 @@ class StringLiteral(
             // Find the closing quote by scanning and skipping escaped quotes
             // This handles edge cases like "abc\"" where the closing quote is escaped
             val closingQuoteIndex = findClosingQuote(content, quoteChar)
+            val foundClosingQuote = closingQuoteIndex < content.length
 
             // Extract content between quotes
             val unquoted = content.substring(1, closingQuoteIndex)
 
             // Unescape Java escape sequences
-            val unescaped = unescapeJava(unquoted)
+            // If no closing quote was found, remove trailing escape sequence (ProcessM behavior)
+            val unescaped = unescapeJava(unquoted, removeTrailingEscape = !foundClosingQuote)
             return StringLiteral(unescaped, scope, line, charPos)
         }
 
@@ -151,15 +168,30 @@ class StringLiteral(
         /**
          * Unescape Java escape sequences.
          *
-         * Supports: \", \t, \n, \r, \f, \b, \\
+         * Supports: \", \', \t, \n, \r, \f, \b, \\
          *
          * IMPORTANT: \\ must be processed FIRST, otherwise it will unescape
          * the backslashes we just added from other escape sequences.
+         *
+         * @param removeTrailingEscape If true, removes trailing escape sequence (ProcessM behavior
+         *                             for malformed strings without closing quote)
          */
-        private fun unescapeJava(s: String): String {
-            return s
+        private fun unescapeJava(s: String, removeTrailingEscape: Boolean = false): String {
+            // Remove trailing escape sequence if requested (ProcessM behavior for malformed strings)
+            // This handles cases like "abc jr\" where the closing quote is escaped but there's no real closing quote
+            val cleaned = if (removeTrailingEscape && s.length >= 2 && s[s.length - 2] == '\\') {
+                // Remove last 2 chars (backslash + escaped char)
+                s.dropLast(2)
+            } else if (removeTrailingEscape && s.endsWith("\\")) {
+                // Remove trailing backslash
+                s.dropLast(1)
+            } else {
+                s
+            }
+            return cleaned
                 .replace("\\\\", "\u0000") // Temp placeholder for backslash
                 .replace("\\\"", "\"")
+                .replace("\\'", "'")
                 .replace("\\t", "\t")
                 .replace("\\n", "\n")
                 .replace("\\r", "\r")
@@ -169,7 +201,11 @@ class StringLiteral(
         }
     }
 
-    override fun toString(): String = "\"$value\""
+    /**
+     * String representation - just the value without quotes.
+     * ProcessM outputs string values without surrounding quotes.
+     */
+    override fun valueToString(): String = value
 }
 
 /**
@@ -348,7 +384,19 @@ class DateTimeLiteral(
         }
     }
 
-    override fun toString(): String = "D${value.format(dateTimeFormatter)}"
+    /**
+     * String representation in ProcessM format.
+     * Format: D{yyyy-MM-dd}T{HH:mm:ss}[.SSS]Z
+     * Always outputs Z (UTC) suffix and at least seconds precision.
+     */
+    override fun valueToString(): String {
+        val millis = value.nano / 1_000_000
+        return if (millis > 0) {
+            "D${value.format(DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss"))}.${String.format("%03d", millis)}Z"
+        } else {
+            "D${value.format(DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss"))}Z"
+        }
+    }
 }
 
 /**
@@ -407,7 +455,10 @@ class NullLiteral(
     charPositionInLine: Int = -1,
 ) : Literal<Nothing?>(null, scope, line, charPositionInLine) {
 
-    override fun toString(): String = "null"
+    /**
+     * String representation - just "null" (scope handled by base class).
+     */
+    override fun valueToString(): String = "null"
 
     companion object {
         fun parse(s: String, line: Int = -1, charPos: Int = -1): NullLiteral {

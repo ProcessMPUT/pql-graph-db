@@ -101,8 +101,11 @@ object HierarchyReconstructor {
                     result["event"]!![attrName] = value
                 }
                 // If no scope prefix, treat as log-level attribute
+                // Skip keys that are full entity names (properties() results, not projected columns)
                 else -> {
-                    result["log"]!![key] = value
+                    if (key !in setOf("event", "trace", "log", "e", "t", "l")) {
+                        result["log"]!![key] = value
+                    }
                 }
             }
         }
@@ -368,11 +371,12 @@ object HierarchyReconstructor {
         }
 
         // Extract cost attributes (only if present in data)
-        trace.costCurrency = extractString(traceData, "cost:currency")
-        trace.costTotal = extractDouble(traceData, "cost:total")
+        // Check both XES names (cost:currency, cost:total) and projected column names (currency, total)
+        trace.costCurrency = extractString(traceData, "cost:currency", "currency")
+        trace.costTotal = extractDouble(traceData, "cost:total", "total")
 
         // Copy additional attributes
-        copyAttributes(traceData, trace.attributes, excludeKeys = setOf("traceId", "caseId", "concept:name", "concept_name", "cost:currency", "cost:total"))
+        copyAttributes(traceData, trace.attributes, excludeKeys = setOf("traceId", "caseId", "concept:name", "concept_name", "name", "cost:currency", "cost:total", "currency", "total"))
     }
 
     /**
@@ -386,11 +390,19 @@ object HierarchyReconstructor {
             // Extract only event-scoped attributes from projected columns
             val split = splitProjectedColumns(record)
             val eventAttrs = split["event"]!!
-            // If no event attributes in projected columns, skip
             if (eventAttrs.isEmpty()) {
-                return null
+                // Fall back to full event properties Map (mixed mode: e.g. SELECT t:name, e:*, t:total)
+                // The RETURN clause may have "properties(event) as event" alongside projected t_* columns
+                val fullEventProps = record["event"] ?: record["e"]
+                if (fullEventProps is Map<*, *>) {
+                    @Suppress("UNCHECKED_CAST")
+                    fullEventProps as Map<String, Any?>
+                } else {
+                    return null
+                }
+            } else {
+                eventAttrs
             }
-            eventAttrs
         } else {
             // Try to extract from nested event object (SELECT *)
             when {
@@ -407,24 +419,26 @@ object HierarchyReconstructor {
 
         val event = Event()
 
-        // Standard attributes (also check concept_name for projected columns)
-        event.conceptName = extractString(eventData, "activity", "concept:name", "concept_name")
+        // Standard attributes (also check concept_name and "name" for projected columns)
+        // When SELECT e:name, the alias is e_name which splits to "name"
+        event.conceptName = extractString(eventData, "activity", "concept:name", "concept_name", "name")
         event.conceptInstance = extractString(eventData, "concept:instance")
         event.orgResource = extractString(eventData, "resource", "org:resource")
         event.orgRole = extractString(eventData, "org:role")
         event.orgGroup = extractString(eventData, "org:group")
         event.lifecycleTransition = extractString(eventData, "lifecycle", "lifecycle:transition")
         event.lifecycleState = extractString(eventData, "lifecycle:state")
-        event.costCurrency = extractString(eventData, "cost:currency")
-        event.costTotal = extractDouble(eventData, "cost", "cost:total")
+        event.costCurrency = extractString(eventData, "cost:currency", "currency", "cost_currency")
+        event.costTotal = extractDouble(eventData, "cost", "cost:total", "total", "cost_total")
 
         // Time:timestamp
         event.timeTimestamp = extractTimestamp(eventData, "timestamp", "time:timestamp")
 
         // Copy additional attributes
         copyAttributes(eventData, event.attributes, excludeKeys = setOf(
-            "activity", "resource", "lifecycle", "timestamp", "cost",
-            "concept:name", "concept_name", "org:resource", "lifecycle:transition", "time:timestamp", "cost:total", "cost:currency"
+            "activity", "resource", "lifecycle", "timestamp", "cost", "name",
+            "concept:name", "concept_name", "org:resource", "lifecycle:transition", "time:timestamp",
+            "cost:total", "cost:currency", "total", "currency", "cost_total", "cost_currency"
         ))
 
         return event

@@ -31,20 +31,31 @@ class QueryBuilder : QLParserBaseVisitor<Any>() {
     fun build(ctx: QLParser.QueryContext, queryString: String = ""): Query {
         logger.debug("Building Query from parse tree: $queryString")
 
-        val query = Query(queryString)
+        val query = Query.empty(queryString)
+        buildInto(ctx, query)
+
+        // Validate the query
+        query.validate()
+
+        logger.debug("Query built successfully")
+        return query
+    }
+
+    /**
+     * Build into an existing Query object from the parse tree.
+     * Used internally by Query constructor.
+     *
+     * @param ctx the query context (root of parse tree)
+     * @param query the Query object to populate
+     */
+    fun buildInto(ctx: QLParser.QueryContext, query: Query) {
+        logger.debug("Building Query from parse tree: ${query.query}")
 
         when {
             ctx.read_query() != null -> buildReadQuery(ctx.read_query(), query)
             ctx.delete_query() != null -> buildDeleteQuery(ctx.delete_query(), query)
             else -> throw PQLSyntaxException(-1, -1, "Unknown query type")
         }
-
-        // Validate the query
-        // Validate the query
-        query.validate()
-
-        logger.debug("Query built successfully")
-        return query
     }
 
     // ========================================
@@ -113,7 +124,7 @@ class QueryBuilder : QLParserBaseVisitor<Any>() {
         when (ctx) {
             is QLParser.Select_all_implicitContext -> {
                 // Empty SELECT - implicit SELECT *
-                Scope.entries.forEach { scope ->
+                Scope.values().forEach { scope ->
                     query.setImplicitSelectAll(scope, true)
                 }
                 logger.debug("Implicit SELECT * for all scopes")
@@ -122,7 +133,7 @@ class QueryBuilder : QLParserBaseVisitor<Any>() {
             is QLParser.Select_allContext -> {
                 // SELECT * or SELECT *, ...
                 // Select all scopes for explicit SELECT *
-                Scope.entries.forEach { scope ->
+                Scope.values().forEach { scope ->
                     query.setSelectAll(scope, true)
                 }
 
@@ -168,9 +179,9 @@ class QueryBuilder : QLParserBaseVisitor<Any>() {
                 // Determine scope from expression
                 val scope = when (expr) {
                     is Attribute -> expr.scope
-                    is com.processm.processminterpreter.pql.model.Function -> expr.scope ?: expr.effectiveScope ?: Scope.EVENT
-                    is Expression -> expr.effectiveScope ?: Scope.EVENT
-                    else -> Scope.EVENT
+                    is com.processm.processminterpreter.pql.model.Function -> expr.scope ?: expr.effectiveScope ?: Scope.Event
+                    is Expression -> expr.effectiveScope ?: Scope.Event
+                    else -> Scope.Event
                 }
 
                 // Add to appropriate collection
@@ -200,7 +211,10 @@ class QueryBuilder : QLParserBaseVisitor<Any>() {
         val scope = Scope.parse(scopeText)
 
         query.deleteScope = scope
-        query.setImplicitSelectAll(scope, true)
+        // DELETE sets implicit SELECT ALL for all scopes (ProcessM behavior)
+        Scope.values().forEach { s ->
+            query.setImplicitSelectAll(s, true)
+        }
         logger.debug("DELETE scope: $scope")
     }
 
@@ -213,7 +227,7 @@ class QueryBuilder : QLParserBaseVisitor<Any>() {
      */
     private fun buildWhereClause(ctx: QLParser.WhereContext, query: Query) {
         val expr = buildLogicExpr(ctx.logic_expr())
-        query.whereExpression = expr
+        query.whereExpression = expr as Expression
         logger.debug("WHERE expression built")
     }
 
@@ -531,16 +545,16 @@ class QueryBuilder : QLParserBaseVisitor<Any>() {
             val expr = buildArithExpr(orderedExprCtx.arith_expr())
 
             val direction = when {
-                orderedExprCtx.order_dir().ORDER_ASC() != null -> OrderDirection.ASCENDING
-                orderedExprCtx.order_dir().ORDER_DESC() != null -> OrderDirection.DESCENDING
-                else -> OrderDirection.ASCENDING // Default
+                orderedExprCtx.order_dir().ORDER_ASC() != null -> OrderDirection.Ascending
+                orderedExprCtx.order_dir().ORDER_DESC() != null -> OrderDirection.Descending
+                else -> OrderDirection.Ascending // Default
             }
 
             val scope = when (expr) {
                 is Attribute -> expr.scope
-                is com.processm.processminterpreter.pql.model.Function -> expr.scope ?: expr.effectiveScope ?: Scope.EVENT
-                is Expression -> expr.effectiveScope ?: Scope.EVENT
-                else -> Scope.EVENT
+                is com.processm.processminterpreter.pql.model.Function -> expr.scope ?: expr.effectiveScope ?: Scope.Event
+                is Expression -> expr.effectiveScope ?: Scope.Event
+                else -> Scope.Event
             }
 
             query.addOrderByExpression(expr, direction, scope)
@@ -556,15 +570,34 @@ class QueryBuilder : QLParserBaseVisitor<Any>() {
     /**
      * limit: LIMIT limit_number (',' limit_number)*
      */
-    /**
-     * limit: LIMIT limit_number (',' limit_number)*
-     */
     private fun buildLimitClause(ctx: QLParser.LimitContext, query: Query) {
+        val seenScopes = mutableSetOf<Scope>()
         ctx.limit_number().forEachIndexed { index, limitCtx ->
             val text = limitCtx.NUMBER().text
-            val (scope, value) = parseScopedNumber(text, index)
+            val line = limitCtx.NUMBER().symbol.line
+            val charPos = limitCtx.NUMBER().symbol.charPositionInLine
+            val (scope, value, hasDecimal) = parseScopedNumber(text, index)
 
             if (scope != null) {
+                // Emit warning if decimal part was truncated (ProcessM behavior)
+                if (hasDecimal) {
+                    query.emitWarning(
+                        PQLSyntaxException(
+                            PQLSyntaxException.Problem.DecimalPartDropped,
+                            line, charPos, text
+                        ),
+                    )
+                }
+                // Check for duplicate scope
+                if (scope in seenScopes) {
+                    query.emitWarning(
+                        PQLSyntaxException(
+                            PQLSyntaxException.Problem.DuplicateLimit,
+                            line, charPos, scope.toString()
+                        ),
+                    )
+                }
+                seenScopes.add(scope)
                 query.setLimit(scope, value)
                 logger.debug("LIMIT $scope: $value")
             }
@@ -575,11 +608,33 @@ class QueryBuilder : QLParserBaseVisitor<Any>() {
      * offset: OFFSET offset_number (',' offset_number)*
      */
     private fun buildOffsetClause(ctx: QLParser.OffsetContext, query: Query) {
+        val seenScopes = mutableSetOf<Scope>()
         ctx.offset_number().forEachIndexed { index, offsetCtx ->
             val text = offsetCtx.NUMBER().text
-            val (scope, value) = parseScopedNumber(text, index)
+            val line = offsetCtx.NUMBER().symbol.line
+            val charPos = offsetCtx.NUMBER().symbol.charPositionInLine
+            val (scope, value, hasDecimal) = parseScopedNumber(text, index)
 
             if (scope != null) {
+                // Emit warning if decimal part was truncated (ProcessM behavior)
+                if (hasDecimal) {
+                    query.emitWarning(
+                        PQLSyntaxException(
+                            PQLSyntaxException.Problem.DecimalPartDropped,
+                            line, charPos, text
+                        ),
+                    )
+                }
+                // Check for duplicate scope
+                if (scope in seenScopes) {
+                    query.emitWarning(
+                        PQLSyntaxException(
+                            PQLSyntaxException.Problem.DuplicateOffset,
+                            line, charPos, scope.toString()
+                        ),
+                    )
+                }
+                seenScopes.add(scope)
                 query.setOffset(scope, value)
                 logger.debug("OFFSET $scope: $value")
             }
@@ -587,33 +642,52 @@ class QueryBuilder : QLParserBaseVisitor<Any>() {
     }
 
     /**
+     * Result of parsing a scoped number.
+     *
+     * @property scope The parsed scope (null if unknown)
+     * @property value The parsed long value
+     * @property hasDecimal True if the value had a decimal part that was truncated
+     */
+    private data class ScopedNumberResult(val scope: Scope?, val value: Long, val hasDecimal: Boolean)
+
+    /**
      * Helper to parse a number that might have a scope prefix (e.g., "l:5", "trace:10")
      * or be a plain number (positional).
      *
+     * ProcessM behavior: If the number has a decimal part, it emits a warning
+     * (DecimalPartDropped) and truncates to integer.
+     *
      * @param text The token text
      * @param index The position index (for backward compatibility)
-     * @return Pair of Scope? and Long value
+     * @return ScopedNumberResult containing scope, value, and whether decimal was dropped
      */
-    private fun parseScopedNumber(text: String, index: Int): Pair<Scope?, Long> {
+    private fun parseScopedNumber(text: String, index: Int): ScopedNumberResult {
         return if (text.contains(":")) {
             // Scoped syntax: "l:5", "log:5", "trace:10"
             val parts = text.split(":")
             val scopeStr = parts[0]
             val valueStr = parts[1]
             val scope = Scope.parse(scopeStr)
-            val value = Math.round(valueStr.toDouble())
-            Pair(scope, value)
-        } else {
-            // Positional syntax: 5, 10 (Legacy)
-            // Map index to scope: 0=EVENT, 1=TRACE, 2=LOG
-            val scope = when (index) {
-                0 -> Scope.EVENT
-                1 -> Scope.TRACE
-                2 -> Scope.LOG
-                else -> null // Ignore extra values
+            val doubleValue = valueStr.toDouble()
+            // ProcessM uses round() for mathematical rounding, not truncation
+            val roundedValue = kotlin.math.round(doubleValue).toLong()
+            val hasDecimal = doubleValue != roundedValue.toDouble()
+
+            // Validate non-negative integer (>= 0)
+            if (roundedValue < 0) {
+                throw PQLSyntaxException(
+                    PQLSyntaxException.Problem.PositiveIntegerRequired,
+                    -1, -1, text
+                )
             }
-            val value = text.toLong()
-            Pair(scope, value)
+
+            ScopedNumberResult(scope, roundedValue, hasDecimal)
+        } else {
+            // No scope prefix - ProcessM requires explicit scope for LIMIT/OFFSET
+            throw PQLSyntaxException(
+                PQLSyntaxException.Problem.ScopeRequired,
+                -1, -1, text
+            )
         }
     }
 }
@@ -633,7 +707,51 @@ class BinaryOperator(
     charPositionInLine: Int = -1,
 ) : Expression(line, charPositionInLine, left, right) {
 
-    override fun toString(): String = "($left $operator $right)"
+    /**
+     * Operator precedence levels (higher number = lower precedence = binds less tightly).
+     * ProcessM uses parentheses to show when a lower-precedence operator is nested
+     * inside a higher-precedence operator.
+     */
+    private val precedence: Int
+        get() = when (operator.lowercase()) {
+            "*", "/" -> 1
+            "+", "-" -> 2
+            "=", "!=", "<", "<=", ">", ">=", "like", "matches", "in", "not in" -> 3
+            "and" -> 4
+            "or" -> 5
+            else -> 10
+        }
+
+    /**
+     * ProcessM format: wraps child in parentheses if it has lower precedence.
+     * Special case for IN: "left in (values)" with comma-no-space between values.
+     */
+    override fun toString(): String {
+        val op = operator.lowercase()
+        return when (op) {
+            "in", "not in" -> "${wrapIfNeeded(left)} $op ${formatInList(right)}"
+            else -> "${wrapIfNeeded(left)} $op ${wrapIfNeeded(right)}"
+        }
+    }
+
+    /**
+     * Wrap expression in parentheses if it's a BinaryOperator with lower precedence
+     * (higher precedence number) than this operator.
+     */
+    private fun wrapIfNeeded(expr: IExpression): String {
+        return if (expr is BinaryOperator && expr.precedence > this.precedence) {
+            "(${expr})"
+        } else {
+            expr.toString()
+        }
+    }
+
+    private fun formatInList(expr: IExpression): String {
+        return when (expr) {
+            is InListExpression -> "(${expr.values.joinToString(",")})"
+            else -> expr.toString()
+        }
+    }
 }
 
 /**
@@ -646,7 +764,20 @@ class UnaryOperator(
     charPositionInLine: Int = -1,
 ) : Expression(line, charPositionInLine, operand) {
 
-    override fun toString(): String = "($operator $operand)"
+    /**
+     * ProcessM format:
+     * - NOT: "not (operand)" - prefix with space
+     * - IS NULL: "operand is null" - postfix
+     * - IS NOT NULL: "operand is not null" - postfix
+     */
+    override fun toString(): String {
+        val op = operator.lowercase()
+        return when (op) {
+            "not" -> "not ($operand)"
+            "is null", "is not null" -> "$operand $op"
+            else -> "$op $operand"
+        }
+    }
 }
 
 /**
@@ -658,5 +789,8 @@ class InListExpression(
     charPositionInLine: Int = -1,
 ) : Expression(line, charPositionInLine, *values.toTypedArray()) {
 
-    override fun toString(): String = "(${values.joinToString(", ")})"
+    /**
+     * ProcessM format: "(value1,value2,value3)" - no spaces after commas
+     */
+    override fun toString(): String = "(${values.joinToString(",")})"
 }

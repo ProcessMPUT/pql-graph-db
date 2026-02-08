@@ -29,7 +29,7 @@ object XESJsonConverter {
      * @param isProjectedQuery Whether this is a projected query (SELECT specific fields vs SELECT *)
      * @return Map representing XES JSON structure
      */
-    fun convertToXESJson(logs: List<Log>, isProjectedQuery: Boolean = false): Map<String, Any> {
+    fun convertToXESJson(logs: List<Log>, isProjectedQuery: Boolean = false, excludeEventAttrs: List<String> = emptyList()): Map<String, Any> {
         logger.debug("Converting ${logs.size} logs to XES JSON format (projected: $isProjectedQuery)")
 
         if (logs.isEmpty()) {
@@ -38,13 +38,13 @@ object XESJsonConverter {
 
         // For now, convert first log (ProcessM typically works with single log)
         val log = logs.first()
-        return mapOf("log" to convertLog(log, isProjectedQuery))
+        return mapOf("log" to convertLog(log, isProjectedQuery, excludeEventAttrs))
     }
 
     /**
      * Convert a single Log to JSON structure
      */
-    private fun convertLog(log: Log, isProjectedQuery: Boolean = false): Map<String, Any> {
+    private fun convertLog(log: Log, isProjectedQuery: Boolean = false, excludeEventAttrs: List<String> = emptyList()): Map<String, Any> {
         val result = mutableMapOf<String, Any>()
 
         // XES metadata attributes (must be first)
@@ -97,8 +97,18 @@ object XESJsonConverter {
         // Add log.attributes and log.identityId
         val logAttributes = mutableMapOf<String, MutableList<Map<String, String>>>()
 
+        // For projected queries, output log concept:name if it was explicitly selected
+        // (ProcessM only includes log concept:name when l:name is in SELECT)
+        if (isProjectedQuery) {
+            log.conceptName?.let { name ->
+                if (name != "unknown") {
+                    addAttribute(logAttributes, "string", "concept:name", name)
+                }
+            }
+        }
+
         // For SELECT *, add all log attributes from XES (match ProcessM)
-        // For projected queries, skip log attributes (user didn't select them)
+        // For projected queries, skip custom log attributes (user didn't select them)
         if (!isProjectedQuery) {
             logger.debug("convertLog - log.attributes keys: {}", log.attributes.keys)
             logger.debug("convertLog - log.attributes values: {}", log.attributes)
@@ -132,7 +142,7 @@ object XESJsonConverter {
         // Traces (single object if 1 trace, array if >1)
         val traces = log.traces.toList()
         if (traces.isNotEmpty()) {
-            val traceMaps = traces.map { trace -> convertTrace(trace) }
+            val traceMaps = traces.map { trace -> convertTrace(trace, excludeEventAttrs) }
             result["trace"] = toSingleOrArray(traceMaps)
         }
 
@@ -142,7 +152,7 @@ object XESJsonConverter {
     /**
      * Convert a single Trace to JSON structure
      */
-    private fun convertTrace(trace: Trace): Map<String, Any> {
+    private fun convertTrace(trace: Trace, excludeEventAttrs: List<String> = emptyList()): Map<String, Any> {
         val result = mutableMapOf<String, Any>()
         val traceAttributes = mutableMapOf<String, MutableList<Map<String, String>>>()
 
@@ -183,7 +193,7 @@ object XESJsonConverter {
         // ADD EVENTS AFTER attributes to match ProcessM order
         val events = trace.events.toList()
         if (events.isNotEmpty()) {
-            val eventMaps = events.map { event -> convertEvent(event) }
+            val eventMaps = events.map { event -> convertEvent(event, excludeEventAttrs) }
             result["event"] = toSingleOrArray(eventMaps)
         }
 
@@ -193,13 +203,17 @@ object XESJsonConverter {
     /**
      * Convert a single Event to JSON structure
      */
-    private fun convertEvent(event: Event): Map<String, Any> {
+    private fun convertEvent(event: Event, excludeEventAttrs: List<String> = emptyList()): Map<String, Any> {
         val result = mutableMapOf<String, Any>()
         val eventAttributes = mutableMapOf<String, MutableList<Map<String, String>>>()
 
-        // Standard attributes
-        event.conceptName?.let { name ->
-            addAttribute(eventAttributes, "string", "concept:name", name)
+        val excluded = excludeEventAttrs.toSet()
+
+        // Standard attributes (skip those in exclude list)
+        if ("concept:name" !in excluded) {
+            event.conceptName?.let { name ->
+                addAttribute(eventAttributes, "string", "concept:name", name)
+            }
         }
 
         event.conceptInstance?.let { instance ->
@@ -234,17 +248,19 @@ object XESJsonConverter {
             addAttribute(eventAttributes, "date", "time:timestamp", formatTimestamp(timestamp))
         }
 
-        event.costCurrency?.let { currency ->
-            addAttribute(eventAttributes, "string", "cost:currency", currency)
+        if ("cost:currency" !in excluded) {
+            event.costCurrency?.let { currency ->
+                addAttribute(eventAttributes, "string", "cost:currency", currency)
+            }
         }
 
         event.costTotal?.let { cost ->
             addAttribute(eventAttributes, "float", "cost:total", cost.toString())
         }
 
-        // Custom attributes
+        // Custom attributes (skip those in exclude list)
         event.attributes.forEach { (key, value) ->
-            if (value != null) {
+            if (value != null && key !in excluded) {
                 addAttributeByType(eventAttributes, key, value)
             }
         }

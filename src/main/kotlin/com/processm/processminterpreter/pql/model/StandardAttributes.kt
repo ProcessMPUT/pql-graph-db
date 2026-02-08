@@ -29,8 +29,13 @@ object StandardAttributes {
     const val ORG_ROLE = "org:role"
     const val LIFECYCLE_TRANSITION = "lifecycle:transition"
     const val LIFECYCLE_STATE = "lifecycle:state"
+    const val LIFECYCLE_MODEL = "lifecycle:model"
     const val COST_TOTAL = "cost:total"
     const val COST_CURRENCY = "cost:currency"
+    const val IDENTITY_ID = "identity:id"
+    const val DB_ID = "db:id"
+    const val XES_VERSION = "xes:version"
+    const val XES_FEATURES = "xes:features"
 
     // ========================================
     // Shorthand Mappings per Scope
@@ -53,6 +58,9 @@ object StandardAttributes {
         "total" to COST_TOTAL,
         "currency" to COST_CURRENCY,
         "id" to CONCEPT_INSTANCE, // Special: e:id maps to concept:instance
+        // ProcessM additional attributes
+        "identity:id" to IDENTITY_ID, // Full XES name also works as shorthand
+        "db:id" to DB_ID, // Database internal ID
     )
 
     /**
@@ -63,6 +71,9 @@ object StandardAttributes {
         "id" to CONCEPT_INSTANCE,
         "total" to COST_TOTAL,
         "currency" to COST_CURRENCY,
+        // ProcessM additional attributes
+        "identity:id" to IDENTITY_ID, // Full XES name also works as shorthand
+        "db:id" to DB_ID, // Database internal ID
     )
 
     /**
@@ -71,8 +82,12 @@ object StandardAttributes {
     val LOG_SHORTHANDS = mapOf(
         "name" to CONCEPT_NAME,
         "id" to CONCEPT_INSTANCE,
-        "version" to "log:version",
-        "features" to "log:features",
+        "version" to XES_VERSION,
+        "features" to XES_FEATURES,
+        // ProcessM additional attributes
+        "identity:id" to IDENTITY_ID, // Full XES name also works as shorthand
+        "db:id" to DB_ID, // Database internal ID
+        "lifecycle:model" to LIFECYCLE_MODEL, // Lifecycle model for the log
     )
 
     // ========================================
@@ -95,6 +110,9 @@ object StandardAttributes {
         LIFECYCLE_STATE to "lifecycle_state",
         COST_TOTAL to "cost_total", // cost:total → cost_total
         COST_CURRENCY to "cost_currency", // cost:currency → cost_currency
+        // ProcessM additional attributes
+        IDENTITY_ID to "identityId", // identity:id → identityId (XES UUID)
+        DB_ID to "dbId", // db:id → dbId (internal database ID)
     )
 
     /**
@@ -105,6 +123,9 @@ object StandardAttributes {
         CONCEPT_INSTANCE to "traceId", // concept:instance → traceId
         COST_TOTAL to "cost_total",
         COST_CURRENCY to "cost_currency",
+        // ProcessM additional attributes
+        IDENTITY_ID to "identityId", // identity:id → identityId (XES UUID)
+        DB_ID to "dbId", // db:id → dbId (internal database ID)
     )
 
     /**
@@ -113,8 +134,12 @@ object StandardAttributes {
     val LOG_NEO4J_MAPPINGS = mapOf(
         CONCEPT_NAME to "name", // concept:name → name
         CONCEPT_INSTANCE to "logId", // concept:instance → logId
-        "log:version" to "version",
-        "log:features" to "features",
+        XES_VERSION to "version",
+        XES_FEATURES to "features",
+        // ProcessM additional attributes
+        IDENTITY_ID to "identityId", // identity:id → identityId (XES UUID)
+        DB_ID to "dbId", // db:id → dbId (internal database ID)
+        LIFECYCLE_MODEL to "lifecycleModel", // lifecycle:model → lifecycleModel
     )
 
     // ========================================
@@ -131,10 +156,14 @@ object StandardAttributes {
         ORG_ROLE to Type.STRING,
         LIFECYCLE_TRANSITION to Type.STRING,
         LIFECYCLE_STATE to Type.STRING,
+        LIFECYCLE_MODEL to Type.STRING,
         COST_TOTAL to Type.NUMBER,
         COST_CURRENCY to Type.STRING,
-        "log:version" to Type.STRING,
-        "log:features" to Type.STRING,
+        XES_VERSION to Type.STRING,
+        XES_FEATURES to Type.STRING,
+        // ProcessM additional attributes
+        IDENTITY_ID to Type.UUID,
+        DB_ID to Type.NUMBER, // Database internal ID is typically a number
     )
 
     // ========================================
@@ -150,9 +179,9 @@ object StandardAttributes {
      */
     fun isStandard(scope: Scope, shorthand: String): Boolean {
         return when (scope) {
-            Scope.EVENT -> EVENT_SHORTHANDS.containsKey(shorthand)
-            Scope.TRACE -> TRACE_SHORTHANDS.containsKey(shorthand)
-            Scope.LOG -> LOG_SHORTHANDS.containsKey(shorthand)
+            Scope.Event -> EVENT_SHORTHANDS.containsKey(shorthand)
+            Scope.Trace -> TRACE_SHORTHANDS.containsKey(shorthand)
+            Scope.Log -> LOG_SHORTHANDS.containsKey(shorthand)
         }
     }
 
@@ -169,9 +198,9 @@ object StandardAttributes {
      */
     fun getStandardName(scope: Scope, shorthand: String): String? {
         return when (scope) {
-            Scope.EVENT -> EVENT_SHORTHANDS[shorthand]
-            Scope.TRACE -> TRACE_SHORTHANDS[shorthand]
-            Scope.LOG -> LOG_SHORTHANDS[shorthand]
+            Scope.Event -> EVENT_SHORTHANDS[shorthand]
+            Scope.Trace -> TRACE_SHORTHANDS[shorthand]
+            Scope.Log -> LOG_SHORTHANDS[shorthand]
         }
     }
 
@@ -189,9 +218,9 @@ object StandardAttributes {
      */
     fun getNeo4jProperty(scope: Scope, standardName: String): String? {
         return when (scope) {
-            Scope.EVENT -> EVENT_NEO4J_MAPPINGS[standardName]
-            Scope.TRACE -> TRACE_NEO4J_MAPPINGS[standardName]
-            Scope.LOG -> LOG_NEO4J_MAPPINGS[standardName]
+            Scope.Event -> EVENT_NEO4J_MAPPINGS[standardName]
+            Scope.Trace -> TRACE_NEO4J_MAPPINGS[standardName]
+            Scope.Log -> LOG_NEO4J_MAPPINGS[standardName]
         }
     }
 

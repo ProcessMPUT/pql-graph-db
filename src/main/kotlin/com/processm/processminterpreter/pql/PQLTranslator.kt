@@ -3,7 +3,7 @@ package com.processm.processminterpreter.pql
 /**
  * Interface for PQL to Cypher translators
  *
- * Implementations can use different parsing strategies (regex, ANTLR, etc.)
+ * Implementations translate PQL query strings to Neo4j Cypher queries
  */
 interface PQLTranslator {
 

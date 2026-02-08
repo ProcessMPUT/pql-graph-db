@@ -18,8 +18,8 @@ class AttributeTests {
             0
         )
         assertEquals("", attribute.hoistingPrefix)
-        assertEquals(Scope.EVENT, attribute.scope)
-        assertEquals(Scope.EVENT, attribute.effectiveScope)
+        assertEquals(Scope.Event, attribute.scope)
+        assertEquals(Scope.Event, attribute.effectiveScope)
         assertEquals(
             "Ոչ ոք չի սիրում ցավը հենց այդպիսին, ոչ ոք չի փնտրում այն և չի տենչում հենց նրա համար, որ դա ցավ է..",
             attribute.name
@@ -38,8 +38,8 @@ class AttributeTests {
             0
         )
         assertEquals("^", attribute.hoistingPrefix)
-        assertEquals(Scope.TRACE, attribute.scope)
-        assertEquals(Scope.LOG, attribute.effectiveScope)
+        assertEquals(Scope.Trace, attribute.scope)
+        assertEquals(Scope.Log, attribute.effectiveScope)
         assertEquals("!@#\$%^&*():-=", attribute.name)
         assertEquals("", attribute.standardName)
         assertFalse(attribute.isStandard)

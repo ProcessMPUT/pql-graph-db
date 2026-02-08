@@ -119,7 +119,7 @@ class Attribute(
      * - "e:name" → EVENT
      * - "^e:name" → EVENT (hoisting doesn't change declared scope)
      */
-    override val scope: Scope = baseScope ?: Scope.EVENT
+    override val scope: Scope = baseScope ?: Scope.Event
 
     /**
      * Actual scope after applying hoisting.
@@ -157,6 +157,10 @@ class Attribute(
      * - "e:timestamp" → true (time:timestamp shorthand)
      * - "e:org:group" → true (org:group full XES name)
      * - "e:customAttr" → false
+     *
+     * ProcessM Rule: If attribute is NOT bracketed and NOT standard,
+     * it throws PQLSyntaxException.Problem.NoSuchAttribute.
+     * Use brackets [e:customAttr] for non-standard (custom) attributes.
      */
     val isStandard: Boolean = run {
         // If attribute was bracketed, treat as non-standard (force custom)
@@ -164,7 +168,7 @@ class Attribute(
 
         // Use base scope (before hoisting) to check if attribute is standard
         // For example, ^^e:timestamp should check if "timestamp" is standard for EVENT, not LOG
-        val scopeToCheck = baseScope ?: Scope.EVENT
+        val scopeToCheck = baseScope ?: Scope.Event
 
         // First check if it's a shorthand
         if (StandardAttributes.isStandard(scopeToCheck, name)) {
@@ -173,7 +177,13 @@ class Attribute(
 
         // Check if it's a full XES standard name (like org:group, cost:total)
         // These appear in ATTRIBUTE_TYPES map
-        StandardAttributes.ATTRIBUTE_TYPES.containsKey(name)
+        if (StandardAttributes.ATTRIBUTE_TYPES.containsKey(name)) {
+            return@run true
+        }
+
+        // Not a standard attribute - treat as custom attribute
+        // Custom attributes map directly to Neo4j property names
+        false
     }
 
     /**
@@ -204,7 +214,7 @@ class Attribute(
         if (!isStandard) return@run ""
 
         // Use base scope (before hoisting) for mapping
-        val scopeToCheck = baseScope ?: Scope.EVENT
+        val scopeToCheck = baseScope ?: Scope.Event
 
         // Try to get from shorthand mapping first
         StandardAttributes.getStandardName(scopeToCheck, name)?.let { return@run it }
@@ -255,14 +265,25 @@ class Attribute(
     /**
      * String representation of this attribute.
      *
+     * ProcessM compatibility: Uses full scope names ("event:", "trace:", "log:")
+     * and preserves bracket notation for non-standard attributes.
+     *
      * Examples:
-     * - "e:name" → "e:name"
-     * - "^e:name" → "^e:name"
-     * - "^^e:timestamp" → "^^e:timestamp"
+     * - "e:name" → "event:concept:name" (standard, expanded)
+     * - "^e:name" → "^event:concept:name"
+     * - "[e:custom]" → "[event:custom]" (bracketed, preserved)
+     * - "e:classifier:main" → "event:classifier:main"
      */
     override fun toString(): String {
-        val scopePrefix = baseScope?.shortName?.let { "$it:" } ?: ""
-        return "$hoistingPrefix$scopePrefix$name"
+        // Use full scope name for ProcessM compatibility
+        val scopePrefix = scope.toString() + ":"
+        val attrName = if (isStandard && standardName.isNotEmpty()) {
+            standardName
+        } else {
+            name
+        }
+        val content = "$hoistingPrefix$scopePrefix$attrName"
+        return if (wasBracketed) "[$content]" else content
     }
 
     override fun equals(other: Any?): Boolean {
@@ -279,5 +300,29 @@ class Attribute(
         result = 31 * result + (baseScope?.hashCode() ?: 0)
         result = 31 * result + name.hashCode()
         return result
+    }
+
+    /**
+     * Returns a new Attribute without hoisting prefix.
+     *
+     * ProcessM compatibility: Creates a copy of this attribute with
+     * hoisting removed. The resulting attribute will have the same
+     * base scope and name, but without any ^ prefixes.
+     *
+     * Examples:
+     * - "^e:name".dropHoisting() → "e:name"
+     * - "^^e:timestamp".dropHoisting() → "e:timestamp"
+     * - "e:name".dropHoisting() → "e:name" (unchanged)
+     *
+     * @return a new Attribute without hoisting, or this if no hoisting
+     */
+    fun dropHoisting(): Attribute {
+        if (hoistingPrefix.isEmpty()) {
+            return this
+        }
+        // Reconstruct the attribute string without hoisting
+        val scopePrefix = baseScope?.shortName?.let { "$it:" } ?: ""
+        val attrStr = if (wasBracketed) "[$scopePrefix$name]" else "$scopePrefix$name"
+        return Attribute(attrStr, line, charPositionInLine)
     }
 }

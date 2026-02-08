@@ -8,13 +8,13 @@ enum class FunctionType {
      * Scalar functions operate on individual values and return a single value.
      * Examples: year(e:timestamp), upper(e:name), round(e:cost)
      */
-    SCALAR,
+    Scalar,
 
     /**
      * Aggregation functions combine multiple values into a single result.
      * Examples: count(e:id), sum(e:cost), avg(e:duration), min(e:timestamp), max(e:timestamp)
      */
-    AGGREGATION,
+    Aggregation,
 }
 
 /**
@@ -75,8 +75,8 @@ class Function(
      * Function type (SCALAR or AGGREGATION).
      */
     val functionType: FunctionType = when (name) {
-        in SCALAR_FUNCTIONS.keys -> FunctionType.SCALAR
-        in AGGREGATION_FUNCTIONS.keys -> FunctionType.AGGREGATION
+        in SCALAR_FUNCTIONS.keys -> FunctionType.Scalar
+        in AGGREGATION_FUNCTIONS.keys -> FunctionType.Aggregation
         else -> throw InvalidFunctionException("Unknown function: $name")
     }
 
@@ -84,15 +84,15 @@ class Function(
      * Whether this function is an aggregation function.
      */
     val isAggregation: Boolean
-        get() = functionType == FunctionType.AGGREGATION
+        get() = functionType == FunctionType.Aggregation
 
     /**
      * Return type of this function.
      */
     override val type: Type
         get() = when (functionType) {
-            FunctionType.SCALAR -> SCALAR_FUNCTIONS[name] ?: Type.UNKNOWN
-            FunctionType.AGGREGATION -> AGGREGATION_FUNCTIONS[name] ?: Type.ANY
+            FunctionType.Scalar -> SCALAR_FUNCTIONS[name] ?: Type.UNKNOWN
+            FunctionType.Aggregation -> AGGREGATION_FUNCTIONS[name] ?: Type.ANY
         }
 
     init {
@@ -117,7 +117,7 @@ class Function(
         //
         // Invalid examples:
         // - EVENT function (2) with TRACE arg (1): 2 > 1 ✗ (function lower in hierarchy)
-        if (functionType == FunctionType.SCALAR && scope != null) {
+        if (functionType == FunctionType.Scalar && scope != null) {
             val effScope = effectiveScope
             if (effScope != null && scope.ordinal > effScope.ordinal) {
                 throw InvalidFunctionException(

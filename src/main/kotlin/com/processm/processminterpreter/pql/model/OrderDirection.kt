@@ -6,29 +6,29 @@ package com.processm.processminterpreter.pql.model
  * Based on ProcessM: https://github.com/ProcessMPUT/processm
  */
 enum class OrderDirection {
-    ASCENDING {
+    Ascending {
         override fun toString() = "asc"
     },
-    DESCENDING {
+    Descending {
         override fun toString() = "desc"
-    }, ;
+    };
 
     companion object {
         /**
          * Parse a string to OrderDirection enum.
          * Accepts: "asc", "ascending", "desc", "descending" (case-insensitive)
          *
-         * @param s the string to parse (null defaults to ASCENDING)
-         * @param default the default direction if parsing fails (default: ASCENDING)
+         * @param s the string to parse (null defaults to Ascending)
+         * @param default the default direction if parsing fails (default: Ascending)
          * @return the parsed OrderDirection
          * @throws IllegalArgumentException if string is invalid and no default provided
          */
-        fun parse(s: String?, default: OrderDirection = ASCENDING): OrderDirection {
+        fun parse(s: String?, default: OrderDirection = Ascending): OrderDirection {
             if (s == null) return default
 
             return when (s.lowercase()) {
-                "desc", "descending" -> DESCENDING
-                "asc", "ascending" -> ASCENDING
+                "desc", "descending" -> Descending
+                "asc", "ascending" -> Ascending
                 else -> throw IllegalArgumentException("Invalid order direction: $s")
             }
         }

@@ -1,0 +1,61 @@
+spring:
+  application:
+    name: processm-interpreter
+  neo4j:
+    uri: bolt://localhost:7687
+    authentication:
+      username: neo4j
+      password: password123
+    pool:
+      metrics-enabled: true
+      log-leaked-sessions: true
+      max-connection-pool-size: 50
+      idle-time-before-connection-test: PT30S
+      max-connection-lifetime: PT1H
+  servlet:
+    multipart:
+      max-file-size: 500MB
+      max-request-size: 500MB
+      enabled: true
+      file-size-threshold: 2MB
+      location: ${processm.xes.upload.temp-directory}
+
+server:
+  port: 8080
+  tomcat:
+    connection-timeout: 600000
+    keep-alive-timeout: 300000
+
+logging:
+  level:
+    org.neo4j.driver: INFO
+    com.processm.processminterpreter: DEBUG
+    org.springframework.data.neo4j: DEBUG
+
+processm:
+  xes:
+    upload:
+      max-file-size: 500MB
+      temp-directory: ./temp/xes-uploads
+      enable-gzip: true
+  query:
+    timeout: PT5M
+    max-results: 10000
+  api:
+    url: http://localhost:80/api
+  compatibility:
+    default-trace-limit: 30
+    exclude-event-attrs-in-select-star:
+      - "concept:name"
+      - "cost:currency"
+  login: admin@example.com
+  password: Admin1234
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: "*"
+  endpoint:
+    health:
+      show-details: always

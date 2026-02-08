@@ -12,10 +12,9 @@ object StandardAttributeMapper {
      * Scope levels in ProcessM PQL hierarchy
      */
     enum class Scope {
-        LOG,
-        TRACE,
-        EVENT,
-        ;
+        Log,
+        Trace,
+        Event;
 
         /**
          * Get the scope one level up (for hoisting with ^)
@@ -23,9 +22,9 @@ object StandardAttributeMapper {
         val upper: Scope?
             get() =
                 when (this) {
-                    EVENT -> TRACE
-                    TRACE -> LOG
-                    LOG -> null
+                    Event -> Trace
+                    Trace -> Log
+                    Log -> null
                 }
 
         /**
@@ -34,9 +33,9 @@ object StandardAttributeMapper {
         val lower: Scope?
             get() =
                 when (this) {
-                    LOG -> TRACE
-                    TRACE -> EVENT
-                    EVENT -> null
+                    Log -> Trace
+                    Trace -> Event
+                    Event -> null
                 }
 
         companion object {
@@ -45,9 +44,9 @@ object StandardAttributeMapper {
              */
             fun parse(prefix: String?): Scope {
                 return when (prefix?.lowercase()) {
-                    "l", "log" -> LOG
-                    "t", "trace" -> TRACE
-                    "e", "event", null -> EVENT // Default to EVENT
+                    "l", "log" -> Log
+                    "t", "trace" -> Trace
+                    "e", "event", null -> Event // Default to Event
                     else -> throw IllegalArgumentException("Unknown scope: $prefix")
                 }
             }
@@ -66,7 +65,7 @@ object StandardAttributeMapper {
      */
     private val standardMappings: Map<Scope, Map<String, Pair<String, String>>> =
         mapOf(
-            Scope.LOG to
+            Scope.Log to
                 mapOf(
                     "name" to ("concept:name" to "name"),
                     "id" to ("identity:id" to "logId"),
@@ -75,19 +74,19 @@ object StandardAttributeMapper {
                     "currency" to ("cost:currency" to "cost_currency"),
                     "total" to ("cost:total" to "cost_total"),
                 ),
-            Scope.TRACE to
+            Scope.Trace to
                 mapOf(
                     "name" to ("concept:name" to "caseId"), // Trace name is typically caseId
-                    "currency" to ("cost:currency" to "cost_currency"),
-                    "total" to ("cost:total" to "cost_total"),
+                    "currency" to ("cost:currency" to "cost:currency"), // Stored with XES name in Neo4j (from SET trace += attributes)
+                    "total" to ("cost:total" to "cost:total"), // Stored with XES name in Neo4j (from SET trace += attributes)
                     "id" to ("identity:id" to "traceId"),
                 ),
-            Scope.EVENT to
+            Scope.Event to
                 mapOf(
                     "name" to ("concept:name" to "activity"), // Event name is activity
                     "instance" to ("concept:instance" to "concept_instance"),
-                    "currency" to ("cost:currency" to "cost_currency"),
-                    "total" to ("cost:total" to "cost_total"),
+                    "currency" to ("cost:currency" to "cost:currency"), // Stored with XES name in Neo4j (from SET event += attributes)
+                    "total" to ("cost:total" to "cost"), // Explicit Neo4j property (not cost_total)
                     "id" to ("identity:id" to "eventId"),
                     "transition" to ("lifecycle:transition" to "lifecycle"),
                     "state" to ("lifecycle:state" to "lifecycle_state"),

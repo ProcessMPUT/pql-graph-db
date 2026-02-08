@@ -3,43 +3,52 @@ package com.processm.processminterpreter.pql.model
 /**
  * Represents the three-level hierarchy of process mining scopes.
  *
- * Hierarchy: LOG (top) → TRACE (middle) → EVENT (bottom/default)
+ * Hierarchy: Log (top) → Trace (middle) → Event (bottom/default)
  *
  * Based on ProcessM: https://github.com/ProcessMPUT/processm
  */
-enum class Scope(val scopeName: String, val shortName: String) {
-    LOG("log", "l"),
-    TRACE("trace", "t"),
-    EVENT("event", "e"),
-    ;
+enum class Scope {
+    Log,
+    Trace,
+    Event;
+
+    /**
+     * The short name for this scope ("l", "t", "e").
+     */
+    val shortName: String
+        get() = when (this) {
+            Log -> "l"
+            Trace -> "t"
+            Event -> "e"
+        }
 
     /**
      * Returns the parent scope in the hierarchy.
-     * - LOG.upper = null (no parent)
-     * - TRACE.upper = LOG
-     * - EVENT.upper = TRACE
+     * - Log.upper = null (no parent)
+     * - Trace.upper = Log
+     * - Event.upper = Trace
      */
     val upper: Scope?
         get() = when (this) {
-            LOG -> null
-            TRACE -> LOG
-            EVENT -> TRACE
+            Log -> null
+            Trace -> Log
+            Event -> Trace
         }
 
     /**
      * Returns the child scope in the hierarchy.
-     * - LOG.lower = TRACE
-     * - TRACE.lower = EVENT
-     * - EVENT.lower = null (no child)
+     * - Log.lower = Trace
+     * - Trace.lower = Event
+     * - Event.lower = null (no child)
      */
     val lower: Scope?
         get() = when (this) {
-            LOG -> TRACE
-            TRACE -> EVENT
-            EVENT -> null
+            Log -> Trace
+            Trace -> Event
+            Event -> null
         }
 
-    override fun toString(): String = scopeName
+    override fun toString(): String = name.lowercase()
 
     companion object {
         /**
@@ -47,15 +56,15 @@ enum class Scope(val scopeName: String, val shortName: String) {
          * Accepts: "log"/"l", "trace"/"t", "event"/"e" (case-insensitive)
          *
          * @param s the string to parse
-         * @param default the default scope if parsing fails (default: EVENT)
+         * @param default the default scope if parsing fails (default: null, throws exception)
          * @return the parsed Scope
          * @throws IllegalArgumentException if string is invalid and no default provided
          */
         fun parse(s: String, default: Scope? = null): Scope {
             return when (s.lowercase()) {
-                "log", "l" -> LOG
-                "trace", "t" -> TRACE
-                "event", "e" -> EVENT
+                "log", "l" -> Log
+                "trace", "t" -> Trace
+                "event", "e" -> Event
                 else -> default ?: throw IllegalArgumentException("Invalid scope: $s")
             }
         }
@@ -66,9 +75,9 @@ enum class Scope(val scopeName: String, val shortName: String) {
  * Extension property to generate scope prefix for attributes.
  *
  * Examples:
- * - Scope.LOG.prefix = "log:"
- * - Scope.EVENT.prefix = "event:"
+ * - Scope.Log.prefix = "log:"
+ * - Scope.Event.prefix = "event:"
  * - null.prefix = ""
  */
 val Scope?.prefix: String
-    get() = this?.let { "${it.scopeName}:" } ?: ""
+    get() = this?.let { "${it}:" } ?: ""

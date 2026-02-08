@@ -90,14 +90,47 @@
                                     <select id="sampleQueriesSelect"
                                         style="background: #333; color: #ccc; border: 1px solid #444; padding: 2px 8px; border-radius: 4px; font-size: 0.8rem; margin-left: auto;">
                                         <option value="">-- Load Test Query --</option>
-                                        <option value="select t:concept:name, e:concept:name limit l:1, t:2, e:1">1. Projected Columns (t+e)</option>
-                                        <option value="select t:concept:name, e:concept:name, e:time:timestamp limit l:1, t:2, e:2">2. With Timestamp</option>
-                                        <option value="select t:concept:name limit l:1, t:3">3. Only Trace Attrs</option>
-                                        <option value="select e:concept:name, e:time:timestamp limit l:1, t:1, e:3">4. Only Event Attrs</option>
-                                        <option value="select * limit l:1, t:1, e:2">5. SELECT * (all attrs)</option>
-                                        <option value="select e:concept:name limit l:1, t:1, e:1">6. Single Event (object)</option>
-                                        <option value="select t:concept:name limit l:1, t:1, e:1">7. Single Trace (object)</option>
-                                        <option value="select e:concept:name limit l:1, t:1, e:5">8. Multiple Events (array)</option>
+                                        <optgroup label="SELECT">
+                                            <option value="select l:name, t:name, e:name, e:timestamp">SELECT basics</option>
+                                            <option value="select t:name, e:*, t:total limit l:1">SELECT e:* + t:total</option>
+                                            <option value="select t:*, e:*, l:* where l:name like 'Jour%Rev%'">SELECT all scopes</option>
+                                            <option value="select min(e:timestamp), max(e:timestamp)">SELECT min/max</option>
+                                            <option value="select e:total + t:total limit l:1, t:5, e:10">SELECT expression</option>
+                                            <option value="select e:timestamp, second(e:timestamp) limit l:1, t:1, e:5">SELECT second()</option>
+                                            <option value="select e:timestamp, year(e:timestamp), month(e:timestamp), day(e:timestamp) limit l:1, t:1, e:5">SELECT year/month/day</option>
+                                            <option value="select now() limit l:1, t:1, e:1">SELECT now()</option>
+                                            <option value="select true, false limit l:1, t:1, e:1">SELECT booleans</option>
+                                            <option value="select 'single-quoted', &quot;double-quoted&quot; limit l:1, t:1, e:1">SELECT strings</option>
+                                            <option value="select l:1, l:2 + t:3, l:4 * t:5 + e:6, 7 / 8 - 9 limit l:1, t:1, e:1">SELECT constants</option>
+                                        </optgroup>
+                                        <optgroup label="WHERE">
+                                            <option value="where dayofweek(e:timestamp) in (1, 7)">WHERE dayofweek IN</option>
+                                            <option value="where dayofweek(^e:timestamp) in (1, 7)">WHERE dayofweek + hoisting ^</option>
+                                            <option value="where t:currency != e:currency">WHERE cross-scope compare</option>
+                                            <option value="where not(t:currency = ^e:currency)">WHERE NOT + hoisting</option>
+                                            <option value="where t:name like '%5' and e:resource matches '^[SP]am$'">WHERE LIKE + MATCHES</option>
+                                            <option value="where [t:cost:total] is not null">WHERE IS NOT NULL</option>
+                                            <option value="where e:name in ('accept', 'reject') limit l:1, t:10, e:20">WHERE IN list</option>
+                                            <option value="where e:name not in ('accept', 'reject') limit l:1, t:5, e:10">WHERE NOT IN</option>
+                                            <option value="where not(e:name = 'accept') limit l:1, t:5, e:10">WHERE NOT equals</option>
+                                            <option value="where e:name is not null limit l:1, t:5, e:10">WHERE IS NOT NULL (events)</option>
+                                            <option value="where e:timestamp >= D2007-01-01 limit l:1, t:5, e:10">WHERE date comparison</option>
+                                            <option value="where e:name matches '^(accept|reject)$' limit l:1, t:10, e:20">WHERE MATCHES regex</option>
+                                            <option value="where (e:name = 'accept' or e:name = 'reject') limit l:1, t:10, e:20">WHERE OR</option>
+                                        </optgroup>
+                                        <optgroup label="ORDER BY + LIMIT">
+                                            <option value="where true order by e:timestamp limit l:1, t:5, e:10">ORDER BY timestamp ASC</option>
+                                            <option value="where true order by e:timestamp desc limit l:1, t:3, e:5">ORDER BY timestamp DESC</option>
+                                            <option value="where true order by e:timestamp, t:total desc limit l:1, t:3, e:10">ORDER BY multi-scope</option>
+                                            <option value="where true limit l:1, t:2, e:3">LIMIT all scopes</option>
+                                            <option value="where true limit e:5">LIMIT single scope</option>
+                                            <option value="where true offset e:3, t:2, l:1">OFFSET all scopes</option>
+                                        </optgroup>
+                                        <optgroup label="COMBINED">
+                                            <option value="select e:name, e:timestamp where e:name in ('accept', 'reject') order by e:timestamp limit l:1, t:10, e:20">SELECT + WHERE + ORDER</option>
+                                            <option value="select l:name, t:name, e:name, e:timestamp order by e:timestamp desc limit l:1, t:3, e:5">SELECT + ORDER DESC</option>
+                                            <option value="where 0=1">Empty result (where 0=1)</option>
+                                        </optgroup>
                                     </select>
                                 </div>
                                 <textarea id="compareQueryText" class="query-editor" spellcheck="false"
@@ -129,7 +162,8 @@
 
                         <div class="action-buttons">
                             <button id="verifyButtonNew">⚖️ Verify with ProcessM</button>
-                            <button id="downloadComparisonButton" class="secondary" style="display: none;">💾 Download Comparison Snapshot</button>
+                            <button id="downloadComparisonButton" class="secondary" style="display: none;">💾 Full Snapshot</button>
+                            <button id="downloadLightSnapshotButton" class="secondary" style="display: none;">📄 Light Snapshot (diffs only)</button>
                         </div>
                     </div>
 

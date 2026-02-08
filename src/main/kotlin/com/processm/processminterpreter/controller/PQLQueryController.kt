@@ -21,7 +21,9 @@ import org.springframework.web.multipart.MultipartFile
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 
+import com.processm.processminterpreter.config.ProcessMConfig
 import com.processm.processminterpreter.service.RemoteProcessMService
+import com.processm.processminterpreter.util.XESJsonComparator
 import com.processm.processminterpreter.util.XESJsonConverter
 
 /**
@@ -35,7 +37,8 @@ import com.processm.processminterpreter.util.XESJsonConverter
 class PQLQueryController(
     private val pqlQueryService: PQLQueryService,
     private val remoteProcessMService: RemoteProcessMService,
-    private val objectMapper: ObjectMapper
+    private val objectMapper: ObjectMapper,
+    private val processMConfig: ProcessMConfig
 ) {
     private val logger = LoggerFactory.getLogger(PQLQueryController::class.java)
 
@@ -74,12 +77,24 @@ class PQLQueryController(
                     logger.debug("Converting ${result.logs.size} logs to XES JSON format")
 
                     // Detect if this is a projected query (SELECT specific fields vs SELECT *)
+                    // Exclude internally injected tracking columns (t_traceId, l_logId)
+                    val internalKeys = setOf("t_traceId", "l_logId")
                     val isProjectedQuery = result.results.firstOrNull()?.keys?.any { key ->
-                        key.startsWith("l_") || key.startsWith("t_") || key.startsWith("e_") ||
-                        key.startsWith("log_") || key.startsWith("trace_") || key.startsWith("event_")
+                        key !in internalKeys && (
+                            key.startsWith("l_") || key.startsWith("t_") || key.startsWith("e_") ||
+                            key.startsWith("log_") || key.startsWith("trace_") || key.startsWith("event_")
+                        )
                     } ?: false
 
-                    val xesJson = XESJsonConverter.convertToXESJson(result.logs, isProjectedQuery)
+                    // Check if events specifically are projected (e:name, e:timestamp etc.)
+                    // vs event SELECT * or e:* (properties(event) as event)
+                    // e:* should still exclude attrs like concept:name, cost:currency
+                    val isEventProjected = result.results.firstOrNull()?.keys?.any { key ->
+                        key !in internalKeys && (key.startsWith("e_") || key.startsWith("event_"))
+                    } ?: false
+
+                    val excludeAttrs = if (!isEventProjected) processMConfig.excludeEventAttrsInSelectStar else emptyList()
+                    val xesJson = XESJsonConverter.convertToXESJson(result.logs, isProjectedQuery, excludeAttrs)
                     listOf(xesJson)  // Wrap in list for consistency
                 }
                 else -> {
@@ -318,6 +333,7 @@ class PQLQueryController(
     @PostMapping("/verify")
     fun verifyQuery(
         @RequestBody request: PQLVerificationRequest,
+        @RequestParam(defaultValue = "full") format: String,
     ): ResponseEntity<PQLVerificationResponse> {
         logger.info("=== Verifying PQL Query ===")
         logger.info("PQL: ${request.query}")
@@ -375,45 +391,63 @@ class PQLQueryController(
 
 
 
-            // 3. Compare hierarchical structure (number of logs)
-            val match = if (localResult.success && remoteResult.success) {
-                localResult.logs.size == remoteResult.resultCount
-            } else {
-                false
-            }
-
-            val details = StringBuilder()
-            details.append("Local: ${if (localResult.success) "Success (${localResult.logs.size} logs)" else "Fail: ${localResult.error}"}\n")
-            details.append("Remote: ${if (remoteResult.success) "Success (${remoteResult.resultCount} logs)" else "Fail: ${remoteResult.message}"}\n")
-
-            if (match) {
-                details.append("Result: MATCH")
-            } else {
-                details.append("Result: MISMATCH")
-            }
-
-            // Convert hierarchical logs to XES JSON format for comparison
+            // 3. Convert LOCAL logs to XES JSON format BEFORE comparison
             val localXESResults = if (localResult.logs.isNotEmpty()) {
                 // Detect if this is a projected query
+                val internalKeys2 = setOf("t_traceId", "l_logId")
                 val isProjectedQuery = localResult.results.firstOrNull()?.keys?.any { key ->
-                    key.startsWith("l_") || key.startsWith("t_") || key.startsWith("e_") ||
-                    key.startsWith("log_") || key.startsWith("trace_") || key.startsWith("event_")
+                    key !in internalKeys2 && (
+                        key.startsWith("l_") || key.startsWith("t_") || key.startsWith("e_") ||
+                        key.startsWith("log_") || key.startsWith("trace_") || key.startsWith("event_")
+                    )
                 } ?: false
 
-                val xesJson = XESJsonConverter.convertToXESJson(localResult.logs, isProjectedQuery)
+                // Check if events specifically are projected (e:name, e:timestamp etc.)
+                val isEventProjected = localResult.results.firstOrNull()?.keys?.any { key ->
+                    key !in internalKeys2 && (key.startsWith("e_") || key.startsWith("event_"))
+                } ?: false
+
+                val excludeAttrs = if (!isEventProjected) processMConfig.excludeEventAttrsInSelectStar else emptyList()
+                val xesJson = XESJsonConverter.convertToXESJson(localResult.logs, isProjectedQuery, excludeAttrs)
                 listOf(xesJson)
             } else {
                 emptyList()
             }
 
+            // 4. Compare using XESJsonComparator (order-independent, ID-agnostic)
+            val details = StringBuilder()
+            details.append("Local: ${if (localResult.success) "Success (${localResult.logs.size} logs)" else "Fail: ${localResult.error}"}\n")
+            details.append("Remote: ${if (remoteResult.success) "Success (${remoteResult.resultCount} logs)" else "Fail: ${remoteResult.message}"}\n")
+
+            val match: Boolean
+            if (localResult.success && remoteResult.success) {
+                @Suppress("UNCHECKED_CAST")
+                val comparisonResult = XESJsonComparator.compare(
+                    localXESResults as List<Map<String, Any?>>,
+                    remoteResultsList
+                )
+                match = comparisonResult.match
+                details.append("Comparison: ${comparisonResult.summary}\n")
+                if (comparisonResult.differences.isNotEmpty()) {
+                    details.append("Differences:\n")
+                    comparisonResult.differences.forEach { diff ->
+                        details.append("  - $diff\n")
+                    }
+                }
+            } else {
+                match = false
+                details.append("Result: MISMATCH (execution failure)")
+            }
+
+            val isLight = format.equals("light", ignoreCase = true)
             val response = PQLVerificationResponse(
                 match = match,
                 localSuccess = localResult.success,
                 remoteSuccess = remoteResult.success,
-                localCount = localResult.logs.size,  // Count logs, not flat rows
+                localCount = localResult.logs.size,
                 remoteCount = remoteResult.resultCount,
-                localResults = localXESResults,
-                remoteResults = remoteResultsList,
+                localResults = if (isLight) emptyList() else localXESResults,
+                remoteResults = if (isLight) emptyList() else remoteResultsList,
                 remoteRequestUrl = remoteResult.requestUrl,
                 remoteAdaptedQuery = remoteResult.adaptedQuery,
                 remoteLogId = remoteResult.remoteLogId,

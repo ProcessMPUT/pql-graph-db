@@ -34,6 +34,17 @@ interface IExpression {
     val scope: Scope?
 
     /**
+     * The effective scope of this expression - the lowest (most specific) scope
+     * in the expression tree, considering all children.
+     *
+     * - For terminal expressions (attributes, literals), returns scope or EVENT as default
+     * - For composite expressions, returns the lowest scope among all children
+     * - Scope hierarchy: LOG (0) > TRACE (1) > EVENT (2)
+     */
+    val effectiveScope: Scope?
+        get() = scope
+
+    /**
      * The data type of this expression.
      *
      * Examples:

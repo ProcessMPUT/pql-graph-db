@@ -700,6 +700,34 @@ textarea {
     border: 1px solid rgba(244, 67, 54, 0.3);
 }
 
+/* Comparison details coloring */
+.comparison-details div {
+    padding: 1px 0;
+}
+
+.diff-match {
+    color: #4caf50;
+    font-weight: 600;
+}
+
+.diff-mismatch {
+    color: #f44336;
+    font-weight: 600;
+}
+
+.diff-header {
+    color: #ff9800;
+    font-weight: 600;
+    margin-top: 0.3rem;
+}
+
+.diff-item {
+    color: #ef9a9a;
+    padding-left: 0.5rem;
+    border-left: 2px solid rgba(244, 67, 54, 0.3);
+    margin: 2px 0;
+}
+
 .verification-content {
     padding: 1.5rem;
     display: grid;

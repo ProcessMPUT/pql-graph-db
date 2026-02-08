@@ -1,5 +1,11 @@
 package com.processm.processminterpreter.pql.model
 
+import QLLexer
+import QLParser
+import com.processm.processminterpreter.pql.visitor.PQLErrorListener
+import com.processm.processminterpreter.pql.visitor.QueryBuilder
+import org.antlr.v4.runtime.CharStreams
+import org.antlr.v4.runtime.CommonTokenStream
 import java.util.*
 
 /**
@@ -16,14 +22,147 @@ import java.util.*
  * The Query class provides an immutable view of the query structure,
  * while allowing validation and modification through specific methods.
  *
+ * When created with a non-empty query string, the query is automatically parsed.
+ *
  * Based on ProcessM: https://github.com/ProcessMPUT/processm
  */
-class Query(
+class Query private constructor(
     /**
      * The original query string.
      */
-    val query: String = "",
+    val query: String,
+    /**
+     * Whether to parse the query string.
+     * Internal parameter to avoid parsing when copying from QueryBuilder.
+     */
+    parse: Boolean
 ) {
+
+    /**
+     * Primary constructor - parses the query string.
+     */
+    constructor(query: String = "") : this(query, query.isNotBlank())
+
+    // NOTE: init block is at the end of the class to ensure all properties are initialized first
+
+    /**
+     * Internal flag to track if parsing should be done.
+     */
+    private val _shouldParse: Boolean = parse
+
+    /**
+     * Parse the query string and populate this Query object.
+     */
+    private fun parseAndBuild(queryString: String) {
+        // Create input stream from PQL query string
+        val input = CharStreams.fromString(queryString)
+
+        // Create lexer (tokenizer) with custom error listener
+        val errorListener = PQLErrorListener()
+        val lexer = QLLexer(input)
+        lexer.removeErrorListeners()
+        lexer.addErrorListener(errorListener)
+
+        // Create token stream
+        val tokens = CommonTokenStream(lexer)
+
+        // Create parser with same error listener
+        val parser = QLParser(tokens)
+        parser.removeErrorListeners()
+        parser.addErrorListener(errorListener)
+
+        // Parse the query and build AST
+        val tree = parser.query()
+
+        // Check for syntax errors - throws PQLParserException
+        // Check both error listener and parser's internal error count
+        val numErrors = parser.numberOfSyntaxErrors
+        if (numErrors > 0) {
+            if (errorListener.hasErrors()) {
+                errorListener.throwIfErrors()
+            } else {
+                // Parser detected errors but listener didn't catch them
+                throw PQLParserException(
+                    problem = PQLParserException.Problem.Unknown,
+                    line = 1,
+                    charPositionInLine = 0,
+                    offendingToken = TokenSequence("", -1, -1),
+                    expectedTokens = null,
+                    originalMessage = "Parser detected $numErrors syntax error(s)",
+                    baseException = null
+                )
+            }
+        }
+        errorListener.throwIfErrors()
+
+        // Build query using QueryBuilder (populates this object)
+        QueryBuilder().buildInto(tree, this)
+
+        // Validate the query
+        validate()
+    }
+
+    companion object {
+        /**
+         * Create an empty Query without parsing.
+         * Used internally by QueryBuilder.
+         */
+        internal fun empty(queryString: String = ""): Query {
+            return Query(queryString, false)
+        }
+    }
+
+    // ========================================
+    // WARNING (ProcessM Compatibility)
+    // ========================================
+
+    /**
+     * Single warning emitted during query parsing/validation.
+     *
+     * ProcessM compatibility: ProcessM uses a single warning property.
+     * Only the first warning is stored - subsequent warnings are ignored.
+     *
+     * Warnings indicate potential issues but don't prevent query execution.
+     * Examples:
+     * - SELECT ALL mixed with specific attributes (attributes ignored)
+     * - Decimal value in LIMIT/OFFSET (truncated to integer)
+     * - ORDER BY removed due to implicit GROUP BY
+     */
+    var warning: Exception? = null
+        private set
+
+    /**
+     * Emit a warning during validation.
+     *
+     * ProcessM compatibility: Only the first warning is stored.
+     *
+     * @param newWarning the warning to emit
+     */
+    fun emitWarning(newWarning: Exception) {
+        if (warning == null) {
+            warning = newWarning
+        }
+    }
+
+    /**
+     * Check if a warning was emitted.
+     */
+    fun hasWarnings(): Boolean = warning != null
+
+    /**
+     * Clear warning.
+     */
+    fun clearWarnings() {
+        warning = null
+    }
+
+    /**
+     * Deprecated: Use warning property instead.
+     * Kept for backward compatibility.
+     */
+    @Deprecated("Use warning property instead", ReplaceWith("listOfNotNull(warning)"))
+    val warnings: List<Exception>
+        get() = listOfNotNull(warning)
 
     // ========================================
     // SELECT CLAUSE
@@ -39,28 +178,41 @@ class Query(
 
     /**
      * Internal mutable map for standard attributes in SELECT.
+     * ProcessM compatibility: Initialize with empty sets for all scopes.
      */
     private val _selectStandardAttributes: MutableMap<Scope, LinkedHashSet<Attribute>> =
-        EnumMap<Scope, LinkedHashSet<Attribute>>(Scope::class.java)
+        EnumMap<Scope, LinkedHashSet<Attribute>>(Scope::class.java).apply {
+            Scope.values().forEach { put(it, LinkedHashSet()) }
+        }
 
     /**
      * Internal mutable map for non-standard attributes in SELECT.
+     * ProcessM compatibility: Initialize with empty sets for all scopes.
      */
     private val _selectOtherAttributes: MutableMap<Scope, LinkedHashSet<Attribute>> =
-        EnumMap<Scope, LinkedHashSet<Attribute>>(Scope::class.java)
+        EnumMap<Scope, LinkedHashSet<Attribute>>(Scope::class.java).apply {
+            Scope.values().forEach { put(it, LinkedHashSet()) }
+        }
 
     /**
      * Internal mutable map for complex expressions in SELECT.
+     * ProcessM compatibility: Initialize with empty lists for all scopes.
      */
     private val _selectExpressions: MutableMap<Scope, ArrayList<IExpression>> =
-        EnumMap<Scope, ArrayList<IExpression>>(Scope::class.java)
+        EnumMap<Scope, ArrayList<IExpression>>(Scope::class.java).apply {
+            Scope.values().forEach { put(it, ArrayList()) }
+        }
 
     /**
      * Internal mutable map for implicit SELECT ALL per scope.
+     *
+     * ProcessM compatibility: Default to true (empty query = implicit SELECT *)
+     * When specific attributes are selected, isImplicitSelectAll getter will return false
+     * based on whether _selectStandardAttributes/_selectOtherAttributes/_selectExpressions are populated.
      */
     private val _isImplicitSelectAll: MutableMap<Scope, Boolean> =
         EnumMap<Scope, Boolean>(Scope::class.java).apply {
-            Scope.entries.forEach { put(it, false) }
+            Scope.values().forEach { put(it, true) }
         }
 
     /**
@@ -71,7 +223,7 @@ class Query(
      * - null: Not specified for this scope
      */
     val selectAll: Map<Scope, Boolean?>
-        get() = Scope.entries.associateWith { scope ->
+        get() = Scope.values().associateWith { scope ->
             _selectAll[scope] == true || isImplicitSelectAll[scope] == true
         }
 
@@ -107,33 +259,40 @@ class Query(
      *
      * Implicit SELECT ALL occurs when no SELECT clause is specified,
      * defaulting to selecting all attributes.
+     *
+     * ProcessM Rule: If ANY scope has explicit SELECT (attributes, expressions, or SELECT *),
+     * then ALL scopes have isImplicitSelectAll = false.
      */
     val isImplicitSelectAll: Map<Scope, Boolean>
-        get() = Scope.entries.associateWith { scope ->
-            // If explicit SELECT * is set, it's not implicit
-            if (_selectAll[scope] == true) return@associateWith false
-            
-            // If specific attributes/expressions are selected, it's not implicit
-            if ((_selectStandardAttributes[scope]?.isNotEmpty() == true) ||
-                (_selectOtherAttributes[scope]?.isNotEmpty() == true) ||
-                (_selectExpressions[scope]?.isNotEmpty() == true)) {
-                return@associateWith false
+        get() {
+            // Check if ANY scope has explicit selection (SELECT * or specific attributes)
+            val hasAnyExplicitSelect = Scope.values().any { scope ->
+                _selectAll[scope] != null ||  // Explicit SELECT * or specific attributes
+                _selectStandardAttributes[scope]?.isNotEmpty() == true ||
+                _selectOtherAttributes[scope]?.isNotEmpty() == true ||
+                _selectExpressions[scope]?.isNotEmpty() == true
             }
 
-            // If we are grouping by this scope, implicit select all is disabled
-            // Also disabled if any upper scope is grouped (because lower scope attributes would need aggregation)
-            var currentScope: Scope? = scope
-            while (currentScope != null) {
-                if (isGroupBy[currentScope] == true) {
-                    return@associateWith false
+            // If any explicit selection exists, all scopes have implicit = false
+            if (hasAnyExplicitSelect) {
+                return Scope.values().associateWith { false }
+            }
+
+            // No explicit selection - check if truly implicit SELECT ALL
+            return Scope.values().associateWith { scope ->
+                // If we are grouping by this scope, implicit select all is disabled
+                // Also disabled if any upper scope is grouped (because lower scope attributes would need aggregation)
+                var currentScope: Scope? = scope
+                while (currentScope != null) {
+                    if (isGroupBy[currentScope] == true) {
+                        return@associateWith false
+                    }
+                    currentScope = currentScope.upper
                 }
-                currentScope = currentScope.upper
+
+                // Check explicit flag
+                _isImplicitSelectAll[scope] == true
             }
-
-            // Reverting to simple check + explicit flag
-            val result = _isImplicitSelectAll[scope] == true
-
-            result
         }
 
     // ========================================
@@ -156,13 +315,15 @@ class Query(
 
     /**
      * The WHERE clause filtering expression.
-     * null if no WHERE clause is specified.
+     * Expression.empty if no WHERE clause is specified.
+     *
+     * ProcessM compatibility: Uses Expression.empty instead of null.
      *
      * Example:
      * - WHERE e:name = "A" AND e:timestamp > D2020-01-01
      * - whereExpression = BinaryOp(AND, ...)
      */
-    var whereExpression: IExpression? = null
+    var whereExpression: Expression = Expression.empty
 
     // ========================================
     // GROUP BY CLAUSE
@@ -170,22 +331,28 @@ class Query(
 
     /**
      * Internal mutable map for standard attributes in GROUP BY.
+     * ProcessM compatibility: Initialize with empty sets for all scopes.
      */
     private val _groupByStandardAttributes: MutableMap<Scope, LinkedHashSet<Attribute>> =
-        EnumMap<Scope, LinkedHashSet<Attribute>>(Scope::class.java)
+        EnumMap<Scope, LinkedHashSet<Attribute>>(Scope::class.java).apply {
+            Scope.values().forEach { put(it, LinkedHashSet()) }
+        }
 
     /**
      * Internal mutable map for non-standard attributes in GROUP BY.
+     * ProcessM compatibility: Initialize with empty sets for all scopes.
      */
     private val _groupByOtherAttributes: MutableMap<Scope, LinkedHashSet<Attribute>> =
-        EnumMap<Scope, LinkedHashSet<Attribute>>(Scope::class.java)
+        EnumMap<Scope, LinkedHashSet<Attribute>>(Scope::class.java).apply {
+            Scope.values().forEach { put(it, LinkedHashSet()) }
+        }
 
     /**
      * Internal mutable map for implicit GROUP BY per scope.
      */
     private val _isImplicitGroupBy: MutableMap<Scope, Boolean> =
         EnumMap<Scope, Boolean>(Scope::class.java).apply {
-            Scope.entries.forEach { put(it, false) }
+            Scope.values().forEach { put(it, false) }
         }
 
     /**
@@ -211,7 +378,7 @@ class Query(
      * Computed based on presence of GROUP BY attributes for that scope.
      */
     val isGroupBy: Map<Scope, Boolean>
-        get() = Scope.entries.associateWith { scope ->
+        get() = Scope.values().associateWith { scope ->
             (_groupByStandardAttributes[scope]?.isNotEmpty() == true) ||
                 (_groupByOtherAttributes[scope]?.isNotEmpty() == true)
         }
@@ -223,7 +390,7 @@ class Query(
      * without an explicit GROUP BY clause.
      */
     val isImplicitGroupBy: Map<Scope, Boolean>
-        get() = Scope.entries.associateWith { scope ->
+        get() = Scope.values().associateWith { scope ->
             // If explicit GROUP BY is present, it's not implicit
             if (isGroupBy[scope] == true) return@associateWith false
 
@@ -231,12 +398,12 @@ class Query(
             
             // Check for aggregations in SELECT
             val hasAggSelect = selectExpressions[scope]?.any { expr ->
-                (expr as? Expression)?.filterRecursively { it is com.processm.processminterpreter.pql.model.Function && it.functionType == FunctionType.AGGREGATION }?.isNotEmpty() == true
+                (expr as? Expression)?.filter { it is com.processm.processminterpreter.pql.model.Function && it.functionType == FunctionType.Aggregation }?.isNotEmpty() == true
             } == true
 
             // Check for aggregations in ORDER BY
             val hasAggOrder = _orderByExpressions[scope]?.any { orderedExpr ->
-                (orderedExpr.expression as? Expression)?.filterRecursively { it is com.processm.processminterpreter.pql.model.Function && it.functionType == FunctionType.AGGREGATION }?.isNotEmpty() == true
+                (orderedExpr.base as? Expression)?.filter { it is com.processm.processminterpreter.pql.model.Function && it.functionType == FunctionType.Aggregation }?.isNotEmpty() == true
             } == true
 
             explicit || hasAggSelect || hasAggOrder
@@ -254,9 +421,12 @@ class Query(
 
     /**
      * Internal mutable map for ORDER BY expressions.
+     * ProcessM compatibility: Initialize with empty lists for all scopes.
      */
     private val _orderByExpressions: MutableMap<Scope, ArrayList<OrderedExpression>> =
-        EnumMap<Scope, ArrayList<OrderedExpression>>(Scope::class.java)
+        EnumMap<Scope, ArrayList<OrderedExpression>>(Scope::class.java).apply {
+            Scope.values().forEach { put(it, ArrayList()) }
+        }
 
     /**
      * ORDER BY expressions with their sort direction, organized by scope.
@@ -317,11 +487,14 @@ class Query(
      * @param attr the attribute to add
      */
     internal fun addSelectAttribute(attr: Attribute) {
-        val scope = attr.scope
+        // Use effectiveScope, defaulting to Event if null
+        val scope = attr.effectiveScope ?: Scope.Event
         if (attr.isStandard) {
-            _selectStandardAttributes.getOrPut(scope) { LinkedHashSet() }.add(attr)
+            val set = _selectStandardAttributes[scope] ?: LinkedHashSet<Attribute>().also { _selectStandardAttributes[scope] = it }
+            set.add(attr)
         } else {
-            _selectOtherAttributes.getOrPut(scope) { LinkedHashSet() }.add(attr)
+            val set = _selectOtherAttributes[scope] ?: LinkedHashSet<Attribute>().also { _selectOtherAttributes[scope] = it }
+            set.add(attr)
         }
         // If specific attribute is selected, selectAll is false
         if (_selectAll[scope] != true) {
@@ -426,22 +599,53 @@ class Query(
     /**
      * Validate that SELECT ALL is not mixed with specific attribute selections.
      *
-     * Rule: Cannot use "SELECT *" together with specific attribute names.
+     * ProcessM Rule: When SELECT * is mixed with specific attributes:
+     * - Emit a warning (SelectAllConflictsWithReferencingByName)
+     * - Clear the specific attribute lists (SELECT * takes precedence)
      *
-     * @throws PQLSemanticException if validation fails
+     * This differs from a strict error approach - ProcessM allows the query
+     * to execute but ignores the specific attributes.
      */
     fun validateSelectAll() {
-        selectAll.forEach { (scope, isAll) ->
-            if (isAll == true) {
+        Scope.values().forEach { scope ->
+            val isExplicitSelectAll = _selectAll[scope] == true
+
+            if (isExplicitSelectAll) {
                 // Check if specific attributes are also selected for this scope
-                val hasSpecificAttributes = (selectStandardAttributes[scope]?.isNotEmpty() == true) ||
-                    (selectOtherAttributes[scope]?.isNotEmpty() == true) ||
-                    (selectExpressions[scope]?.isNotEmpty() == true)
+                val hasStandardAttrs = _selectStandardAttributes[scope]?.isNotEmpty() == true
+                val hasOtherAttrs = _selectOtherAttributes[scope]?.isNotEmpty() == true
+                val hasExpressions = _selectExpressions[scope]?.isNotEmpty() == true
+                val hasSpecificAttributes = hasStandardAttrs || hasOtherAttrs || hasExpressions
 
                 if (hasSpecificAttributes) {
-                    throw PQLSemanticException(
-                        "Cannot mix 'SELECT *' with specific attribute selections for scope $scope",
+                    // Check if there are aggregation functions - this is an error, not a warning
+                    val hasAggregation = _selectExpressions[scope]?.any { expr ->
+                        (expr as? Expression)?.filter {
+                            it is com.processm.processminterpreter.pql.model.Function &&
+                                it.functionType == FunctionType.Aggregation
+                        }?.isNotEmpty() == true
+                    } == true
+
+                    if (hasAggregation) {
+                        // SELECT * with aggregation is not allowed
+                        throw PQLSyntaxException(
+                            PQLSyntaxException.Problem.ExplicitSelectAllWithImplicitGroupBy,
+                            -1, -1, scope.toString()
+                        )
+                    }
+
+                    // Emit warning (ProcessM behavior: warn but continue)
+                    emitWarning(
+                        PQLSemanticException(
+                            "SELECT * conflicts with specific attribute selections for scope ${scope}. " +
+                                "The specific attributes will be ignored (SELECT * takes precedence).",
+                        ),
                     )
+
+                    // Clear the specific attributes (ProcessM behavior: SELECT * wins)
+                    _selectStandardAttributes[scope]?.clear()
+                    _selectOtherAttributes[scope]?.clear()
+                    _selectExpressions[scope]?.clear()
                 }
             }
         }
@@ -452,49 +656,42 @@ class Query(
     /**
      * Validate that classifiers are used correctly.
      *
-     * Rules:
-     * - Classifiers (c:name or classifier:name) can only appear in GROUP BY
-     * - Classifiers cannot appear in SELECT, WHERE, or ORDER BY
+     * ProcessM Rules:
+     * - Classifiers CAN appear in SELECT and GROUP BY
+     * - Classifiers CANNOT appear in WHERE clause
+     * - Classifiers CANNOT be used at LOG scope
+     *
+     * Note: Unlike some strict interpretations, ProcessM allows classifiers
+     * in SELECT clause for selecting classifier values.
      *
      * @throws InvalidClassifierUsageException if validation fails
      */
     fun validateClassifiers() {
-        // Check SELECT attributes
-        (selectStandardAttributes.values + selectOtherAttributes.values).flatten().forEach { attr ->
-            if (attr.isClassifier) {
+        // Check WHERE expression - classifiers not allowed
+        if (whereExpression != Expression.empty) {
+            val classifierAttrs = whereExpression.filter { it is Attribute && it.isClassifier }
+            if (classifierAttrs.isNotEmpty()) {
+                val attr = classifierAttrs.first() as Attribute
                 throw InvalidClassifierUsageException(
-                    "Classifier '${attr.name}' cannot be used in SELECT clause. " +
-                        "Classifiers are only allowed in GROUP BY.",
+                    "Classifier '${attr.name}' cannot be used in WHERE clause. " +
+                        "Classifiers are only allowed in SELECT and GROUP BY.",
                 )
             }
         }
 
-        // Check WHERE expression
-        whereExpression?.let { expr ->
-            if (expr is Expression) {
-                val classifierAttrs = expr.filter { it is Attribute && it.isClassifier }
-                if (classifierAttrs.isNotEmpty()) {
-                    val attr = classifierAttrs.first() as Attribute
-                    throw InvalidClassifierUsageException(
-                        "Classifier '${attr.name}' cannot be used in WHERE clause. " +
-                            "Classifiers are only allowed in GROUP BY.",
-                    )
-                }
-            }
-        }
+        // Check for classifiers at LOG scope - not allowed
+        val logClassifiers = (selectStandardAttributes[Scope.Log].orEmpty() +
+            selectOtherAttributes[Scope.Log].orEmpty() +
+            groupByStandardAttributes[Scope.Log].orEmpty() +
+            groupByOtherAttributes[Scope.Log].orEmpty())
+            .filter { it.isClassifier }
 
-        // Check ORDER BY expressions
-        orderByExpressions.values.flatten().forEach { ordered ->
-            if (ordered.expression is Expression) {
-                val classifierAttrs = ordered.expression.filter { it is Attribute && it.isClassifier }
-                if (classifierAttrs.isNotEmpty()) {
-                    val attr = classifierAttrs.first() as Attribute
-                    throw InvalidClassifierUsageException(
-                        "Classifier '${attr.name}' cannot be used in ORDER BY clause. " +
-                            "Classifiers are only allowed in GROUP BY.",
-                    )
-                }
-            }
+        if (logClassifiers.isNotEmpty()) {
+            val attr = logClassifiers.first()
+            throw InvalidClassifierUsageException(
+                "Classifier '${attr.name}' cannot be used at LOG scope. " +
+                    "Classifiers are only available at TRACE and EVENT scopes.",
+            )
         }
     }
 
@@ -544,21 +741,21 @@ class Query(
      * @throws PQLSemanticException if validation fails
      */
     fun validateWhereClause() {
-        whereExpression?.let { expr ->
-            if (expr is Expression) {
-                // Check for aggregation functions in WHERE clause
-                val aggFunctions = expr.filter {
-                    it is com.processm.processminterpreter.pql.model.Function &&
-                        it.functionType == FunctionType.AGGREGATION
-                }
+        if (whereExpression != Expression.empty) {
+            // Check for aggregation functions in WHERE clause
+            val aggFunctions = whereExpression.filter {
+                it is com.processm.processminterpreter.pql.model.Function &&
+                    it.functionType == FunctionType.Aggregation
+            }
 
-                if (aggFunctions.isNotEmpty()) {
-                    val func = aggFunctions.first() as com.processm.processminterpreter.pql.model.Function
-                    throw PQLSemanticException(
-                        "Aggregation function '${func.name}' cannot be used in WHERE clause. " +
-                            "Use HAVING clause instead (not yet implemented).",
-                    )
-                }
+            if (aggFunctions.isNotEmpty()) {
+                val func = aggFunctions.first() as com.processm.processminterpreter.pql.model.Function
+                throw PQLSyntaxException(
+                    PQLSyntaxException.Problem.AggregationFunctionInWhere,
+                    func.line,
+                    func.charPositionInLine,
+                    func.name
+                )
             }
         }
     }
@@ -606,7 +803,9 @@ class Query(
         selectExpressions.values.flatten().forEach { checkExpression(it) }
 
         // Check WHERE expression
-        whereExpression?.let { checkExpression(it) }
+        if (whereExpression != Expression.empty) {
+            checkExpression(whereExpression)
+        }
 
         // Check GROUP BY attributes
         groupByStandardAttributes.values.forEach { checkAttributes(it) }
@@ -614,7 +813,118 @@ class Query(
 
         // Check ORDER BY expressions
         orderByExpressions.values.flatten().forEach { ordered ->
-            checkExpression(ordered.expression)
+            checkExpression(ordered.base)
+        }
+    }
+
+    /**
+     * Validate that hoisting is not used in SELECT or ORDER BY clauses,
+     * except within aggregation functions.
+     *
+     * ProcessM Rule:
+     * - Hoisting (^ or ^^) is ONLY allowed in:
+     *   - WHERE clause
+     *   - GROUP BY clause
+     *   - INSIDE aggregation functions in SELECT/ORDER BY
+     *
+     * - Hoisting is FORBIDDEN in:
+     *   - SELECT clause (outside of aggregation)
+     *   - ORDER BY clause
+     *
+     * Examples:
+     * - SELECT ^e:name → ERROR (hoisting in SELECT)
+     * - SELECT count(^e:name) → OK (hoisting inside aggregation)
+     * - ORDER BY ^e:name → ERROR (hoisting in ORDER BY)
+     * - WHERE ^e:name = 'X' → OK (hoisting in WHERE allowed)
+     * - GROUP BY ^e:name → OK (hoisting in GROUP BY allowed)
+     *
+     * @throws PQLSemanticException if hoisting is found in forbidden location
+     */
+    fun validateHoistingInSelectAndOrderBy() {
+        // Check SELECT attributes (direct hoisting not allowed)
+        (selectStandardAttributes.values.flatten() + selectOtherAttributes.values.flatten()).forEach { attr ->
+            if (attr.hoistingPrefix.isNotEmpty()) {
+                throw PQLSyntaxException(
+                    PQLSyntaxException.Problem.ScopeHoistingInSelectOrOrderBy,
+                    attr.line,
+                    attr.charPositionInLine,
+                    attr.toString()
+                )
+            }
+        }
+
+        // Check SELECT expressions (hoisting allowed only inside aggregation functions)
+        selectExpressions.values.flatten().forEach { expr ->
+            validateExpressionHoisting(expr, "SELECT")
+        }
+
+        // Check ORDER BY expressions (hoisting not allowed at all, even in functions)
+        orderByExpressions.values.flatten().forEach { ordered ->
+            validateExpressionHoistingStrict(ordered.base, "ORDER BY")
+        }
+    }
+
+    /**
+     * Helper method to validate hoisting in expressions.
+     * Hoisting is allowed inside aggregation functions, but not elsewhere.
+     *
+     * @param expr the expression to validate
+     * @param clauseName the clause name for error messages
+     */
+    private fun validateExpressionHoisting(expr: IExpression, clauseName: String) {
+        when (expr) {
+            is Function -> {
+                // If it's an aggregation function, hoisting inside is allowed - skip validation
+                if (expr.functionType == FunctionType.Aggregation) {
+                    return
+                }
+                // For scalar functions, check children
+                expr.children.forEach { child ->
+                    validateExpressionHoisting(child, clauseName)
+                }
+            }
+            is Attribute -> {
+                if (expr.hoistingPrefix.isNotEmpty()) {
+                    throw PQLSyntaxException(
+                        PQLSyntaxException.Problem.ScopeHoistingInSelectOrOrderBy,
+                        expr.line,
+                        expr.charPositionInLine,
+                        expr.toString()
+                    )
+                }
+            }
+            is Expression -> {
+                expr.children.forEach { child ->
+                    validateExpressionHoisting(child, clauseName)
+                }
+            }
+        }
+    }
+
+    /**
+     * Helper method to validate hoisting strictly - no hoisting allowed at all.
+     * Used for ORDER BY where hoisting is never allowed.
+     *
+     * @param expr the expression to validate
+     * @param clauseName the clause name for error messages
+     */
+    private fun validateExpressionHoistingStrict(expr: IExpression, clauseName: String) {
+        when (expr) {
+            is Attribute -> {
+                if (expr.hoistingPrefix.isNotEmpty()) {
+                    throw PQLSyntaxException(
+                        PQLSyntaxException.Problem.ScopeHoistingInSelectOrOrderBy,
+                        expr.line,
+                        expr.charPositionInLine,
+                        expr.toString()
+                    )
+                }
+            }
+            is Expression -> {
+                expr.children.forEach { child ->
+                    validateExpressionHoistingStrict(child, clauseName)
+                }
+            }
         }
     }
 
@@ -631,6 +941,7 @@ class Query(
         validateGroupBy()
         validateClassifiers()
         validateHoisting()
+        validateHoistingInSelectAndOrderBy()
         validateWhereClause()
         validateDeleteConstraints()
     }
@@ -645,14 +956,32 @@ class Query(
      * @throws PQLSemanticException if validation fails
      */
     fun validateGroupBy() {
+        // Check if there is any aggregation in the query (global check)
+        val hasAnyAggregation = selectExpressions.values.flatten().any { expr ->
+            (expr as? Expression)?.filter { it is com.processm.processminterpreter.pql.model.Function && it.functionType == FunctionType.Aggregation }?.isNotEmpty() == true
+        } || _orderByExpressions.values.flatten().any { ordered ->
+            (ordered.base as? Expression)?.filter { it is com.processm.processminterpreter.pql.model.Function && it.functionType == FunctionType.Aggregation }?.isNotEmpty() == true
+        }
+
+        // Check: SELECT * with aggregation is not allowed
+        // ProcessM: ExplicitSelectAllWithImplicitGroupBy
+        if (hasAnyAggregation) {
+            Scope.values().forEach { scope ->
+                if (_selectAll[scope] == true) {
+                    throw PQLSyntaxException(
+                        PQLSyntaxException.Problem.ExplicitSelectAllWithImplicitGroupBy,
+                        -1, -1, scope.toString()
+                    )
+                }
+            }
+        }
+
         // Iterate over all scopes
-        Scope.entries.forEach { scope ->
+        Scope.values().forEach { scope ->
             val isGrouped = isGroupBy[scope] == true
 
             // Check if there is any aggregation in the query
-            val hasAggregation = selectExpressions.values.flatten().any { expr ->
-                 (expr as? Expression)?.filterRecursively { it is com.processm.processminterpreter.pql.model.Function && it.functionType == FunctionType.AGGREGATION }?.isNotEmpty() == true
-            }
+            val hasAggregation = hasAnyAggregation
 
             if (hasAggregation) {
                 // If we have aggregation, all non-aggregated attributes must be grouped
@@ -675,7 +1004,7 @@ class Query(
                 }
             } else if (isGrouped) {
                 // If no aggregation but we have GROUP BY, then selected attributes must be in GROUP BY
-                
+
                  // Check standard attributes in SELECT
                 selectStandardAttributes[scope]?.forEach { attr ->
                     validateAttributeInGroupBy(attr)
@@ -685,10 +1014,24 @@ class Query(
                 selectOtherAttributes[scope]?.forEach { attr ->
                     validateAttributeInGroupBy(attr)
                 }
-                
+
                 // Check expressions in SELECT
                 selectExpressions[scope]?.forEach { expr ->
                      validateExpressionInGroupBy(expr)
+                }
+
+                // Check ORDER BY expressions
+                _orderByExpressions[scope]?.forEach { ordered ->
+                    validateExpressionInGroupBy(ordered.base)
+                }
+            }
+        }
+
+        // Also check: if ANY scope has GROUP BY, ORDER BY attributes in that scope must be validated
+        Scope.values().forEach { scope ->
+            if (isGroupBy[scope] == true) {
+                _orderByExpressions[scope]?.forEach { ordered ->
+                    validateExpressionInGroupBy(ordered.base)
                 }
             }
         }
@@ -714,8 +1057,8 @@ class Query(
         // and we group by TRACE or EVENT (which implies we are inside the log), it's valid.
         // For TRACE scope, grouping by EVENT does NOT imply TRACE is constant (unless grouping by traceId),
         // so we enforce strict GROUP BY for TRACE.
-        if (scope == Scope.LOG) {
-            val lowerScopes = Scope.entries.filter { it.ordinal > scope.ordinal }
+        if (scope == Scope.Log) {
+            val lowerScopes = Scope.values().filter { it.ordinal > scope.ordinal }
             if (lowerScopes.any { isGroupBy[it] == true }) {
                 return
             }
@@ -740,13 +1083,16 @@ class Query(
             }
         }
         
-        throw PQLSemanticException(
-            "Attribute '$attr' must be present in GROUP BY clause or used in an aggregation function.",
+        throw PQLSyntaxException(
+            PQLSyntaxException.Problem.AttributeNotInGroupBy,
+            attr.line,
+            attr.charPositionInLine,
+            attr.toString()
         )
     }
 
     private fun validateExpressionInGroupBy(expr: IExpression) {
-        if (expr is com.processm.processminterpreter.pql.model.Function && expr.functionType == FunctionType.AGGREGATION) {
+        if (expr is com.processm.processminterpreter.pql.model.Function && expr.functionType == FunctionType.Aggregation) {
             return // Aggregations are valid
         }
 
@@ -778,6 +1124,47 @@ class Query(
         }
     }
 
+    /**
+     * Apply limits to the query.
+     *
+     * ProcessM compatibility: Original signature with nullable Long parameters.
+     * Sets limits only if parameter is not null.
+     *
+     * @param log limit for LOG scope (or null to skip)
+     * @param trace limit for TRACE scope (or null to skip)
+     * @param event limit for EVENT scope (or null to skip)
+     */
+    fun applyLimits(log: Long?, trace: Long?, event: Long?) {
+        log?.let {
+            val currentLimit = _limit[Scope.Log]
+            if (currentLimit == null || currentLimit > it) {
+                _limit[Scope.Log] = it
+            }
+        }
+        trace?.let {
+            val currentLimit = _limit[Scope.Trace]
+            if (currentLimit == null || currentLimit > it) {
+                _limit[Scope.Trace] = it
+            }
+        }
+        event?.let {
+            val currentLimit = _limit[Scope.Event]
+            if (currentLimit == null || currentLimit > it) {
+                _limit[Scope.Event] = it
+            }
+        }
+    }
+
+    // ========================================
+    // INIT BLOCK (must be last to ensure all properties are initialized)
+    // ========================================
+
+    init {
+        if (_shouldParse) {
+            parseAndBuild(query)
+        }
+    }
+
     override fun toString(): String {
         return query.ifEmpty { "Query()" }
     }
@@ -788,10 +1175,12 @@ class Query(
  *
  * Used in ORDER BY clauses to specify both what to order by
  * and in which direction.
+ *
+ * ProcessM compatibility: Uses 'base' property name instead of 'expression'.
  */
 data class OrderedExpression(
-    val expression: IExpression,
+    val base: IExpression,
     val direction: OrderDirection,
-) {
-    override fun toString(): String = "$expression ${direction.name}"
+) : IExpression by base {
+    override fun toString(): String = "$base $direction"
 }

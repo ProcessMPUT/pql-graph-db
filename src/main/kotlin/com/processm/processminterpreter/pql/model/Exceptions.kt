@@ -1,5 +1,7 @@
 package com.processm.processminterpreter.pql.model
 
+import org.antlr.v4.runtime.RecognitionException
+
 /**
  * Base exception for all PQL-related errors.
  *
@@ -11,24 +13,184 @@ sealed class PQLException(
 ) : RuntimeException(message, cause)
 
 /**
- * Syntax error in PQL query.
+ * A syntax error in PQL other than [PQLParserException].
  *
- * Thrown during parsing when the query doesn't match the grammar.
+ * This exception is thrown for semantic/validation errors that are
+ * detected after parsing but before query execution.
  *
- * Examples:
- * - Missing quotes: select event:name where activity = test
- * - Invalid operator: select event:name where activity == 'test'
- * - Unclosed string: select event:name where activity = 'test
+ * Based on ProcessM: https://github.com/ProcessMPUT/processm
  */
-class PQLSyntaxException(
+class PQLSyntaxException : PQLException {
+    val problem: Problem
+    val line: Int
+    val charPositionInLine: Int
+    val args: Array<out Any>
+
+    /**
+     * Primary constructor with Problem enum.
+     */
+    constructor(
+        problem: Problem,
+        line: Int = -1,
+        charPositionInLine: Int = -1,
+        vararg args: Any,
+    ) : super("Line $line position $charPositionInLine: $problem ${args.toList()}") {
+        this.problem = problem
+        this.line = line
+        this.charPositionInLine = charPositionInLine
+        this.args = args
+    }
+
+    /**
+     * Secondary constructor for simple error messages (backward compatibility).
+     */
+    constructor(
+        line: Int,
+        charPositionInLine: Int,
+        message: String,
+        cause: Throwable? = null,
+    ) : super("Line $line position $charPositionInLine: $message", cause) {
+        this.problem = Problem.UnknownAttributeType
+        this.line = line
+        this.charPositionInLine = charPositionInLine
+        this.args = arrayOf(message)
+    }
+    /**
+     * Enumeration of all possible PQL syntax/semantic problems.
+     *
+     * ProcessM compatibility: These match the original ProcessM Problem enum.
+     */
+    enum class Problem {
+        /** Aggregation function used in WHERE clause (not allowed) */
+        AggregationFunctionInWhere,
+
+        /** Classifier used in WHERE clause (not allowed) */
+        ClassifierInWhere,
+
+        /** Same scope specified multiple times in LIMIT */
+        DuplicateLimit,
+
+        /** Same scope specified multiple times in OFFSET */
+        DuplicateOffset,
+
+        /** LIMIT/OFFSET requires positive integer */
+        PositiveIntegerRequired,
+
+        /** Decimal part was dropped from LIMIT/OFFSET value (warning) */
+        DecimalPartDropped,
+
+        /** Scope prefix required for attribute */
+        ScopeRequired,
+
+        /** Scope hoisting (^ or ^^) not allowed in SELECT or ORDER BY */
+        ScopeHoistingInSelectOrOrderBy,
+
+        /** Unexpected child expression type */
+        UnexpectedChild,
+
+        /** SELECT * used with implicit GROUP BY */
+        ExplicitSelectAllWithImplicitGroupBy,
+
+        /** Missing attributes when aggregation is used */
+        MissingAttributesInAggregation,
+
+        /** SELECT * conflicts with specific attribute references (warning) */
+        SelectAllConflictsWithReferencingByName,
+
+        /** Mixed scopes in expression */
+        MixedScopes,
+
+        /** Attribute not in GROUP BY clause */
+        AttributeNotInGroupBy,
+
+        /** ORDER BY clause was removed due to implicit GROUP BY (warning) */
+        OrderByClauseRemoved,
+
+        /** Classifier used on LOG scope (not allowed) */
+        ClassifierOnLog,
+
+        /** Cannot hoist beyond LOG scope */
+        NoHoistingBeyondLong,
+
+        /** Unknown attribute type */
+        UnknownAttributeType,
+
+        /** No such attribute exists */
+        NoSuchAttribute,
+
+        /** Invalid boolean value */
+        InvalidBoolean,
+
+        /** Invalid number value */
+        InvalidNumber,
+
+        /** Invalid datetime value */
+        InvalidDateTime,
+
+        /** Invalid UUID value */
+        InvalidUUID,
+    }
+}
+
+/**
+ * Represents an offending token sequence.
+ *
+ * Based on ProcessM: https://github.com/ProcessMPUT/processm
+ */
+data class TokenSequence(
+    val value: String,
+    val startIndex: Int = -1,
+    val stopIndex: Int = -1,
+) {
+    override fun toString(): String = value
+}
+
+/**
+ * A PQL error detected by the ANTLR parser.
+ *
+ * This exception is thrown when the parser cannot recognize the input.
+ *
+ * Based on ProcessM: https://github.com/ProcessMPUT/processm
+ */
+class PQLParserException(
+    val problem: Problem,
     val line: Int,
     val charPositionInLine: Int,
-    message: String,
-    cause: Throwable? = null,
+    val offendingToken: TokenSequence,
+    val expectedTokens: Collection<String>?,
+    originalMessage: String?,
+    val baseException: RecognitionException? = null,
 ) : PQLException(
-    "Syntax error at $line:$charPositionInLine - $message",
-    cause,
-)
+    "Line $line position $charPositionInLine: $originalMessage (offendingToken='$offendingToken' expectedTokens='$expectedTokens' problem=$problem)",
+) {
+    /**
+     * Enumeration of all possible ANTLR parser problems.
+     *
+     * ProcessM compatibility: These match the original ProcessM Problem enum.
+     */
+    enum class Problem {
+        /** Unknown parser error */
+        Unknown,
+
+        /** Failed predicate in grammar */
+        FailedPredicate,
+
+        /** Input doesn't match expected token */
+        InputMismatch,
+
+        /** Lexer couldn't find viable alternative */
+        LexerNoViableAlt,
+
+        /** Parser couldn't find viable alternative */
+        NoViableAlt,
+
+        /** Missing expected token */
+        MissingToken,
+
+        /** Unwanted token in input */
+        UnwantedToken,
+    }
+}
 
 /**
  * Semantic error in PQL query.
@@ -104,4 +266,4 @@ class InvalidDeleteException(
  */
 class InvalidFunctionException(
     message: String,
-) : PQLSemanticException(message)
+) : IllegalArgumentException(message)

@@ -2,6 +2,7 @@ package com.processm.processminterpreter.processm
 
 import com.processm.processminterpreter.xes.XESLoader
 import com.processm.processminterpreter.xes.XESParser
+import org.neo4j.driver.Driver
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.stereotype.Component
@@ -20,16 +21,28 @@ class TestDataLoader {
     @Autowired
     private lateinit var xesLoader: XESLoader
 
+    @Autowired
+    private lateinit var neo4jDriver: Driver
+
     // Track loaded logs to avoid re-loading
     private val loadedLogs = mutableMapOf<String, String>()
 
     /**
      * Load JournalReview-extra.xes test log
      * Returns the log ID in Neo4j
+     *
+     * @param customLogId optional custom log ID (default: "JournalReview-test")
      */
-    fun loadJournalReviewLog(): String {
-        return loadedLogs.getOrPut("JournalReview") {
-            logger.info("Loading JournalReview-extra.xes test data...")
+    fun loadJournalReviewLog(customLogId: String = "JournalReview-test"): String {
+        return loadedLogs.getOrPut(customLogId) {
+            // Check if log already exists in Neo4j (from previous test run)
+            val existingLogId = checkLogExists(customLogId)
+            if (existingLogId != null) {
+                logger.info("Log already exists in Neo4j: $customLogId")
+                return@getOrPut existingLogId
+            }
+
+            logger.info("Loading JournalReview-extra.xes test data with logId: $customLogId...")
 
             val stream = javaClass.getResourceAsStream("/JournalReview-extra.xes")
                 ?: throw RuntimeException("Cannot find JournalReview-extra.xes in test resources")
@@ -37,7 +50,7 @@ class TestDataLoader {
             stream.use {
                 try {
                     // Load XES file into Neo4j
-                    val result = xesLoader.loadXESFile(it, "JournalReview-test")
+                    val result = xesLoader.loadXESFile(it, customLogId)
                     if (!result.success || result.logId == null) {
                         throw RuntimeException("Failed to load JournalReview-extra.xes: ${result.message}")
                     }
@@ -49,6 +62,28 @@ class TestDataLoader {
                     throw RuntimeException("Failed to load test data: ${e.message}", e)
                 }
             }
+        }
+    }
+
+    /**
+     * Check if a log with the given ID already exists in Neo4j
+     */
+    private fun checkLogExists(logId: String): String? {
+        return try {
+            neo4jDriver.session().use { session ->
+                val result = session.run(
+                    "MATCH (log:Log {logId: \$logId}) RETURN log.logId as logId LIMIT 1",
+                    mapOf("logId" to logId)
+                )
+                if (result.hasNext()) {
+                    result.single().get("logId").asString()
+                } else {
+                    null
+                }
+            }
+        } catch (e: Exception) {
+            logger.warn("Error checking if log exists: ${e.message}")
+            null
         }
     }
 

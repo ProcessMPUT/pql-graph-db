@@ -7,20 +7,19 @@ import com.processm.processminterpreter.pql.visitor.QLToCypherVisitor
 import org.antlr.v4.runtime.CharStreams
 import org.antlr.v4.runtime.CommonTokenStream
 import org.slf4j.LoggerFactory
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
+import com.processm.processminterpreter.config.ProcessMConfig
 import org.springframework.stereotype.Component
 
 /**
  * ANTLR-based PQL to Cypher translator
  *
- * This is the modern, production-ready implementation using ANTLR4 parser.
- * It provides better error messages, easier maintenance, and extensibility compared to the regex-based approach.
- *
- * Activated by default, or explicitly with: pql.parser.type=antlr
+ * Uses ANTLR4 parser with ProcessM's official QL.g4 grammar for parsing PQL queries
+ * and translating them to Neo4j Cypher.
  */
 @Component
-@ConditionalOnProperty(name = ["pql.parser.type"], havingValue = "antlr", matchIfMissing = true)
-class AntlrPQLTranslator : PQLTranslator {
+class AntlrPQLTranslator(
+    private val processMConfig: ProcessMConfig
+) : PQLTranslator {
 
     private val logger = LoggerFactory.getLogger(AntlrPQLTranslator::class.java)
 
@@ -60,7 +59,7 @@ class AntlrPQLTranslator : PQLTranslator {
             errorListener.throwIfErrors()
 
             // Step 8: Visit the AST and generate Cypher query
-            val visitor = QLToCypherVisitor(logId)
+            val visitor = QLToCypherVisitor(logId, processMConfig.defaultTraceLimit)
             val result = visitor.visit(tree) as CypherQuery
 
             logger.debug("Generated Cypher: ${result.query}")
