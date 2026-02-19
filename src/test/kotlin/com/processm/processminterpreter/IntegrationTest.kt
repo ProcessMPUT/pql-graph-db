@@ -1,5 +1,6 @@
 package com.processm.processminterpreter
 
+import com.processm.processminterpreter.config.ProcessMConfig
 import com.processm.processminterpreter.pql.AntlrPQLTranslator
 import com.processm.processminterpreter.pql.interpreter.BaseInterpreterTest
 import com.processm.processminterpreter.service.LogService
@@ -26,7 +27,7 @@ class IntegrationTest : BaseInterpreterTest() {
     fun initServices() {
         logService = Mockito.mock(LogService::class.java)
         xesLoader = XESLoader(XESParser(), logService, driver)
-        queryService = PQLQueryService(AntlrPQLTranslator(), driver, XESWriter())
+        queryService = PQLQueryService(AntlrPQLTranslator(ProcessMConfig()), driver, XESWriter())
     }
 
     @Test

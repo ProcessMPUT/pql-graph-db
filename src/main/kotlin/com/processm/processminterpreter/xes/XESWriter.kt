@@ -7,6 +7,7 @@ import java.io.OutputStreamWriter
 import java.nio.charset.StandardCharsets
 import java.time.LocalDateTime
 import java.time.ZoneId
+import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.zip.GZIPOutputStream
 
@@ -26,7 +27,7 @@ class XESWriter {
     private val xesDateFormatter =
         DateTimeFormatter
             .ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSSXXX")
-            .withZone(ZoneId.systemDefault())
+            .withZone(ZoneOffset.UTC)
 
     /**
      * Write query results to XES format
@@ -371,7 +372,7 @@ class XESWriter {
     /**
      * Format LocalDateTime to XES date format
      */
-    private fun formatDateTime(dateTime: LocalDateTime): String = dateTime.atZone(ZoneId.systemDefault()).format(xesDateFormatter)
+    private fun formatDateTime(dateTime: LocalDateTime): String = dateTime.atZone(ZoneOffset.UTC).format(xesDateFormatter)
 
     /**
      * Escape XML special characters

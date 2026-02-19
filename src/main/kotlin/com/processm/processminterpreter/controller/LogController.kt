@@ -67,8 +67,7 @@ class LogController(
 
             val filename = file.originalFilename ?: ""
             val isXES = filename.endsWith(".xes", ignoreCase = true)
-            val isGzippedXES = filename.endsWith(".xes.gz", ignoreCase = true) ||
-                filename.endsWith(".xes.gzip", ignoreCase = true)
+            val isGzippedXES = filename.endsWith(".xes.gz", ignoreCase = true) || filename.endsWith(".xes.gzip", ignoreCase = true)
 
             if (!isXES && !isGzippedXES) {
                 return ResponseEntity.badRequest().body(
@@ -187,16 +186,13 @@ class LogController(
         logger.info("Creating new log: ${request.logId}")
 
         return try {
-            val log =
-                logService.createLog(
-                    logId = request.logId,
-                    name = request.name,
-                    attributes = request.attributes,
-                )
+            val log = logService.createLog(
+                logId = request.logId,
+                name = request.name,
+                attributes = request.attributes,
+            )
 
-            ResponseEntity
-                .status(HttpStatus.CREATED)
-                .body(LogResponse.from(log))
+            ResponseEntity.status(HttpStatus.CREATED).body(LogResponse.from(log))
         } catch (e: IllegalArgumentException) {
             logger.warn("Failed to create log: ${e.message}")
             ResponseEntity.badRequest().build()
@@ -282,31 +278,30 @@ class LogController(
     fun searchLogs(
         @RequestBody request: LogSearchRequest,
     ): ResponseEntity<List<LogResponse>> {
-        logger.debug("Searching logs with criteria: $request")
+        logger.debug("Searching logs with criteria: {}", request)
 
         return try {
-            val logs =
-                when {
-                    !request.name.isNullOrBlank() -> {
-                        logService.searchLogsByName(request.name)
-                    }
-
-                    request.createdAfter != null && request.createdBefore != null -> {
-                        logService.getLogsCreatedBetween(request.createdAfter, request.createdBefore)
-                    }
-
-                    request.createdAfter != null -> {
-                        logService.getLogsCreatedAfter(request.createdAfter)
-                    }
-
-                    request.attributeKey != null && request.attributeValue != null -> {
-                        logService.findLogsByAttribute(request.attributeKey, request.attributeValue)
-                    }
-
-                    else -> {
-                        logService.getAllLogs()
-                    }
+            val logs = when {
+                !request.name.isNullOrBlank() -> {
+                    logService.searchLogsByName(request.name)
                 }
+
+                request.createdAfter != null && request.createdBefore != null -> {
+                    logService.getLogsCreatedBetween(request.createdAfter, request.createdBefore)
+                }
+
+                request.createdAfter != null -> {
+                    logService.getLogsCreatedAfter(request.createdAfter)
+                }
+
+                request.attributeKey != null && request.attributeValue != null -> {
+                    logService.findLogsByAttribute(request.attributeKey, request.attributeValue)
+                }
+
+                else -> {
+                    logService.getAllLogs()
+                }
+            }
 
             ResponseEntity.ok(logs.map { LogResponse.from(it) })
         } catch (e: IllegalArgumentException) {
@@ -330,12 +325,11 @@ class LogController(
         logger.info("Updating log: $logId")
 
         return try {
-            val updatedLog =
-                logService.updateLog(
-                    logId = logId,
-                    name = request.name,
-                    attributes = request.attributes,
-                )
+            val updatedLog = logService.updateLog(
+                logId = logId,
+                name = request.name,
+                attributes = request.attributes,
+            )
 
             ResponseEntity.ok(LogResponse.from(updatedLog))
         } catch (e: LogNotFoundException) {
@@ -362,12 +356,11 @@ class LogController(
         logger.info("Deleting log: $logId (deleteAllData: $deleteAllData)")
 
         return try {
-            val success =
-                if (deleteAllData) {
-                    logService.deleteLogWithAllData(logId)
-                } else {
-                    logService.deleteLog(logId)
-                }
+            val success = if (deleteAllData) {
+                logService.deleteLogWithAllData(logId)
+            } else {
+                logService.deleteLog(logId)
+            }
 
             if (success) {
                 ResponseEntity.ok(
@@ -402,7 +395,7 @@ class LogController(
     @RequestMapping(value = ["/{logId}"], method = [RequestMethod.HEAD])
     fun logExists(
         @PathVariable logId: String,
-    ): ResponseEntity<Void> {
+    ): ResponseEntity<Unit> {
         logger.debug("Checking if log exists: $logId")
 
         return try {
@@ -442,11 +435,10 @@ class LogController(
     fun handleException(e: Exception): ResponseEntity<ErrorResponse> {
         logger.error("Unhandled exception in LogController", e)
 
-        val errorResponse =
-            ErrorResponse(
-                error = e.javaClass.simpleName,
-                message = e.message ?: "An unexpected error occurred",
-            )
+        val errorResponse = ErrorResponse(
+            error = e.javaClass.simpleName,
+            message = e.message ?: "An unexpected error occurred",
+        )
 
         return ResponseEntity.internalServerError().body(errorResponse)
     }

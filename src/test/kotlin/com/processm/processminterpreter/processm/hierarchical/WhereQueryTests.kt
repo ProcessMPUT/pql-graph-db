@@ -102,7 +102,7 @@ class WhereQueryTests : HierarchicalTestsBase() {
     }
 
     @Test
-    @Disabled("Hoisted currency comparison not fully implemented - TDD spec from ProcessM")
+    @Disabled("Hoisting semantics: ^e:currency needs subquery support - TDD spec from ProcessM")
     fun whereLogicExprWithHoistingTest() {
         // ProcessM: where not(t:currency = ^e:currency) and l:id=$journal
         val result = q(
@@ -150,7 +150,6 @@ class WhereQueryTests : HierarchicalTestsBase() {
     }
 
     @Test
-    @Disabled("Non-standard custom attribute IS NOT NULL not fully implemented - TDD spec from ProcessM")
     fun whereNotNull() {
         // ProcessM: where l:id=$journal and [t:cost:total] is not null
         val result = q(

@@ -77,7 +77,6 @@ class SelectQueryTests : HierarchicalTestsBase() {
     }
 
     @Test
-    @Disabled("Full attribute matching not implemented - TDD spec from ProcessM")
     fun scopedSelectAll2Test() {
         // ProcessM: select t:*, e:*, l:* where l:concept:name like 'Jour%Rev%' and l:id=$journal
         val result = q(

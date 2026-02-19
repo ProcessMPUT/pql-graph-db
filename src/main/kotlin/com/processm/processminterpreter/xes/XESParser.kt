@@ -10,6 +10,8 @@ import org.w3c.dom.Element
 import org.w3c.dom.Node
 import java.io.InputStream
 import java.time.LocalDateTime
+import java.time.OffsetDateTime
+import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
 import java.util.*
@@ -26,10 +28,15 @@ class XESParser {
     private val logger = LoggerFactory.getLogger(XESParser::class.java)
 
     // XES date format patterns
-    private val dateFormatters = listOf(
+    // Formatters with timezone offset (convert to UTC for ProcessM compatibility)
+    private val offsetFormatters = listOf(
         DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSSXXX"),
-        DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS"),
         DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ssXXX"),
+    )
+
+    // Formatters without timezone (stored as-is)
+    private val localFormatters = listOf(
+        DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS"),
         DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss"),
         DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"),
         DateTimeFormatter.ISO_LOCAL_DATE_TIME,
@@ -237,7 +244,19 @@ class XESParser {
     private fun parseTimestamp(timestampStr: String?): LocalDateTime? {
         if (timestampStr.isNullOrBlank()) return null
 
-        for (formatter in dateFormatters) {
+        // First try parsing with timezone offset and convert to UTC (ProcessM compatibility)
+        // XES timestamps often have timezone offsets like +01:00 or +02:00
+        for (formatter in offsetFormatters) {
+            try {
+                val odt = OffsetDateTime.parse(timestampStr, formatter)
+                return odt.atZoneSameInstant(ZoneOffset.UTC).toLocalDateTime()
+            } catch (e: DateTimeParseException) {
+                // Try next formatter
+            }
+        }
+
+        // Fallback: parse as LocalDateTime (no timezone)
+        for (formatter in localFormatters) {
             try {
                 return LocalDateTime.parse(timestampStr, formatter)
             } catch (e: DateTimeParseException) {

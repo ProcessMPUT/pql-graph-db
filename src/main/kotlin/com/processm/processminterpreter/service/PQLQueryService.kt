@@ -45,7 +45,7 @@ class PQLQueryService(
             val flatResults = executeCypherQuery(cypherQuery)
 
             // Reconstruct hierarchical structure with limits
-            val hierarchicalLogs = HierarchyReconstructor.reconstruct(flatResults, cypherQuery.hierarchicalLimits)
+            val hierarchicalLogs = HierarchyReconstructor.reconstruct(flatResults, cypherQuery.hierarchicalLimits, cypherQuery.columnAliases)
 
             PQLQueryResult(
                 success = true,

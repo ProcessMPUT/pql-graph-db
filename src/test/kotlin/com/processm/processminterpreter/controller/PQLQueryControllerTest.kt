@@ -27,6 +27,9 @@ class PQLQueryControllerTest {
     @MockBean
     private lateinit var remoteProcessMService: com.processm.processminterpreter.service.RemoteProcessMService
 
+    @MockBean
+    private lateinit var processMConfig: com.processm.processminterpreter.config.ProcessMConfig
+
     @Autowired
     private lateinit var objectMapper: ObjectMapper
 

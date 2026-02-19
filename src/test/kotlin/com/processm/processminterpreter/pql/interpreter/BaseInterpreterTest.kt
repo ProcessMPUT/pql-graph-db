@@ -1,5 +1,6 @@
 package com.processm.processminterpreter.pql.interpreter
 
+import com.processm.processminterpreter.config.ProcessMConfig
 import com.processm.processminterpreter.pql.AntlrPQLTranslator
 import com.processm.processminterpreter.service.PQLQueryService
 import com.processm.processminterpreter.xes.XESWriter
@@ -38,7 +39,7 @@ abstract class BaseInterpreterTest {
         xesWriter = XESWriter()
 
         pqlQueryService = PQLQueryService(
-            AntlrPQLTranslator(),
+            AntlrPQLTranslator(ProcessMConfig()),
             driver,
             xesWriter
         )

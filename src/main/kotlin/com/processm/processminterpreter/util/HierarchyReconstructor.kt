@@ -1,6 +1,7 @@
 package com.processm.processminterpreter.util
 
 import com.processm.processminterpreter.model.hierarchical.*
+import com.processm.processminterpreter.pql.ColumnAlias
 import org.slf4j.LoggerFactory
 import java.time.*
 import java.time.format.DateTimeFormatter
@@ -22,10 +23,15 @@ object HierarchyReconstructor {
      * @param hierarchicalLimits Optional hierarchical limits to apply (log, trace, event)
      * @return List of Log objects with hierarchical structure
      */
+    // Column alias metadata from QLToCypherVisitor — maps alias → PQL expression + scope
+    private var currentColumnAliases: Map<String, ColumnAlias> = emptyMap()
+
     fun reconstruct(
         flatResults: List<Map<String, Any?>>,
-        hierarchicalLimits: Map<String, Int?> = emptyMap()
+        hierarchicalLimits: Map<String, Int?> = emptyMap(),
+        columnAliases: Map<String, ColumnAlias> = emptyMap()
     ): List<Log> {
+        currentColumnAliases = columnAliases
         if (flatResults.isEmpty()) {
             return emptyList()
         }
@@ -99,6 +105,37 @@ object HierarchyReconstructor {
                 key.startsWith("event_") -> {
                     val attrName = key.substring(6)
                     result["event"]!![attrName] = value
+                }
+                // Check if this is a function-result alias (e.g., "year_event_time_timestamp_")
+                key in currentColumnAliases -> {
+                    val alias = currentColumnAliases[key]!!
+                    val scopeKey = when (alias.scope) {
+                        "EVENT" -> "event"
+                        "TRACE" -> "trace"
+                        "LOG" -> "log"
+                        else -> "log"
+                    }
+                    // ProcessM returns datetime extraction functions (year, month, day, etc.) as float,
+                    // but aggregation functions (count, sum) keep their original type (int).
+                    val isDatetimeExtraction = alias.pqlExpression.startsWith("year(") ||
+                            alias.pqlExpression.startsWith("month(") ||
+                            alias.pqlExpression.startsWith("day(") ||
+                            alias.pqlExpression.startsWith("hour(") ||
+                            alias.pqlExpression.startsWith("minute(") ||
+                            alias.pqlExpression.startsWith("second(") ||
+                            alias.pqlExpression.startsWith("dayofweek(") ||
+                            alias.pqlExpression.startsWith("quarter(")
+                    val adjustedValue = if (isDatetimeExtraction) {
+                        when (value) {
+                            is Int -> value.toDouble()
+                            is Long -> value.toDouble()
+                            else -> value
+                        }
+                    } else {
+                        value
+                    }
+                    // Use the PQL expression as the attribute name (e.g., "year(event:time:timestamp)")
+                    result[scopeKey]!![alias.pqlExpression] = adjustedValue
                 }
                 // If no scope prefix, treat as log-level attribute
                 // Skip keys that are full entity names (properties() results, not projected columns)
@@ -514,7 +551,7 @@ object HierarchyReconstructor {
                 return when (value) {
                     is Instant -> value
                     is ZonedDateTime -> value.toInstant()
-                    is LocalDateTime -> value.atZone(ZoneId.systemDefault()).toInstant()
+                    is LocalDateTime -> value.atZone(ZoneOffset.UTC).toInstant()
                     is String -> parseTimestampString(value)
                     else -> null
                 }
@@ -537,7 +574,7 @@ object HierarchyReconstructor {
             } catch (e2: Exception) {
                 try {
                     // Try LocalDateTime
-                    LocalDateTime.parse(value).atZone(ZoneId.systemDefault()).toInstant()
+                    LocalDateTime.parse(value).atZone(ZoneOffset.UTC).toInstant()
                 } catch (e3: Exception) {
                     logger.warn("Could not parse timestamp: $value")
                     null

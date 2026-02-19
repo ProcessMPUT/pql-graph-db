@@ -29,7 +29,7 @@ object XESJsonConverter {
      * @param isProjectedQuery Whether this is a projected query (SELECT specific fields vs SELECT *)
      * @return Map representing XES JSON structure
      */
-    fun convertToXESJson(logs: List<Log>, isProjectedQuery: Boolean = false, excludeEventAttrs: List<String> = emptyList()): Map<String, Any> {
+    fun convertToXESJson(logs: List<Log>, isProjectedQuery: Boolean = false, excludeEventAttrs: List<String> = emptyList(), projectedTraceAttrs: Set<String> = emptySet()): Map<String, Any> {
         logger.debug("Converting ${logs.size} logs to XES JSON format (projected: $isProjectedQuery)")
 
         if (logs.isEmpty()) {
@@ -38,13 +38,13 @@ object XESJsonConverter {
 
         // For now, convert first log (ProcessM typically works with single log)
         val log = logs.first()
-        return mapOf("log" to convertLog(log, isProjectedQuery, excludeEventAttrs))
+        return mapOf("log" to convertLog(log, isProjectedQuery, excludeEventAttrs, projectedTraceAttrs))
     }
 
     /**
      * Convert a single Log to JSON structure
      */
-    private fun convertLog(log: Log, isProjectedQuery: Boolean = false, excludeEventAttrs: List<String> = emptyList()): Map<String, Any> {
+    private fun convertLog(log: Log, isProjectedQuery: Boolean = false, excludeEventAttrs: List<String> = emptyList(), projectedTraceAttrs: Set<String> = emptySet()): Map<String, Any> {
         val result = mutableMapOf<String, Any>()
 
         // XES metadata attributes (must be first)
@@ -142,7 +142,7 @@ object XESJsonConverter {
         // Traces (single object if 1 trace, array if >1)
         val traces = log.traces.toList()
         if (traces.isNotEmpty()) {
-            val traceMaps = traces.map { trace -> convertTrace(trace, excludeEventAttrs) }
+            val traceMaps = traces.map { trace -> convertTrace(trace, excludeEventAttrs, isProjectedQuery, projectedTraceAttrs) }
             result["trace"] = toSingleOrArray(traceMaps)
         }
 
@@ -152,25 +152,40 @@ object XESJsonConverter {
     /**
      * Convert a single Trace to JSON structure
      */
-    private fun convertTrace(trace: Trace, excludeEventAttrs: List<String> = emptyList()): Map<String, Any> {
+    private fun convertTrace(trace: Trace, excludeEventAttrs: List<String> = emptyList(), isProjectedQuery: Boolean = false, projectedTraceAttrs: Set<String> = emptySet()): Map<String, Any> {
         val result = mutableMapOf<String, Any>()
         val traceAttributes = mutableMapOf<String, MutableList<Map<String, String>>>()
 
-        // Standard attributes
-        trace.conceptName?.let { name ->
-            addAttribute(traceAttributes, "string", "concept:name", name)
+        // For projected queries, only include trace attributes that were explicitly selected
+        // ProcessM omits trace concept:name when t:name is not in SELECT
+        val includeTraceName = !isProjectedQuery || "t_name" in projectedTraceAttrs || "concept:name" in projectedTraceAttrs
+        val includeTraceId = !isProjectedQuery || "t_id" in projectedTraceAttrs || "identity:id" in projectedTraceAttrs
+        val includeTraceCurrency = !isProjectedQuery || "t_currency" in projectedTraceAttrs || "cost:currency" in projectedTraceAttrs
+        val includeTraceTotal = !isProjectedQuery || "t_total" in projectedTraceAttrs || "cost:total" in projectedTraceAttrs
+
+        // Standard attributes (conditionally for projected queries)
+        if (includeTraceName) {
+            trace.conceptName?.let { name ->
+                addAttribute(traceAttributes, "string", "concept:name", name)
+            }
         }
 
-        trace.identityId?.let { id ->
-            addAttribute(traceAttributes, "string", "identity:id", id.toString())
+        if (includeTraceId) {
+            trace.identityId?.let { id ->
+                addAttribute(traceAttributes, "string", "identity:id", id.toString())
+            }
         }
 
-        trace.costCurrency?.let { currency ->
-            addAttribute(traceAttributes, "string", "cost:currency", currency)
+        if (includeTraceCurrency) {
+            trace.costCurrency?.let { currency ->
+                addAttribute(traceAttributes, "string", "cost:currency", currency)
+            }
         }
 
-        trace.costTotal?.let { cost ->
-            addAttribute(traceAttributes, "float", "cost:total", cost.toString())
+        if (includeTraceTotal) {
+            trace.costTotal?.let { cost ->
+                addAttribute(traceAttributes, "float", "cost:total", cost.toString())
+            }
         }
 
         // Custom attributes

@@ -79,22 +79,30 @@ class PQLQueryController(
                     // Detect if this is a projected query (SELECT specific fields vs SELECT *)
                     // Exclude internally injected tracking columns (t_traceId, l_logId)
                     val internalKeys = setOf("t_traceId", "l_logId")
-                    val isProjectedQuery = result.results.firstOrNull()?.keys?.any { key ->
+                    val resultKeys = result.results.firstOrNull()?.keys ?: emptySet()
+                    val isProjectedQuery = resultKeys.any { key ->
                         key !in internalKeys && (
                             key.startsWith("l_") || key.startsWith("t_") || key.startsWith("e_") ||
                             key.startsWith("log_") || key.startsWith("trace_") || key.startsWith("event_")
                         )
-                    } ?: false
+                    } || resultKeys.any { key ->
+                        // Function result aliases (e.g., count_event_concept_name_) are also projected
+                        key !in internalKeys && !key.startsWith("l_") && !key.startsWith("t_") &&
+                            !key.startsWith("e_") && key !in setOf("event", "trace", "log", "e", "t", "l")
+                    }
 
                     // Check if events specifically are projected (e:name, e:timestamp etc.)
                     // vs event SELECT * or e:* (properties(event) as event)
                     // e:* should still exclude attrs like concept:name, cost:currency
-                    val isEventProjected = result.results.firstOrNull()?.keys?.any { key ->
+                    val isEventProjected = resultKeys.any { key ->
                         key !in internalKeys && (key.startsWith("e_") || key.startsWith("event_"))
-                    } ?: false
+                    }
 
                     val excludeAttrs = if (!isEventProjected) processMConfig.excludeEventAttrsInSelectStar else emptyList()
-                    val xesJson = XESJsonConverter.convertToXESJson(result.logs, isProjectedQuery, excludeAttrs)
+                    val projectedTraceAttrs = result.results.firstOrNull()?.keys
+                        ?.filter { it.startsWith("t_") && it != "t_traceId" }
+                        ?.toSet() ?: emptySet()
+                    val xesJson = XESJsonConverter.convertToXESJson(result.logs, isProjectedQuery, excludeAttrs, projectedTraceAttrs)
                     listOf(xesJson)  // Wrap in list for consistency
                 }
                 else -> {
@@ -395,20 +403,28 @@ class PQLQueryController(
             val localXESResults = if (localResult.logs.isNotEmpty()) {
                 // Detect if this is a projected query
                 val internalKeys2 = setOf("t_traceId", "l_logId")
-                val isProjectedQuery = localResult.results.firstOrNull()?.keys?.any { key ->
+                val resultKeys = localResult.results.firstOrNull()?.keys ?: emptySet()
+                val isProjectedQuery = resultKeys.any { key ->
                     key !in internalKeys2 && (
                         key.startsWith("l_") || key.startsWith("t_") || key.startsWith("e_") ||
                         key.startsWith("log_") || key.startsWith("trace_") || key.startsWith("event_")
                     )
-                } ?: false
+                } || resultKeys.any { key ->
+                    // Function result aliases (e.g., count_event_concept_name_) are also projected
+                    key !in internalKeys2 && !key.startsWith("l_") && !key.startsWith("t_") &&
+                        !key.startsWith("e_") && key !in setOf("event", "trace", "log", "e", "t", "l")
+                }
 
                 // Check if events specifically are projected (e:name, e:timestamp etc.)
-                val isEventProjected = localResult.results.firstOrNull()?.keys?.any { key ->
+                val isEventProjected = resultKeys.any { key ->
                     key !in internalKeys2 && (key.startsWith("e_") || key.startsWith("event_"))
-                } ?: false
+                }
 
                 val excludeAttrs = if (!isEventProjected) processMConfig.excludeEventAttrsInSelectStar else emptyList()
-                val xesJson = XESJsonConverter.convertToXESJson(localResult.logs, isProjectedQuery, excludeAttrs)
+                val projectedTraceAttrs2 = localResult.results.firstOrNull()?.keys
+                    ?.filter { it.startsWith("t_") && it != "t_traceId" }
+                    ?.toSet() ?: emptySet()
+                val xesJson = XESJsonConverter.convertToXESJson(localResult.logs, isProjectedQuery, excludeAttrs, projectedTraceAttrs2)
                 listOf(xesJson)
             } else {
                 emptyList()

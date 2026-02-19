@@ -14,8 +14,25 @@ data class CypherQuery(
      * null means no limit at that level
      */
     val hierarchicalLimits: Map<String, Int?> = emptyMap(),
+
+    /**
+     * Maps column aliases to their original PQL expressions.
+     * Used by HierarchyReconstructor to identify function-result columns.
+     * Example: "year_event_time_timestamp_" → "year(event:time:timestamp)"
+     */
+    val columnAliases: Map<String, ColumnAlias> = emptyMap(),
 ) {
     override fun toString(): String {
         return "CypherQuery(query='$query', parameters=$parameters, hierarchicalLimits=$hierarchicalLimits)"
     }
 }
+
+/**
+ * Metadata for a projected column alias
+ */
+data class ColumnAlias(
+    /** Original PQL expression (e.g., "year(event:time:timestamp)") */
+    val pqlExpression: String,
+    /** Scope of the innermost attribute (LOG, TRACE, EVENT) */
+    val scope: String,
+)
