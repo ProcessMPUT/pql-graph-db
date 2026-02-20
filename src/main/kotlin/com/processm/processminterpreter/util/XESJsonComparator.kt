@@ -162,11 +162,21 @@ object XESJsonComparator {
                 continue
             }
 
-            // Compare matched events
-            val count = maxOf(localGroup.size, remoteGroup.size)
+            // Compare matched events — sort both groups by secondary keys
+            // so that event ordering within same timestamp+name doesn't matter
+            val sortKey = { e: Map<String, String> ->
+                listOf(
+                    e["lifecycle:transition"] ?: "",
+                    e["org:resource"] ?: "",
+                    e["result"] ?: ""
+                ).joinToString("|")
+            }
+            val sortedLocal = localGroup.sortedBy(sortKey)
+            val sortedRemote = remoteGroup.sortedBy(sortKey)
+            val count = maxOf(sortedLocal.size, sortedRemote.size)
             for (i in 0 until count) {
-                val le = localGroup.getOrNull(i)
-                val re = remoteGroup.getOrNull(i)
+                val le = sortedLocal.getOrNull(i)
+                val re = sortedRemote.getOrNull(i)
                 if (le != null && re != null) {
                     compareAttributes("Trace '$traceName' event '$eventKey'", le, re, diffs)
                 } else if (le == null) {

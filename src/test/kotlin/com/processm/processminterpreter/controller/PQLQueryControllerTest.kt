@@ -8,7 +8,7 @@ import org.junit.jupiter.api.Test
 import org.mockito.Mockito.`when`
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest
-import org.springframework.boot.test.mock.mockito.MockBean
+import org.springframework.test.context.bean.override.mockito.MockitoBean
 import org.springframework.http.MediaType
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get
@@ -21,13 +21,13 @@ class PQLQueryControllerTest {
     @Autowired
     private lateinit var mockMvc: MockMvc
 
-    @MockBean
+    @MockitoBean
     private lateinit var pqlQueryService: PQLQueryService
 
-    @MockBean
+    @MockitoBean
     private lateinit var remoteProcessMService: com.processm.processminterpreter.service.RemoteProcessMService
 
-    @MockBean
+    @MockitoBean
     private lateinit var processMConfig: com.processm.processminterpreter.config.ProcessMConfig
 
     @Autowired

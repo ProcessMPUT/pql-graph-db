@@ -841,15 +841,24 @@ class Query private constructor(
      * @throws PQLSemanticException if hoisting is found in forbidden location
      */
     fun validateHoistingInSelectAndOrderBy() {
-        // Check SELECT attributes (direct hoisting not allowed)
+        // Check SELECT attributes (direct hoisting not allowed UNLESS the attribute is in GROUP BY)
+        val groupByAttrs = groupByAttributes
         (selectStandardAttributes.values.flatten() + selectOtherAttributes.values.flatten()).forEach { attr ->
             if (attr.hoistingPrefix.isNotEmpty()) {
-                throw PQLSyntaxException(
-                    PQLSyntaxException.Problem.ScopeHoistingInSelectOrOrderBy,
-                    attr.line,
-                    attr.charPositionInLine,
-                    attr.toString()
-                )
+                // Allow hoisting if the same hoisted attribute is in GROUP BY
+                val inGroupBy = groupByAttrs.any { gb ->
+                    gb.hoistingPrefix == attr.hoistingPrefix &&
+                        gb.name == attr.name &&
+                        gb.scope == attr.scope
+                }
+                if (!inGroupBy) {
+                    throw PQLSyntaxException(
+                        PQLSyntaxException.Problem.ScopeHoistingInSelectOrOrderBy,
+                        attr.line,
+                        attr.charPositionInLine,
+                        attr.toString()
+                    )
+                }
             }
         }
 
@@ -858,9 +867,9 @@ class Query private constructor(
             validateExpressionHoisting(expr, "SELECT")
         }
 
-        // Check ORDER BY expressions (hoisting not allowed at all, even in functions)
+        // Check ORDER BY expressions (hoisting allowed inside aggregation functions, same as SELECT)
         orderByExpressions.values.flatten().forEach { ordered ->
-            validateExpressionHoistingStrict(ordered.base, "ORDER BY")
+            validateExpressionHoisting(ordered.base, "ORDER BY")
         }
     }
 
@@ -1052,16 +1061,13 @@ class Query private constructor(
             return
         }
         
-        // Check 2: Lower scope is grouped (Only for LOG scope)
-        // If we are selecting a LOG attribute (which is constant for the whole log),
-        // and we group by TRACE or EVENT (which implies we are inside the log), it's valid.
-        // For TRACE scope, grouping by EVENT does NOT imply TRACE is constant (unless grouping by traceId),
-        // so we enforce strict GROUP BY for TRACE.
-        if (scope == Scope.Log) {
-            val lowerScopes = Scope.values().filter { it.ordinal > scope.ordinal }
-            if (lowerScopes.any { isGroupBy[it] == true }) {
-                return
-            }
+        // Check 2: Lower scope is grouped
+        // ProcessM allows upper-scope attributes when a lower scope has GROUP BY.
+        // e.g., "select t:name, sum(e:total) group by e:name" is valid because
+        // trace is a parent scope of event — each grouped row inherits the trace context.
+        val lowerScopes = Scope.values().filter { it.ordinal > scope.ordinal }
+        if (lowerScopes.any { isGroupBy[it] == true }) {
+            return
         }
 
         // Check 3: Hoisted version is grouped
@@ -1083,11 +1089,11 @@ class Query private constructor(
             }
         }
         
+        val shortName = "${attr.scope.shortName}:${attr.name}"
         throw PQLSyntaxException(
-            PQLSyntaxException.Problem.AttributeNotInGroupBy,
             attr.line,
             attr.charPositionInLine,
-            attr.toString()
+            "$shortName must be present in GROUP BY clause"
         )
     }
 

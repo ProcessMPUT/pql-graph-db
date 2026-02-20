@@ -51,9 +51,10 @@ class IntegrationTest : BaseInterpreterTest() {
             println("Count query failed: ${countResult.error}")
         }
         assertTrue(countResult.success, "Count query should succeed")
-        assertEquals(1, countResult.results.size)
-        val totalEvents = (countResult.results[0].values.first() as Number).toInt()
-        assertEquals(traceCount * eventsPerTrace, totalEvents, "Should count all events")
+        // ProcessM groups event-level aggregation per trace implicitly
+        assertEquals(traceCount, countResult.results.size, "Should have one result per trace")
+        val totalEvents = countResult.results.sumOf { (it.values.first { v -> v is Number } as Number).toInt() }
+        assertEquals(traceCount * eventsPerTrace, totalEvents, "Sum of per-trace counts should equal total events")
 
         // 4. Verify Grouping and Aggregation
         // Count events per trace

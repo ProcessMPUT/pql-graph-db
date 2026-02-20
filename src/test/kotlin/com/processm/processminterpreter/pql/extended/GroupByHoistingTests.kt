@@ -124,14 +124,16 @@ class GroupByHoistingTests : BaseInterpreterTest() {
 
     @Test
     fun `test validation failure missing group by`() {
-        // Select non-aggregated attribute without grouping
-        val query = "select t:concept:name, count(e:concept:name) group by e:org:resource"
-        
+        // Select event-level non-aggregated attribute without it being in GROUP BY
+        // e:org:resource (Event scope) is NOT allowed without GROUP BY when grouping by t:concept:name (Trace scope)
+        // because Event is a LOWER scope than Trace — lower-scope attributes must be in GROUP BY
+        val query = "select e:org:resource, count(e:concept:name) group by t:concept:name"
+
         val exception = assertThrows(IllegalArgumentException::class.java) {
             executeQuery(query, logId)
         }
-        
+
         assertTrue(exception.message!!.contains("must be present in GROUP BY clause"))
-        assertTrue(exception.message!!.contains("t:concept:name"))
+        assertTrue(exception.message!!.contains("e:org:resource"))
     }
 }

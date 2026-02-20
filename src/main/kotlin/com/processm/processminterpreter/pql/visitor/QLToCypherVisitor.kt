@@ -763,6 +763,8 @@ class QLToCypherVisitor(
             expr is com.processm.processminterpreter.pql.model.Function &&
                 com.processm.processminterpreter.pql.model.Function.isAggregation(expr.name)
         }
+        val hasExplicitGroupByEarly = query.groupByStandardAttributes.values.any { it.isNotEmpty() } ||
+                query.groupByOtherAttributes.values.any { it.isNotEmpty() }
         if (defaultTraceLimit != null && !hierarchicalLimits.containsKey("trace") && !hasAggregationInSelect) {
             hierarchicalLimits["trace"] = defaultTraceLimit
         }
@@ -783,25 +785,14 @@ class QLToCypherVisitor(
         // Populate usedScopes from Query object to ensure MATCH clause is correct
         populateUsedScopes(query)
 
-        // Build MATCH clause
-        cypher.append(buildMatchClause(mappedScope))
-
-        // Build WHERE clause
-        val whereClause = buildWhereClauseFromQuery(query)
-        if (whereClause != null || logId != null) {
-            cypher.append(" WHERE ")
-            val conditions = mutableListOf<String>()
-
-            if (logId != null) {
-                conditions.add("log.logId = \$logId")
-                parameters["logId"] = logId
-            }
-
-            if (whereClause != null) {
-                conditions.add(whereClause)
-            }
-
-            cypher.append(conditions.joinToString(" AND "))
+        // Event-level aggregation requires trace and log in MATCH for per-trace grouping
+        val hasAggInSelect = query.selectExpressions.values.flatten().any { expr ->
+            expr is com.processm.processminterpreter.pql.model.Function &&
+                com.processm.processminterpreter.pql.model.Function.isAggregation(expr.name)
+        }
+        if (hasAggInSelect && usedScopes.contains(Scope.Event)) {
+            usedScopes.add(Scope.Trace)
+            usedScopes.add(Scope.Log)
         }
 
         // Check for aggregation
@@ -810,83 +801,73 @@ class QLToCypherVisitor(
                 com.processm.processminterpreter.pql.model.Function.isAggregation(expr.name)
         }
 
-        // ProcessM implicitly groups event-level aggregations per trace.
-        // e.g. "select count(e:name)" returns 30 traces each with their own count.
-        // We need a WITH clause to group by trace before RETURN.
+        // GROUP BY handling:
+        // - Explicit GROUP BY: "select t:name, count(e:name) group by t:name"
+        // - Implicit per-trace grouping: "select count(e:name)" (no GROUP BY, events aggregated per trace)
+        // Cypher has no GROUP BY keyword — non-aggregated expressions in WITH/RETURN become grouping keys.
         val hasExplicitGroupBy = query.groupByStandardAttributes.values.any { it.isNotEmpty() } ||
                 query.groupByOtherAttributes.values.any { it.isNotEmpty() }
-        // Event-level aggregation implies trace grouping even if trace isn't explicitly referenced
         val needsImplicitTraceGrouping = hasAggregation && !hasExplicitGroupBy &&
                 usedScopes.contains(Scope.Event)
+        val needsAggregationGrouping = hasExplicitGroupBy || needsImplicitTraceGrouping
 
-        if (needsImplicitTraceGrouping) {
-            // Add WITH clause to group by log+trace, then aggregate events
-            cypher.append(" WITH log, trace")
-            // Add aggregation expressions
-            query.selectExpressions.forEach { (modelScope, expressions) ->
-                expressions.forEach { expr ->
-                    val cypherExpr = translateExpressionToCypher(expr)
-                    val alias = expr.toString().replace(Regex("[^a-zA-Z0-9_]"), "_")
-                    cypher.append(", $cypherExpr AS $alias")
-                }
+        if (needsAggregationGrouping) {
+            // For aggregation queries, build MATCH in stages so we can insert trace limit
+            // BEFORE aggregation (otherwise LIMIT cuts aggregated rows, not traces).
+            // Step 1: MATCH log + trace
+            if (logId != null) {
+                cypher.append("MATCH (log:Log {logId: \$logId})-[:CONTAINS]->(trace:Trace)")
+                parameters["logId"] = logId
+                cypher.append(" WHERE log.logId = \$logId")
+            } else if (usedScopes.contains(Scope.Log)) {
+                cypher.append("MATCH (log:Log)-[:CONTAINS]->(trace:Trace)")
+            } else {
+                cypher.append("MATCH (trace:Trace)")
             }
-            // Also add non-aggregated SELECT attributes
-            query.selectStandardAttributes.forEach { (modelScope, attrs) ->
-                attrs.forEach { attr ->
-                    val scope = mapScope(modelScope)
-                    val nodeLabel = scopeToNodeLabel(scope)
-                    val cypherField = attributeToCypherField(attr, nodeLabel, scope)
-                    val prefix = when (scope) {
-                        Scope.Log -> "l"
-                        Scope.Trace -> "t"
-                        Scope.Event -> "e"
-                    }
-                    val alias = "${prefix}_${attr.name.replace(":", "_")}"
-                    cypher.append(", $cypherField AS $alias")
-                }
-            }
-            // Apply default trace limit (30 traces)
+
+            // Step 2: Apply trace limit BEFORE aggregation
             if (defaultTraceLimit != null) {
-                cypher.append(" ORDER BY log.createdAt, trace.createdAt")
+                if (logId != null || usedScopes.contains(Scope.Log)) {
+                    cypher.append(" WITH log, trace ORDER BY log.createdAt, trace.createdAt")
+                } else {
+                    cypher.append(" WITH trace ORDER BY trace.createdAt")
+                }
                 cypher.append(" LIMIT $defaultTraceLimit")
             }
-        }
 
-        // Build RETURN clause
-        if (needsImplicitTraceGrouping) {
-            // RETURN the aggregation aliases + trace/log IDs for HierarchyReconstructor
-            val returnParts = mutableListOf<String>()
-            query.selectExpressions.forEach { (_, expressions) ->
-                expressions.forEach { expr ->
-                    val alias = expr.toString().replace(Regex("[^a-zA-Z0-9_]"), "_")
-                    returnParts.add(alias)
-                    // Track in columnAliases for HierarchyReconstructor
-                    val scopeName = "EVENT" // aggregation results appear as event attributes in XES
-                    columnAliases[alias] = ColumnAlias(expr.toString(), scopeName)
+            // Step 3: MATCH events + WHERE conditions
+            if (usedScopes.contains(Scope.Event)) {
+                cypher.append(" MATCH (trace)-[:HAS_EVENT]->(event:Event)")
+                val whereClause = buildWhereClauseFromQuery(query)
+                if (whereClause != null) {
+                    cypher.append(" WHERE $whereClause")
                 }
             }
-            query.selectStandardAttributes.forEach { (modelScope, attrs) ->
-                attrs.forEach { attr ->
-                    val scope = mapScope(modelScope)
-                    val prefix = when (scope) {
-                        Scope.Log -> "l"
-                        Scope.Trace -> "t"
-                        Scope.Event -> "e"
-                    }
-                    val alias = "${prefix}_${attr.name.replace(":", "_")}"
-                    returnParts.add(alias)
-                }
-            }
-            // Always include trace/log IDs for HierarchyReconstructor
-            if (!returnParts.any { it.contains("t_traceId") }) {
-                returnParts.add("trace.traceId AS t_traceId")
-            }
-            if (!returnParts.any { it.contains("l_logId") }) {
-                returnParts.add("log.logId AS l_logId")
-            }
+
+            // Step 4: Aggregation WITH clause
+            buildAggregationWithClause(cypher, query, hasExplicitGroupBy)
+
+            // Step 5: RETURN
             cypher.append(" RETURN ")
-            cypher.append(returnParts.joinToString(", "))
+            cypher.append(buildAggregationReturnClause(query, hasExplicitGroupBy))
         } else {
+            // Non-aggregation: use standard MATCH + WHERE + RETURN
+            cypher.append(buildMatchClause(mappedScope))
+
+            val whereClause = buildWhereClauseFromQuery(query)
+            if (whereClause != null || logId != null) {
+                cypher.append(" WHERE ")
+                val conditions = mutableListOf<String>()
+                if (logId != null) {
+                    conditions.add("log.logId = \$logId")
+                    parameters["logId"] = logId
+                }
+                if (whereClause != null) {
+                    conditions.add(whereClause)
+                }
+                cypher.append(conditions.joinToString(" AND "))
+            }
+
             cypher.append(" RETURN ")
             val returnClause = buildReturnClauseFromQuery(query)
             cypher.append(returnClause)
@@ -918,6 +899,161 @@ class QLToCypherVisitor(
         }
 
         return CypherQuery(cypher.toString(), parameters.toMap(), emptyMap(), columnAliases.toMap())
+    }
+
+    /**
+     * Build WITH clause for aggregation queries (both explicit GROUP BY and implicit per-trace grouping).
+     *
+     * Cypher has no GROUP BY keyword. Non-aggregated expressions in WITH automatically become grouping keys.
+     * For explicit GROUP BY: adds GROUP BY attributes as grouping keys + aggregation expressions.
+     * For implicit grouping: adds log, trace as grouping keys + aggregation expressions.
+     */
+    private fun buildAggregationWithClause(
+        cypher: StringBuilder,
+        query: Query,
+        hasExplicitGroupBy: Boolean
+    ) {
+        val withParts = mutableListOf<String>()
+        val addedAliases = mutableSetOf<String>()
+
+        // Include log and trace for HierarchyReconstructor identity (only if present in MATCH)
+        if (usedScopes.contains(Scope.Log) || logId != null) {
+            withParts.add("log")
+        }
+        if (usedScopes.contains(Scope.Trace) || usedScopes.contains(Scope.Event)) {
+            withParts.add("trace")
+        }
+
+        if (hasExplicitGroupBy) {
+            // Add GROUP BY attributes as non-aggregated expressions (become Cypher grouping keys)
+            fun addGroupByAttr(attr: com.processm.processminterpreter.pql.model.Attribute) {
+                val effectiveScope = mapScope(attr.effectiveScope ?: attr.scope)
+                val nodeLabel = scopeToNodeLabel(effectiveScope)
+                val cypherField = attributeToCypherField(attr, nodeLabel, effectiveScope)
+                // Use declared scope for alias prefix (matches how SELECT builds aliases)
+                val prefix = when (attr.scope) {
+                    com.processm.processminterpreter.pql.model.Scope.Event -> "e"
+                    com.processm.processminterpreter.pql.model.Scope.Trace -> "t"
+                    com.processm.processminterpreter.pql.model.Scope.Log -> "l"
+                }
+                val alias = "${prefix}_${attr.name.replace(":", "_")}"
+                if (alias !in addedAliases) {
+                    withParts.add("$cypherField AS $alias")
+                    addedAliases.add(alias)
+                }
+            }
+
+            query.groupByStandardAttributes.forEach { (_, attrs) -> attrs.forEach { addGroupByAttr(it) } }
+            query.groupByOtherAttributes.forEach { (_, attrs) -> attrs.forEach { addGroupByAttr(it) } }
+        }
+
+        // Add aggregation expressions from SELECT
+        query.selectExpressions.forEach { (_, expressions) ->
+            expressions.forEach { expr ->
+                val cypherExpr = translateExpressionToCypher(expr)
+                val alias = expressionToAlias(expr)
+                if (alias !in addedAliases) {
+                    withParts.add("$cypherExpr AS $alias")
+                    addedAliases.add(alias)
+                }
+            }
+        }
+
+        // Add non-aggregated SELECT attributes not already covered by GROUP BY
+        fun addSelectAttr(attr: com.processm.processminterpreter.pql.model.Attribute, modelScope: com.processm.processminterpreter.pql.model.Scope) {
+            val scope = mapScope(attr.effectiveScope ?: modelScope)
+            val nodeLabel = scopeToNodeLabel(scope)
+            val cypherField = attributeToCypherField(attr, nodeLabel, scope)
+            val prefix = when (attr.scope) {
+                com.processm.processminterpreter.pql.model.Scope.Event -> "e"
+                com.processm.processminterpreter.pql.model.Scope.Trace -> "t"
+                com.processm.processminterpreter.pql.model.Scope.Log -> "l"
+            }
+            val alias = "${prefix}_${attr.name.replace(":", "_")}"
+            if (alias !in addedAliases) {
+                withParts.add("$cypherField AS $alias")
+                addedAliases.add(alias)
+            }
+        }
+
+        query.selectStandardAttributes.forEach { (modelScope, attrs) -> attrs.forEach { addSelectAttr(it, modelScope) } }
+        query.selectOtherAttributes.forEach { (modelScope, attrs) -> attrs.forEach { addSelectAttr(it, modelScope) } }
+
+        cypher.append(" WITH ")
+        cypher.append(withParts.joinToString(", "))
+    }
+
+    /**
+     * Build RETURN clause for aggregation queries.
+     * Returns all aliased columns from the WITH clause + identity columns for HierarchyReconstructor.
+     */
+    private fun buildAggregationReturnClause(
+        query: Query,
+        hasExplicitGroupBy: Boolean
+    ): String {
+        val returnParts = mutableListOf<String>()
+        val addedAliases = mutableSetOf<String>()
+
+        if (hasExplicitGroupBy) {
+            // Add GROUP BY attribute aliases
+            fun addGroupByAlias(attr: com.processm.processminterpreter.pql.model.Attribute) {
+                val prefix = when (attr.scope) {
+                    com.processm.processminterpreter.pql.model.Scope.Event -> "e"
+                    com.processm.processminterpreter.pql.model.Scope.Trace -> "t"
+                    com.processm.processminterpreter.pql.model.Scope.Log -> "l"
+                }
+                val alias = "${prefix}_${attr.name.replace(":", "_")}"
+                if (alias !in addedAliases) {
+                    returnParts.add(alias)
+                    addedAliases.add(alias)
+                }
+            }
+
+            query.groupByStandardAttributes.forEach { (_, attrs) -> attrs.forEach { addGroupByAlias(it) } }
+            query.groupByOtherAttributes.forEach { (_, attrs) -> attrs.forEach { addGroupByAlias(it) } }
+        }
+
+        // Add aggregation expression aliases
+        query.selectExpressions.forEach { (_, expressions) ->
+            expressions.forEach { expr ->
+                val alias = expressionToAlias(expr)
+                if (alias !in addedAliases) {
+                    returnParts.add(alias)
+                    addedAliases.add(alias)
+                    // Track in columnAliases for HierarchyReconstructor
+                    columnAliases[alias] = ColumnAlias(expr.toString(), "EVENT")
+                }
+            }
+        }
+
+        // Add non-aggregated SELECT attribute aliases
+        fun addSelectAlias(attr: com.processm.processminterpreter.pql.model.Attribute) {
+            val prefix = when (attr.scope) {
+                com.processm.processminterpreter.pql.model.Scope.Event -> "e"
+                com.processm.processminterpreter.pql.model.Scope.Trace -> "t"
+                com.processm.processminterpreter.pql.model.Scope.Log -> "l"
+            }
+            val alias = "${prefix}_${attr.name.replace(":", "_")}"
+            if (alias !in addedAliases) {
+                returnParts.add(alias)
+                addedAliases.add(alias)
+            }
+        }
+
+        query.selectStandardAttributes.forEach { (_, attrs) -> attrs.forEach { addSelectAlias(it) } }
+        query.selectOtherAttributes.forEach { (_, attrs) -> attrs.forEach { addSelectAlias(it) } }
+
+        // Include trace/log IDs for HierarchyReconstructor (only if present in MATCH)
+        if ((usedScopes.contains(Scope.Trace) || usedScopes.contains(Scope.Event)) &&
+                !returnParts.any { it.contains("t_traceId") }) {
+            returnParts.add("trace.traceId AS t_traceId")
+        }
+        if ((usedScopes.contains(Scope.Log) || logId != null) &&
+                !returnParts.any { it.contains("l_logId") }) {
+            returnParts.add("log.logId AS l_logId")
+        }
+
+        return returnParts.joinToString(", ")
     }
 
     /**
@@ -1686,7 +1822,7 @@ class QLToCypherVisitor(
                 val cypherExpr = translateExpressionToCypher(expr)
                 // For expressions, we need a stable alias.
                 // Simple approach: use text representation, sanitized
-                val alias = expr.toString().replace(Regex("[^a-zA-Z0-9_]"), "_")
+                val alias = expressionToAlias(expr)
                 logger.debug("Expression: $expr -> $cypherExpr AS $alias")
                 allParts.add("$cypherExpr AS $alias")
                 // Track function alias → PQL expression for HierarchyReconstructor
@@ -2059,6 +2195,19 @@ class QLToCypherVisitor(
         if (query.whereExpression != com.processm.processminterpreter.pql.model.Expression.empty) {
             collectScopesFromExpression(query.whereExpression)
         }
+
+        // Also check GROUP BY attributes for scopes
+        query.groupByStandardAttributes.values.flatten().forEach {
+            usedScopes.add(mapScope(it.effectiveScope ?: com.processm.processminterpreter.pql.model.Scope.Event))
+        }
+        query.groupByOtherAttributes.values.flatten().forEach {
+            usedScopes.add(mapScope(it.effectiveScope ?: com.processm.processminterpreter.pql.model.Scope.Event))
+        }
+
+        // Also check ORDER BY expressions for scopes
+        query.orderByExpressions.values.flatten().forEach { ordered ->
+            collectScopesFromExpression(ordered.base)
+        }
     }
 
     private fun collectScopesFromExpression(expr: com.processm.processminterpreter.pql.model.IExpression) {
@@ -2072,6 +2221,34 @@ class QLToCypherVisitor(
             is UnaryOperator -> collectScopesFromExpression(expr.operand)
             // Literals and others don't have scope dependencies
             else -> {}
+        }
+    }
+
+    /**
+     * Generate a stable alias from an expression using short scope names.
+     * e.g., count(e:concept:name) → "count_e_concept_name_"
+     *       year(event:time:timestamp) → "year_e_time_timestamp_"
+     *
+     * Uses shortName (e/t/l) instead of full name (event/trace/log) to match test expectations.
+     */
+    private fun expressionToAlias(expr: com.processm.processminterpreter.pql.model.IExpression): String {
+        val text = expressionToShortString(expr)
+        return text.replace(Regex("[^a-zA-Z0-9_]"), "_")
+    }
+
+    private fun expressionToShortString(expr: com.processm.processminterpreter.pql.model.IExpression): String {
+        return when (expr) {
+            is com.processm.processminterpreter.pql.model.Attribute -> {
+                val scopePrefix = "${expr.scope.shortName}:"
+                val attrName = if (expr.isStandard && expr.standardName.isNotEmpty()) expr.standardName else expr.name
+                "${expr.hoistingPrefix}$scopePrefix$attrName"
+            }
+            is com.processm.processminterpreter.pql.model.Function -> {
+                val scopePrefix = expr.scope?.let { "${it.shortName}:" } ?: ""
+                val argsStr = expr.children.joinToString(", ") { expressionToShortString(it) }
+                "$scopePrefix${expr.name}($argsStr)"
+            }
+            else -> expr.toString()
         }
     }
 }

@@ -317,7 +317,7 @@ class QueryTests : HierarchicalTestsBase() {
     // =====================
 
     @Test
-    @Disabled("GROUP BY not fully implemented - TDD spec from ProcessM")
+    @Disabled("GROUP BY event attr needs HierarchyReconstructor changes — events not grouped within trace")
     fun groupEventByStandardAttributeTest() {
         // ProcessM: select t:name, e:name, sum(e:total) where l:id=$journal group by e:name
         val result = q(
@@ -337,7 +337,6 @@ class QueryTests : HierarchicalTestsBase() {
     }
 
     @Test
-    @Disabled("GROUP BY not fully implemented - TDD spec from ProcessM")
     fun groupLogByEventStdAttrAndImplicitGroupEventByTest() {
         // ProcessM: select sum(e:total) where l:name='JournalReview' group by ^^e:name
         val result = q(
@@ -349,7 +348,6 @@ class QueryTests : HierarchicalTestsBase() {
     }
 
     @Test
-    @Disabled("GROUP BY not fully implemented - TDD spec from ProcessM")
     fun groupLogByEventStdAndGroupEventByStdAttrTest() {
         // ProcessM: select e:name, sum(e:total) where l:name='JournalReview' group by ^^e:name, e:name
         val result = q(
@@ -373,7 +371,6 @@ class QueryTests : HierarchicalTestsBase() {
     }
 
     @Test
-    @Disabled("GROUP BY not fully implemented - TDD spec from ProcessM")
     fun groupByOuterScopeTest() {
         // ProcessM: select t:min(l:name) where l:name='JournalReview' limit l:3
         val result = q(
@@ -385,7 +382,7 @@ class QueryTests : HierarchicalTestsBase() {
     }
 
     @Test
-    @Disabled("GROUP BY not fully implemented - TDD spec from ProcessM")
+    @Disabled("SELECT l:*, t:* with aggregation — ExplicitSelectAllWithImplicitGroupBy validation too strict")
     fun groupByImplicitFromSelectTest() {
         // ProcessM: select l:*, t:*, avg(e:total), min(e:timestamp), max(e:timestamp) where l:name matches '...' limit l:1
         val result = q(
@@ -398,7 +395,7 @@ class QueryTests : HierarchicalTestsBase() {
     }
 
     @Test
-    @Disabled("GROUP BY not fully implemented - TDD spec from ProcessM")
+    @Disabled("ORDER BY with aggregation expression not yet in RETURN — Neo4j requires aggregate in preceding RETURN")
     fun groupByImplicitFromOrderByTest() {
         // ProcessM: where l:id=$journal order by avg(e:total), min(e:timestamp), max(e:timestamp)
         val result = q(
@@ -410,7 +407,6 @@ class QueryTests : HierarchicalTestsBase() {
     }
 
     @Test
-    @Disabled("GROUP BY not fully implemented - TDD spec from ProcessM")
     fun groupByImplicitWithHoistingTest() {
         // ProcessM: select avg(^^e:total), min(^^e:timestamp), max(^^e:timestamp) where l:id=$journal
         val result = q(
@@ -422,7 +418,6 @@ class QueryTests : HierarchicalTestsBase() {
     }
 
     @Test
-    @Disabled("GROUP BY not fully implemented - TDD spec from ProcessM")
     fun groupByWithHoistingAndOrderByWithinGroupTest() {
         // ProcessM: where l:id=$journal group by ^e:name order by name
         val result = q(
@@ -434,7 +429,7 @@ class QueryTests : HierarchicalTestsBase() {
     }
 
     @Test
-    @Disabled("GROUP BY not fully implemented - TDD spec from ProcessM")
+    @Disabled("Hoisted GROUP BY (^e:name) not matching non-hoisted SELECT (e:name) in validation")
     fun groupByWithHoistingAndOrderByCountTest() {
         // ProcessM: select l:name, count(t:name), e:name where l:id=$journal group by ^e:name order by count(t:name) desc limit l:1
         val result = q(
@@ -446,7 +441,6 @@ class QueryTests : HierarchicalTestsBase() {
     }
 
     @Test
-    @Disabled("GROUP BY not fully implemented - TDD spec from ProcessM")
     fun aggregationFunctionIndependence() {
         // ProcessM: Two queries - with and without count(^e:name) - should produce identical trace counts
         val result1 = q(
@@ -463,7 +457,7 @@ class QueryTests : HierarchicalTestsBase() {
     }
 
     @Test
-    @Disabled("GROUP BY not fully implemented - TDD spec from ProcessM")
+    @Disabled("Hoisted GROUP BY (^e:name) not matching non-hoisted SELECT (e:name) in validation")
     fun groupByWithAndWithoutHoistingAndOrderByCountTest() {
         // ProcessM: group by t:name, ^e:name
         val result = q(
@@ -493,7 +487,6 @@ class QueryTests : HierarchicalTestsBase() {
     }
 
     @Test
-    @Disabled("GROUP BY not fully implemented - TDD spec from ProcessM")
     fun multiScopeGroupBy() {
         // ProcessM: select l:name, t:name, max(^e:timestamp)-min(^e:timestamp), e:name, count(e:name) group by t:name, e:name
         val result = q(
@@ -505,7 +498,6 @@ class QueryTests : HierarchicalTestsBase() {
     }
 
     @Test
-    @Disabled("GROUP BY not fully implemented - TDD spec from ProcessM")
     fun multiScopeImplicitGroupBy() {
         // ProcessM: select count(l:name), count(^t:name), count(^^e:name) where l:id=$journal
         val result = q(
@@ -518,7 +510,7 @@ class QueryTests : HierarchicalTestsBase() {
     }
 
     @Test
-    @Disabled("GROUP BY not fully implemented - TDD spec from ProcessM")
+    @Disabled("ORDER BY with aggregation expression not yet in RETURN — Neo4j requires aggregate in preceding RETURN")
     fun orderByExpressionTest() {
         // ProcessM: select min(timestamp) where l:id=$journal group by ^e:name order by min(^e:timestamp)
         val result = q(
