@@ -382,7 +382,6 @@ class QueryTests : HierarchicalTestsBase() {
     }
 
     @Test
-    @Disabled("SELECT l:*, t:* with aggregation — ExplicitSelectAllWithImplicitGroupBy validation too strict")
     fun groupByImplicitFromSelectTest() {
         // ProcessM: select l:*, t:*, avg(e:total), min(e:timestamp), max(e:timestamp) where l:name matches '...' limit l:1
         val result = q(
@@ -395,7 +394,6 @@ class QueryTests : HierarchicalTestsBase() {
     }
 
     @Test
-    @Disabled("ORDER BY with aggregation expression not yet in RETURN — Neo4j requires aggregate in preceding RETURN")
     fun groupByImplicitFromOrderByTest() {
         // ProcessM: where l:id=$journal order by avg(e:total), min(e:timestamp), max(e:timestamp)
         val result = q(
@@ -429,7 +427,6 @@ class QueryTests : HierarchicalTestsBase() {
     }
 
     @Test
-    @Disabled("Hoisted GROUP BY (^e:name) not matching non-hoisted SELECT (e:name) in validation")
     fun groupByWithHoistingAndOrderByCountTest() {
         // ProcessM: select l:name, count(t:name), e:name where l:id=$journal group by ^e:name order by count(t:name) desc limit l:1
         val result = q(
@@ -457,7 +454,6 @@ class QueryTests : HierarchicalTestsBase() {
     }
 
     @Test
-    @Disabled("Hoisted GROUP BY (^e:name) not matching non-hoisted SELECT (e:name) in validation")
     fun groupByWithAndWithoutHoistingAndOrderByCountTest() {
         // ProcessM: group by t:name, ^e:name
         val result = q(
@@ -510,7 +506,6 @@ class QueryTests : HierarchicalTestsBase() {
     }
 
     @Test
-    @Disabled("ORDER BY with aggregation expression not yet in RETURN — Neo4j requires aggregate in preceding RETURN")
     fun orderByExpressionTest() {
         // ProcessM: select min(timestamp) where l:id=$journal group by ^e:name order by min(^e:timestamp)
         val result = q(

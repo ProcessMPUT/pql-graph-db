@@ -972,15 +972,24 @@ class Query private constructor(
             (ordered.base as? Expression)?.filter { it is com.processm.processminterpreter.pql.model.Function && it.functionType == FunctionType.Aggregation }?.isNotEmpty() == true
         }
 
-        // Check: SELECT * with aggregation is not allowed
-        // ProcessM: ExplicitSelectAllWithImplicitGroupBy
+        // Check: SELECT * with aggregation is not allowed at aggregation scope
+        // ProcessM allows l:*, t:* with event aggregation (upper scopes are constant per group)
+        // Only reject SELECT ALL at the same or lower scope as the aggregation
         if (hasAnyAggregation) {
-            Scope.values().forEach { scope ->
-                if (_selectAll[scope] == true) {
-                    throw PQLSyntaxException(
-                        PQLSyntaxException.Problem.ExplicitSelectAllWithImplicitGroupBy,
-                        -1, -1, scope.toString()
-                    )
+            // Find the lowest scope that has aggregation functions
+            val aggScopes = _selectExpressions.filter { (_, exprs) ->
+                exprs.any { it is Function && Function.isAggregation(it.name) }
+            }.keys
+            val lowestAggScope = aggScopes.maxByOrNull { it.ordinal }
+
+            if (lowestAggScope != null) {
+                Scope.values().forEach { scope ->
+                    if (_selectAll[scope] == true && scope.ordinal >= lowestAggScope.ordinal) {
+                        throw PQLSyntaxException(
+                            PQLSyntaxException.Problem.ExplicitSelectAllWithImplicitGroupBy,
+                            -1, -1, scope.toString()
+                        )
+                    }
                 }
             }
         }
@@ -1070,21 +1079,34 @@ class Query private constructor(
             return
         }
 
-        // Check 3: Hoisted version is grouped
+        // Check 3: Hoisted version is grouped (going UP)
         // Example: select e:name group by ^e:name
         // We check if ^e:name, ^^e:name, etc. are in GROUP BY
         var currentAttrStr = attr.toString()
         var currentScope = scope
-        
+
         while (currentScope.upper != null) {
             currentAttrStr = "^$currentAttrStr"
             currentScope = currentScope.upper!!
-            
+
             val hoistedAttr = Attribute(currentAttrStr)
             val hoistedGroupAttributes = groupByStandardAttributes[currentScope].orEmpty() +
                 groupByOtherAttributes[currentScope].orEmpty()
-                
+
             if (hoistedGroupAttributes.contains(hoistedAttr)) {
+                return
+            }
+        }
+
+        // Check 4: De-hoisted GROUP BY covers this attribute
+        // Example: select e:name ... group by ^e:name
+        // ^e:name in GROUP BY at Trace scope has effectiveScope=Trace but declared scope=Event
+        // This covers e:name (same declared scope + name) in SELECT
+        val allGroupByAttrs = groupByStandardAttributes.values.flatten() + groupByOtherAttributes.values.flatten()
+        for (gbAttr in allGroupByAttrs) {
+            if (gbAttr.hoistingPrefix.isNotEmpty() &&
+                gbAttr.scope == attr.scope &&
+                gbAttr.name == attr.name) {
                 return
             }
         }

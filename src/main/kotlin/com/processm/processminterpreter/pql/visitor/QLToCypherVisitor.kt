@@ -765,7 +765,11 @@ class QLToCypherVisitor(
         }
         val hasExplicitGroupByEarly = query.groupByStandardAttributes.values.any { it.isNotEmpty() } ||
                 query.groupByOtherAttributes.values.any { it.isNotEmpty() }
-        if (defaultTraceLimit != null && !hierarchicalLimits.containsKey("trace") && !hasAggregationInSelect) {
+        val hasAggregationInOrderByEarly = query.orderByExpressions.values.flatten().any { ordered ->
+            containsAggregation(ordered.base)
+        }
+        if (defaultTraceLimit != null && !hierarchicalLimits.containsKey("trace") &&
+                !hasAggregationInSelect && !hasAggregationInOrderByEarly) {
             hierarchicalLimits["trace"] = defaultTraceLimit
         }
 
@@ -795,11 +799,11 @@ class QLToCypherVisitor(
             usedScopes.add(Scope.Log)
         }
 
-        // Check for aggregation
-        val hasAggregation = query.selectExpressions.values.flatten().any { expr ->
-            expr is com.processm.processminterpreter.pql.model.Function &&
-                com.processm.processminterpreter.pql.model.Function.isAggregation(expr.name)
+        // Check for aggregation (in SELECT or ORDER BY)
+        val hasAggregationInOrderBy = query.orderByExpressions.values.flatten().any { ordered ->
+            containsAggregation(ordered.base)
         }
+        val hasAggregation = hasAggregationInSelect || hasAggregationInOrderBy
 
         // GROUP BY handling:
         // - Explicit GROUP BY: "select t:name, count(e:name) group by t:name"
@@ -874,15 +878,31 @@ class QLToCypherVisitor(
         }
 
         // Build ORDER BY clause
+        // When aggregation path is active, ORDER BY aggregation expressions use aliases from WITH
         val orderByClause = buildOrderByClauseFromQuery(query)
         val hasExplicitEventOrderBy = query.orderByExpressions[com.processm.processminterpreter.pql.model.Scope.Event]?.isNotEmpty() == true
 
         if (orderByClause != null && orderByClause.isNotEmpty()) {
             cypher.append(" ORDER BY ")
-            cypher.append(orderByClause.joinToString(", ") { "${it.expression} ${it.direction}" })
-            // Add default event ordering as tiebreaker if not explicitly specified
-            if (!hasExplicitEventOrderBy && !hasAggregation && usedScopes.contains(Scope.Event)) {
-                cypher.append(", event.timestamp ASC, event.activity ASC, event.lifecycle ASC, event.resource ASC")
+            if (needsAggregationGrouping) {
+                // Replace aggregation expressions with their aliases in ORDER BY
+                val orderByParts = query.orderByExpressions.values.flatten().map { ordered ->
+                    val expr = ordered.base
+                    val dir = ordered.direction.toString().uppercase()
+                    if (containsAggregation(expr)) {
+                        "${expressionToAlias(expr)} $dir"
+                    } else {
+                        val cypherExpr = translateExpressionToCypher(expr)
+                        "$cypherExpr $dir"
+                    }
+                }
+                cypher.append(orderByParts.joinToString(", "))
+            } else {
+                cypher.append(orderByClause.joinToString(", ") { "${it.expression} ${it.direction}" })
+                // Add default event ordering as tiebreaker if not explicitly specified
+                if (!hasExplicitEventOrderBy && !hasAggregation && usedScopes.contains(Scope.Event)) {
+                    cypher.append(", event.timestamp ASC, event.activity ASC, event.lifecycle ASC, event.resource ASC")
+                }
             }
         } else if (usedScopes.contains(Scope.Event) && !hasAggregation) {
             // No explicit ORDER BY - add default event ordering for ProcessM compatibility
@@ -978,6 +998,18 @@ class QLToCypherVisitor(
 
         query.selectStandardAttributes.forEach { (modelScope, attrs) -> attrs.forEach { addSelectAttr(it, modelScope) } }
         query.selectOtherAttributes.forEach { (modelScope, attrs) -> attrs.forEach { addSelectAttr(it, modelScope) } }
+
+        // Also add ORDER BY aggregation expressions (Neo4j requires them in WITH/RETURN)
+        query.orderByExpressions.values.flatten().forEach { ordered ->
+            if (containsAggregation(ordered.base)) {
+                val cypherExpr = translateExpressionToCypher(ordered.base)
+                val alias = expressionToAlias(ordered.base)
+                if (alias !in addedAliases) {
+                    withParts.add("$cypherExpr AS $alias")
+                    addedAliases.add(alias)
+                }
+            }
+        }
 
         cypher.append(" WITH ")
         cypher.append(withParts.joinToString(", "))
@@ -2221,6 +2253,20 @@ class QLToCypherVisitor(
             is UnaryOperator -> collectScopesFromExpression(expr.operand)
             // Literals and others don't have scope dependencies
             else -> {}
+        }
+    }
+
+    /**
+     * Check if an expression tree contains any aggregation function.
+     */
+    private fun containsAggregation(expr: com.processm.processminterpreter.pql.model.IExpression): Boolean {
+        return when (expr) {
+            is com.processm.processminterpreter.pql.model.Function ->
+                com.processm.processminterpreter.pql.model.Function.isAggregation(expr.name) ||
+                    expr.children.any { containsAggregation(it) }
+            is com.processm.processminterpreter.pql.model.Expression ->
+                expr.children.any { containsAggregation(it) }
+            else -> false
         }
     }
 
