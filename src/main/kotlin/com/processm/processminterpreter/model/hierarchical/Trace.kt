@@ -12,6 +12,13 @@ class Trace : TraceOrEventBase() {
     var events: Sequence<Event> = emptySequence()
 
     /**
+     * Number of null event placeholders to include in output.
+     * ProcessM outputs null entries for events that exist in the hierarchy
+     * but weren't projected by the query.
+     */
+    var nullEventCount: Int = 0
+
+    /**
      * Check if this trace contains events as a stream
      * (for compatibility with ProcessM)
      */

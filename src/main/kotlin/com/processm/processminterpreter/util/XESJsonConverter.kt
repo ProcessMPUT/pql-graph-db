@@ -17,8 +17,12 @@ import java.time.format.DateTimeFormatter
 object XESJsonConverter {
     private val logger = LoggerFactory.getLogger(XESJsonConverter::class.java)
 
-    // XES date format in UTC (matching ProcessM output): yyyy-MM-dd'T'HH:mm:ssZ
-    private val xesDateFormatter = DateTimeFormatter
+    // XES date format in UTC (matching ProcessM output)
+    // Uses ISO_INSTANT-like format but with conditional sub-second precision:
+    // - No fractional seconds when they're zero: 2020-03-13T16:45:50Z
+    // - Milliseconds when present: 2020-03-13T16:45:50.123Z
+    // - Microseconds when present: 2020-03-13T16:45:50.123456Z
+    private val xesDateFormatterNoMillis = DateTimeFormatter
         .ofPattern("yyyy-MM-dd'T'HH:mm:ss'Z'")
         .withZone(ZoneOffset.UTC)
 
@@ -65,16 +69,28 @@ object XESJsonConverter {
         // Global attributes (after extensions, before classifiers)
         // ONLY add global array for SELECT *, NOT for projected queries
         if (!isProjectedQuery) {
-            val globalArray = mutableListOf<Map<String, Any>>()
+            // Group globals by scope — ProcessM merges globals with the same scope
+            // into a single object with string/date/etc arrays
+            val globalsByScope = linkedMapOf<String, MutableMap<String, MutableList<Map<String, String>>>>()
 
-            // Add trace globals
-            log.traceGlobals.forEach { global ->
-                globalArray.add(convertGlobalAttribute(global))
+            fun addGlobal(global: com.processm.processminterpreter.model.hierarchical.GlobalAttribute) {
+                val scopeAttrs = globalsByScope.getOrPut(global.scope) { mutableMapOf() }
+                global.attributes.forEach { (key, value) ->
+                    if (value != null) {
+                        addAttributeByType(scopeAttrs, key, value)
+                    }
+                }
             }
 
-            // Add event globals
-            log.eventGlobals.forEach { global ->
-                globalArray.add(convertGlobalAttribute(global))
+            log.traceGlobals.forEach { addGlobal(it) }
+            log.eventGlobals.forEach { addGlobal(it) }
+
+            val globalArray = globalsByScope.map { (scope, attrsByType) ->
+                val obj = mutableMapOf<String, Any>("@scope" to scope)
+                attrsByType.forEach { (type, attrs) ->
+                    obj[type] = toSingleOrArray(attrs)
+                }
+                obj
             }
 
             if (globalArray.isNotEmpty()) {
@@ -107,30 +123,34 @@ object XESJsonConverter {
             }
         }
 
-        // For SELECT *, add all log attributes from XES (match ProcessM)
-        // For projected queries, skip custom log attributes (user didn't select them)
-        if (!isProjectedQuery) {
-            logger.debug("convertLog - log.attributes keys: {}", log.attributes.keys)
-            logger.debug("convertLog - log.attributes values: {}", log.attributes)
+        // Add log attributes from log.attributes
+        // For SELECT *: all XES attributes (source, lifecycle:model, identity:id, etc.)
+        // For projected queries: only projected expression results (e.g., "log:1.0")
+        // In both cases, log.attributes contains the right set (populated by HierarchyReconstructor)
+        logger.debug("convertLog - log.attributes keys: {}", log.attributes.keys)
 
-            // Add all attributes from log.attributes (e.g., source, lifecycle:model, identity:id)
-            log.attributes.forEach { (key, value) ->
-                if (value != null) {
-                    logger.debug("Processing log attribute: {} = {}", key, value)
-                    // Special handling for identity:id - use "id" type instead of "string"
-                    if (key == "identity:id") {
-                        addAttribute(logAttributes, "id", key, value.toString())
-                    } else {
-                        addAttributeByType(logAttributes, key, value)
-                    }
+        // ProcessM does not export 'description' attribute in JSON API
+        val excludeLogAttrs = setOf("description")
+
+        log.attributes.forEach { (key, value) ->
+            if (key in excludeLogAttrs) return@forEach
+            if (value != null) {
+                // Special handling for identity:id - use "id" type instead of "string"
+                if (key == "identity:id") {
+                    addAttribute(logAttributes, "id", key, value.toString())
+                } else {
+                    addAttributeByType(logAttributes, key, value)
                 }
+            } else {
+                // Null values: output as string "null" (matches ProcessM behavior)
+                addAttribute(logAttributes, "string", key, "null")
             }
+        }
 
-            // Also add identity:id from log.identityId if not already in attributes
-            if (!log.attributes.containsKey("identity:id")) {
-                log.identityId?.let { id ->
-                    addAttribute(logAttributes, "id", "identity:id", id.toString())
-                }
+        // Also add identity:id from log.identityId if not already in attributes (SELECT * only)
+        if (!isProjectedQuery && !log.attributes.containsKey("identity:id")) {
+            log.identityId?.let { id ->
+                addAttribute(logAttributes, "id", "identity:id", id.toString())
             }
         }
 
@@ -152,8 +172,8 @@ object XESJsonConverter {
     /**
      * Convert a single Trace to JSON structure
      */
-    private fun convertTrace(trace: Trace, excludeEventAttrs: List<String> = emptyList(), isProjectedQuery: Boolean = false, projectedTraceAttrs: Set<String> = emptySet()): Map<String, Any> {
-        val result = mutableMapOf<String, Any>()
+    private fun convertTrace(trace: Trace, excludeEventAttrs: List<String> = emptyList(), isProjectedQuery: Boolean = false, projectedTraceAttrs: Set<String> = emptySet()): Map<String, Any?> {
+        val result = mutableMapOf<String, Any?>()
         val traceAttributes = mutableMapOf<String, MutableList<Map<String, String>>>()
 
         // For projected queries, only include trace attributes that were explicitly selected
@@ -192,6 +212,8 @@ object XESJsonConverter {
         trace.attributes.forEach { (key, value) ->
             if (value != null) {
                 addAttributeByType(traceAttributes, key, value)
+            } else {
+                addAttribute(traceAttributes, "string", key, "null")
             }
         }
 
@@ -210,6 +232,18 @@ object XESJsonConverter {
         if (events.isNotEmpty()) {
             val eventMaps = events.map { event -> convertEvent(event, excludeEventAttrs) }
             result["event"] = toSingleOrArray(eventMaps)
+        } else if (trace.nullEventCount > 1) {
+            // ProcessM outputs null event placeholders for events that exist
+            // in the hierarchy but weren't projected by the query.
+            // Output as a list of nulls: [null, null, ...] matching ProcessM format.
+            // Skip count=1: ProcessM's toSingleOrArray unwraps [null] to null,
+            // which JSON serializes as absent/null (effectively 0 events).
+            val nullList: List<Any?> = (1..trace.nullEventCount).map { null }
+            result["event"] = nullList
+        } else if (trace.nullEventCount == 0 && !isProjectedQuery) {
+            // Aggregation queries (implicit GROUP BY) collapse events — no event data in output.
+            // ProcessM outputs "event": null for these traces (matches toSingleOrArray(null)).
+            result["event"] = null
         }
 
         return result
@@ -275,8 +309,12 @@ object XESJsonConverter {
 
         // Custom attributes (skip those in exclude list)
         event.attributes.forEach { (key, value) ->
-            if (value != null && key !in excluded) {
-                addAttributeByType(eventAttributes, key, value)
+            if (key !in excluded) {
+                if (value != null) {
+                    addAttributeByType(eventAttributes, key, value)
+                } else {
+                    addAttribute(eventAttributes, "string", key, "null")
+                }
             }
         }
 
@@ -329,18 +367,25 @@ object XESJsonConverter {
             is Float, is Double -> addAttribute(attributes, "float", key, value.toString())
             is Boolean -> addAttribute(attributes, "boolean", key, value.toString())
             is Instant -> addAttribute(attributes, "date", key, formatTimestamp(value))
-            is java.time.ZonedDateTime -> addAttribute(attributes, "date", key, value.toInstant().atZone(ZoneOffset.UTC).format(xesDateFormatter))
+            is java.time.ZonedDateTime -> addAttribute(attributes, "date", key, formatTimestamp(value.toInstant()))
             is java.time.LocalDateTime -> addAttribute(attributes, "date", key,
-                value.toInstant(ZoneOffset.UTC).atZone(ZoneOffset.UTC).format(xesDateFormatter))
+                formatTimestamp(value.toInstant(ZoneOffset.UTC)))
             else -> addAttribute(attributes, "string", key, value.toString())
         }
     }
 
     /**
      * Format Instant timestamp to XES date format (UTC)
+     * Preserves sub-second precision when present (millis, micros)
      */
     private fun formatTimestamp(instant: Instant): String {
-        return instant.atZone(ZoneOffset.UTC).format(xesDateFormatter)
+        val nano = instant.nano
+        return if (nano == 0) {
+            instant.atZone(ZoneOffset.UTC).format(xesDateFormatterNoMillis)
+        } else {
+            // Use ISO_INSTANT which preserves fractional seconds
+            DateTimeFormatter.ISO_INSTANT.format(instant)
+        }
     }
 
     /**

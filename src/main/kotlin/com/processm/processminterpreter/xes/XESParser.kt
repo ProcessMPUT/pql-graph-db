@@ -72,6 +72,9 @@ class XESParser {
         val attributes = parseAttributes(logElement).toMutableMap()
         ensureIdentityId(attributes) // Auto-generate identity:id if missing
 
+        // Parse classifier elements
+        val classifiers = parseClassifiers(logElement)
+
         val finalLogId = logId ?: generateLogId()
         val logName = attributes["concept:name"] as? String ?: "Unnamed Log"
 
@@ -92,8 +95,36 @@ class XESParser {
             traces.add(trace)
         }
 
-        logger.info("Parsed XES log with ${traces.size} traces")
-        return XESLog(logNode, traces)
+        logger.info("Parsed XES log with ${traces.size} traces, ${classifiers.size} classifiers")
+        return XESLog(logNode, traces, classifiers)
+    }
+
+    /**
+     * Parse classifier elements from a log element.
+     * XES classifiers define named attribute combinations, e.g.:
+     *   <classifier name="Event Name" keys="concept:name"/>
+     *   <classifier name="concept:name+lifecycle:transition" keys="concept:name lifecycle:transition"/>
+     */
+    private fun parseClassifiers(logElement: Element): Map<String, List<String>> {
+        val classifiers = mutableMapOf<String, List<String>>()
+        val childNodes = logElement.childNodes
+
+        for (i in 0 until childNodes.length) {
+            val node = childNodes.item(i)
+            if (node.nodeType == Node.ELEMENT_NODE) {
+                val element = node as Element
+                if (element.tagName == "classifier") {
+                    val name = element.getAttribute("name")
+                    val keys = element.getAttribute("keys")
+                    if (name.isNotEmpty() && keys.isNotEmpty()) {
+                        classifiers[name] = keys.trim().split("\\s+".toRegex())
+                        logger.debug("Parsed classifier: $name → ${classifiers[name]}")
+                    }
+                }
+            }
+        }
+
+        return classifiers
     }
 
     /**
@@ -296,6 +327,7 @@ class XESParser {
 data class XESLog(
     val logNode: LogNode,
     val traces: List<XESTrace>,
+    val classifiers: Map<String, List<String>> = emptyMap(),
 )
 
 /**

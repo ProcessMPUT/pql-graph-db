@@ -47,6 +47,10 @@ class PQLQueryServiceTest {
     fun setUp() {
         MockitoAnnotations.openMocks(this)
         `when`(neo4jDriver.session()).thenReturn(session)
+        // Default: classifier query returns no results
+        val emptyResult = Mockito.mock(Result::class.java)
+        `when`(emptyResult.hasNext()).thenReturn(false)
+        `when`(session.run(Mockito.contains("log.classifiers"), anyMap<String, Any>())).thenReturn(emptyResult)
         pqlQueryService = PQLQueryService(pqlTranslator, neo4jDriver, xesWriter)
     }
 
@@ -79,7 +83,7 @@ class PQLQueryServiceTest {
         val pqlQuery = "invalid query"
         val errorMessage = "Syntax error"
         
-        `when`(pqlTranslator.translateToCypher(anyString(), any())).thenThrow(IllegalArgumentException(errorMessage))
+        `when`(pqlTranslator.translateToCypher(anyString(), any(), anyMap(), any())).thenThrow(IllegalArgumentException(errorMessage))
 
         // When
         val result = pqlQueryService.executePQLQuery(pqlQuery)
@@ -111,7 +115,7 @@ class PQLQueryServiceTest {
         // Given
         val pqlQuery = "invalid query"
         
-        `when`(pqlTranslator.translateToCypher(anyString(), any())).thenThrow(IllegalArgumentException("Error"))
+        `when`(pqlTranslator.translateToCypher(anyString(), any(), anyMap(), any())).thenThrow(IllegalArgumentException("Error"))
 
         // When
         val result = pqlQueryService.validatePQLQuery(pqlQuery)

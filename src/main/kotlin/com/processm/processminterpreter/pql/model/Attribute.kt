@@ -181,9 +181,25 @@ class Attribute(
             return@run true
         }
 
+        // Check if it's a classifier (c:X or classifier:X)
+        if (StandardAttributes.isClassifier(name)) return@run true
+
         // Not a standard attribute - treat as custom attribute
         // Custom attributes map directly to Neo4j property names
         false
+    }
+
+    // ProcessM Rule: Unbracketed attributes with explicit scope must be standard or classifier.
+    // Custom attributes require bracket notation: [e:myCustomAttr]
+    init {
+        if (!wasBracketed && !isStandard && baseScope != null && !StandardAttributes.isClassifier(name)) {
+            throw PQLSyntaxException(
+                PQLSyntaxException.Problem.NoSuchAttribute,
+                line,
+                charPositionInLine,
+                name
+            )
+        }
     }
 
     /**
@@ -212,6 +228,11 @@ class Attribute(
      */
     val standardName: String = run {
         if (!isStandard) return@run ""
+
+        // Classifier normalization: c:X → classifier:X, classifier:X stays as-is
+        if (StandardAttributes.isClassifier(name)) {
+            return@run if (name.startsWith("c:")) "classifier:${name.removePrefix("c:")}" else name
+        }
 
         // Use base scope (before hoisting) for mapping
         val scopeToCheck = baseScope ?: Scope.Event

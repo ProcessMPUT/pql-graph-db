@@ -82,6 +82,7 @@ object StandardAttributes {
     val LOG_SHORTHANDS = mapOf(
         "name" to CONCEPT_NAME,
         "id" to CONCEPT_INSTANCE,
+        "logId" to CONCEPT_INSTANCE, // Neo4j property name alias for concept:instance
         "version" to XES_VERSION,
         "features" to XES_FEATURES,
         // ProcessM additional attributes

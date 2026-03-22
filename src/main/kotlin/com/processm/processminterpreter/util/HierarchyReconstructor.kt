@@ -16,6 +16,16 @@ import java.util.*
 object HierarchyReconstructor {
     private val logger = LoggerFactory.getLogger(HierarchyReconstructor::class.java)
 
+    // Internal Neo4j properties that should not appear in XES output
+    private val INTERNAL_PROPERTIES = setOf(
+        "importOrder", "traceId", "eventId", "logId", "createdAt", "updatedAt"
+    )
+
+    // Internal identity columns injected by QLToCypherVisitor — not real projections
+    private val INTERNAL_ALIAS_KEYS = setOf("t_traceId", "l_logId", "e_eventId")
+
+    private val objectMapper = com.fasterxml.jackson.databind.ObjectMapper()
+
     /**
      * Reconstruct hierarchical structure from flat query results
      *
@@ -25,12 +35,17 @@ object HierarchyReconstructor {
      */
     // Column alias metadata from QLToCypherVisitor — maps alias → PQL expression + scope
     private var currentColumnAliases: Map<String, ColumnAlias> = emptyMap()
+    // Whether the query has explicit ORDER BY on trace scope (skip importOrder sorting if true)
+    private var currentHasTraceOrderBy: Boolean = false
 
     fun reconstruct(
         flatResults: List<Map<String, Any?>>,
         hierarchicalLimits: Map<String, Int?> = emptyMap(),
-        columnAliases: Map<String, ColumnAlias> = emptyMap()
+        columnAliases: Map<String, ColumnAlias> = emptyMap(),
+        isAggregationResult: Boolean = false,
+        hasTraceOrderBy: Boolean = false
     ): List<Log> {
+        this.currentHasTraceOrderBy = hasTraceOrderBy
         currentColumnAliases = columnAliases
         if (flatResults.isEmpty()) {
             return emptyList()
@@ -51,7 +66,7 @@ object HierarchyReconstructor {
         }
 
         val logs = limitedLogGroups.map { (logId, logRecords) ->
-            buildLog(logId, logRecords, hierarchicalLimits)
+            buildLog(logId, logRecords, hierarchicalLimits, isAggregationResult)
         }
 
         logger.debug("Reconstructed ${logs.size} logs")
@@ -64,8 +79,11 @@ object HierarchyReconstructor {
      */
     private fun hasProjectedColumns(record: Map<String, Any?>): Boolean {
         return record.keys.any { key ->
-            key.startsWith("l_") || key.startsWith("t_") || key.startsWith("e_") ||
-            key.startsWith("log_") || key.startsWith("trace_") || key.startsWith("event_")
+            key !in INTERNAL_ALIAS_KEYS && (
+                key.startsWith("l_") || key.startsWith("t_") || key.startsWith("e_") ||
+                key.startsWith("log_") || key.startsWith("trace_") || key.startsWith("event_") ||
+                key in currentColumnAliases
+            )
         }
     }
 
@@ -82,31 +100,8 @@ object HierarchyReconstructor {
 
         record.forEach { (key, value) ->
             when {
-                key.startsWith("l_") -> {
-                    val attrName = key.substring(2)
-                    result["log"]!![attrName] = value
-                }
-                key.startsWith("log_") -> {
-                    val attrName = key.substring(4)
-                    result["log"]!![attrName] = value
-                }
-                key.startsWith("t_") -> {
-                    val attrName = key.substring(2)
-                    result["trace"]!![attrName] = value
-                }
-                key.startsWith("trace_") -> {
-                    val attrName = key.substring(6)
-                    result["trace"]!![attrName] = value
-                }
-                key.startsWith("e_") -> {
-                    val attrName = key.substring(2)
-                    result["event"]!![attrName] = value
-                }
-                key.startsWith("event_") -> {
-                    val attrName = key.substring(6)
-                    result["event"]!![attrName] = value
-                }
-                // Check if this is a function-result alias (e.g., "year_event_time_timestamp_")
+                // Check columnAliases FIRST — expression aliases like "log_1_0" would otherwise
+                // be incorrectly intercepted by the startsWith("log_") check below.
                 key in currentColumnAliases -> {
                     val alias = currentColumnAliases[key]!!
                     val scopeKey = when (alias.scope) {
@@ -137,11 +132,37 @@ object HierarchyReconstructor {
                     // Use the PQL expression as the attribute name (e.g., "year(event:time:timestamp)")
                     result[scopeKey]!![alias.pqlExpression] = adjustedValue
                 }
-                // If no scope prefix, treat as log-level attribute
-                // Skip keys that are full entity names (properties() results, not projected columns)
+                key.startsWith("l_") -> result["log"]!![key.substring(2)] = value
+                key.startsWith("log_") -> result["log"]!![key.substring(4)] = value
+                key.startsWith("t_") -> result["trace"]!![key.substring(2)] = value
+                key.startsWith("trace_") -> result["trace"]!![key.substring(6)] = value
+                key.startsWith("e_") -> result["event"]!![key.substring(2)] = value
+                key.startsWith("event_") -> result["event"]!![key.substring(6)] = value
+                // If no scope prefix, handle full entity maps returned by properties() AS log/trace/event,
+                // or fall through to log-level for any other unprefixed keys.
                 else -> {
-                    if (key !in setOf("event", "trace", "log", "e", "t", "l")) {
-                        result["log"]!![key] = value
+                    when {
+                        (key == "log" || key == "l") && value is Map<*, *> -> {
+                            @Suppress("UNCHECKED_CAST")
+                            (value as Map<String, Any?>).forEach { (k, v) ->
+                                if (k !in INTERNAL_PROPERTIES) result["log"]!![k] = v
+                            }
+                        }
+                        (key == "trace" || key == "t") && value is Map<*, *> -> {
+                            @Suppress("UNCHECKED_CAST")
+                            (value as Map<String, Any?>).forEach { (k, v) ->
+                                if (k !in INTERNAL_PROPERTIES) result["trace"]!![k] = v
+                            }
+                        }
+                        (key == "event" || key == "e") && value is Map<*, *> -> {
+                            @Suppress("UNCHECKED_CAST")
+                            (value as Map<String, Any?>).forEach { (k, v) ->
+                                if (k !in INTERNAL_PROPERTIES) result["event"]!![k] = v
+                            }
+                        }
+                        key !in setOf("event", "trace", "log", "e", "t", "l", "_null_event_count_") -> {
+                            result["log"]!![key] = value
+                        }
                     }
                 }
             }
@@ -190,7 +211,8 @@ object HierarchyReconstructor {
     private fun buildLog(
         logId: String,
         logRecords: List<Map<String, Any?>>,
-        hierarchicalLimits: Map<String, Int?> = emptyMap()
+        hierarchicalLimits: Map<String, Int?> = emptyMap(),
+        isAggregationResult: Boolean = false
     ): Log {
         val log = Log()
 
@@ -212,7 +234,7 @@ object HierarchyReconstructor {
         }
 
         log.traces = limitedTraceGroups.map { (traceId, traceRecords) ->
-            buildTrace(traceId, traceRecords, hierarchicalLimits)
+            buildTrace(traceId, traceRecords, hierarchicalLimits, isAggregationResult)
         }.asSequence()
 
         return log
@@ -227,9 +249,22 @@ object HierarchyReconstructor {
         logger.debug("populateLogAttributes - hasProjected: {}, record keys: {}", hasProjected, record.keys)
 
         val logData = if (hasProjected) {
-            // Extract only log-scoped attributes from projected columns
+            // Extract log-scoped attributes from projected columns
             val split = splitProjectedColumns(record)
-            split["log"]!!
+            val projected = split["log"]!!
+            // If projected log data only has identity columns (logId),
+            // but full properties(log) is also in the record, merge them
+            val hasRealProjected = projected.keys.any { it !in setOf("logId") }
+            if (!hasRealProjected && record.containsKey("log") && record["log"] is Map<*, *>) {
+                @Suppress("UNCHECKED_CAST")
+                val fullLog = record["log"] as Map<String, Any?>
+                val merged = mutableMapOf<String, Any?>()
+                merged.putAll(fullLog)
+                merged.putAll(projected)
+                merged
+            } else {
+                projected
+            }
         } else {
             // Try to extract from nested log object (SELECT *)
             when {
@@ -239,11 +274,11 @@ object HierarchyReconstructor {
             }
         }
 
-        log.conceptName = extractString(logData, "name", "concept:name") ?: "unknown"
+        log.conceptName = extractString(logData, "name", "concept:name") ?: if (hasProjected) null else "unknown"
 
         // Extract lifecycle:model to both property and attributes (for XES output)
         val lifecycleModel = logData["lifecycle:model"]?.toString()
-        log.lifecycleModel = lifecycleModel ?: "standard"
+        log.lifecycleModel = if (hasProjected) lifecycleModel else (lifecycleModel ?: "standard")
         logger.debug("lifecycleModel from logData: {}, hasProjected: {}", lifecycleModel, hasProjected)
         if (lifecycleModel != null && !hasProjected) {
             log.attributes["lifecycle:model"] = lifecycleModel
@@ -264,7 +299,7 @@ object HierarchyReconstructor {
 
         // Copy additional attributes from XES (skip only internal Neo4j fields)
         // excludeKeys now includes lifecycle:model and identity:id to avoid duplication
-        copyAttributes(logData, log.attributes, excludeKeys = setOf("name", "logId", "lifecycle:model", "identity:id", "concept:name"))
+        copyAttributes(logData, log.attributes, excludeKeys = setOf("name", "logId", "lifecycle:model", "identity:id", "concept:name", "classifiers", "createdAt", "updatedAt"))
 
         // Add standard extensions (order matches ProcessM output)
         log.extensions["Lifecycle"] = Extension("Lifecycle", "lifecycle", "http://www.xes-standard.org/lifecycle.xesext")
@@ -273,25 +308,63 @@ object HierarchyReconstructor {
         log.extensions["Concept"] = Extension("Concept", "concept", "http://www.xes-standard.org/concept.xesext")
         log.extensions["Time"] = Extension("Time", "time", "http://www.xes-standard.org/time.xesext")
 
-        // Add default classifiers (matching XES standard format)
+        // Read classifiers from log data (stored as JSON by XESLoader), fallback to defaults
+        val classifiersJson = logData["classifiers"] as? String
+        if (classifiersJson != null) {
+            try {
+                val classifiersMap = objectMapper
+                    .readValue(classifiersJson, object : com.fasterxml.jackson.core.type.TypeReference<Map<String, List<String>>>() {})
+                classifiersMap.forEach { (name, keys) ->
+                    log.eventClassifiers.add(EventClassifier(name, keys))
+                }
+                // ProcessM orders single-key classifiers before multi-key ones
+                log.eventClassifiers.sortBy { it.keys.size }
+            } catch (e: Exception) {
+                logger.warn("Failed to parse classifiers JSON, using defaults: ${e.message}")
+                addDefaultClassifiers(log)
+            }
+        } else {
+            addDefaultClassifiers(log)
+        }
+
+        // Add default globals (match ProcessM format — each XES attribute in <global> block is a separate entry)
+        log.traceGlobals.add(GlobalAttribute("trace", mapOf("concept:name" to "__INVALID__")))
+        log.eventGlobals.add(GlobalAttribute("event", mapOf("concept:name" to "__INVALID__")))
+        log.eventGlobals.add(GlobalAttribute("event", mapOf("lifecycle:transition" to "complete")))
+    }
+
+    /**
+     * Add default classifiers when none are stored on the log node.
+     */
+    private fun addDefaultClassifiers(log: Log) {
         log.eventClassifiers.add(EventClassifier("Event Name", listOf("concept:name")))
         log.eventClassifiers.add(EventClassifier("Resource", listOf("org:resource")))
         log.eventClassifiers.add(EventClassifier("concept:name+lifecycle:transition", listOf("concept:name", "lifecycle:transition")))
-
-        // Add default globals (match ProcessM format)
-        log.traceGlobals.add(GlobalAttribute("trace", mapOf("concept:name" to "__INVALID__")))
-        log.eventGlobals.add(GlobalAttribute("event", mapOf(
-            "concept:name" to "__INVALID__",
-            "lifecycle:transition" to "complete"
-        )))
     }
 
     /**
      * Group records by trace ID
      */
     private fun groupByTrace(records: List<Map<String, Any?>>): Map<String, List<Map<String, Any?>>> {
-        return records.groupBy { record ->
+        val grouped = records.groupBy { record ->
             extractTraceId(record) ?: "unknown"
+        }
+        // Sort traces by importOrder to preserve XES file order (matches ProcessM).
+        // Only sort when importOrder is available (SELECT * with properties(trace))
+        // AND no explicit ORDER BY on trace scope (which should override import order).
+        val hasImportOrder = !currentHasTraceOrderBy &&
+            (grouped.values.firstOrNull()?.firstOrNull()?.let { first ->
+                val traceData = first["trace"]
+                traceData is Map<*, *> && traceData.containsKey("importOrder")
+            } ?: false)
+
+        return if (hasImportOrder) {
+            grouped.entries.sortedBy { (_, traceRecords) ->
+                val traceData = traceRecords.first()["trace"] as? Map<*, *>
+                (traceData?.get("importOrder") as? Number)?.toInt() ?: Int.MAX_VALUE
+            }.associate { it.key to it.value }
+        } else {
+            grouped
         }
     }
 
@@ -332,7 +405,8 @@ object HierarchyReconstructor {
     private fun buildTrace(
         traceId: String,
         traceRecords: List<Map<String, Any?>>,
-        hierarchicalLimits: Map<String, Int?> = emptyMap()
+        hierarchicalLimits: Map<String, Int?> = emptyMap(),
+        isAggregationResult: Boolean = false
     ): Trace {
         val trace = Trace()
 
@@ -347,15 +421,26 @@ object HierarchyReconstructor {
             buildEvent(record)
         }
 
+        val events = allEvents
+
         // Apply event limit
         val eventLimit = hierarchicalLimits["event"]
         val limitedEvents = if (eventLimit != null && eventLimit > 0) {
-            allEvents.take(eventLimit)
+            events.take(eventLimit)
         } else {
-            allEvents
+            events
         }
 
         trace.events = limitedEvents.asSequence()
+
+        // Read null event count from Cypher results (ProcessM null event placeholders)
+        val nullEventCount = firstRecord?.get("_null_event_count_")
+        if (nullEventCount != null && limitedEvents.isEmpty()) {
+            trace.nullEventCount = when (nullEventCount) {
+                is Number -> nullEventCount.toInt()
+                else -> 0
+            }
+        }
 
         return trace
     }
@@ -368,9 +453,25 @@ object HierarchyReconstructor {
         val hasProjected = hasProjectedColumns(record)
 
         val traceData = if (hasProjected) {
-            // Extract only trace-scoped attributes from projected columns
+            // Extract trace-scoped attributes from projected columns
             val split = splitProjectedColumns(record)
-            split["trace"]!!
+            val projected = split["trace"]!!
+            // If projected trace data only has identity columns (traceId, logId),
+            // but full properties(trace) is also in the record, merge them
+            val hasRealProjected = projected.keys.any { it !in setOf("traceId", "logId") }
+            logger.debug("populateTraceAttributes - projected keys: {}, hasRealProjected: {}, record has 'trace': {}, trace type: {}",
+                projected.keys, hasRealProjected, record.containsKey("trace"), record["trace"]?.javaClass?.name)
+            if (!hasRealProjected && record.containsKey("trace") && record["trace"] is Map<*, *>) {
+                @Suppress("UNCHECKED_CAST")
+                val fullTrace = record["trace"] as Map<String, Any?>
+                logger.debug("Merging projected with full trace properties. Full trace keys: {}", fullTrace.keys)
+                val merged = mutableMapOf<String, Any?>()
+                merged.putAll(fullTrace)
+                merged.putAll(projected)
+                merged
+            } else {
+                projected
+            }
         } else {
             // Try to extract from nested trace object (SELECT *)
             when {
@@ -384,8 +485,10 @@ object HierarchyReconstructor {
         // For projected columns: ONLY extract if trace attributes were selected (traceData not empty)
         // For SELECT *: ALWAYS extract concept:name
         if (hasProjected) {
-            // Projected columns - only set conceptName if trace attributes were actually selected
-            if (traceData.isNotEmpty()) {
+            // Projected columns - only set conceptName if REAL trace attributes were selected
+            // (not just internal identity columns like traceId/logId)
+            val hasRealTraceData = traceData.keys.any { it !in setOf("traceId", "logId") }
+            if (traceData.isNotEmpty() && hasRealTraceData) {
                 trace.conceptName = if (traceData.containsKey("traceId")) {
                     // Extract full trace name from traceId
                     extractTraceNameFromTraceId(traceData)
@@ -398,7 +501,7 @@ object HierarchyReconstructor {
                         ?: "unknown"
                 }
             }
-            // If traceData is empty, don't set conceptName at all
+            // If traceData is empty or only has identity columns, don't set conceptName
         } else {
             // SELECT * - always set concept:name
             trace.conceptName = extractString(traceData, "concept:name", "concept_name")
@@ -413,7 +516,7 @@ object HierarchyReconstructor {
         trace.costTotal = extractDouble(traceData, "cost:total", "total")
 
         // Copy additional attributes
-        copyAttributes(traceData, trace.attributes, excludeKeys = setOf("traceId", "caseId", "concept:name", "concept_name", "name", "cost:currency", "cost:total", "currency", "total"))
+        copyAttributes(traceData, trace.attributes, excludeKeys = setOf("traceId", "caseId", "concept:name", "concept_name", "name", "cost:currency", "cost:total", "currency", "total", "importOrder", "createdAt", "updatedAt", "logId", "eventId"))
     }
 
     /**
@@ -475,7 +578,8 @@ object HierarchyReconstructor {
         copyAttributes(eventData, event.attributes, excludeKeys = setOf(
             "activity", "resource", "lifecycle", "timestamp", "cost", "name",
             "concept:name", "concept_name", "org:resource", "lifecycle:transition", "time:timestamp",
-            "cost:total", "cost:currency", "total", "currency", "cost_total", "cost_currency"
+            "cost:total", "cost:currency", "total", "currency", "cost_total", "cost_currency",
+            "importOrder", "eventId", "createdAt"
         ))
 
         return event
@@ -605,10 +709,16 @@ object HierarchyReconstructor {
                 return@forEach
             }
 
-            if (keyStr !in excludeKeys && value != null) {
-                // Skip nested objects (already extracted)
+            if (keyStr !in excludeKeys) {
+                // Skip nested objects (already extracted); allow null expression results
                 if (value !is Map<*, *>) {
-                    target[keyStr] = value
+                    val storedValue = when (value) {
+                        is LocalDateTime -> value.atZone(ZoneOffset.UTC).toInstant()
+                        is ZonedDateTime -> value.toInstant()
+                        is OffsetDateTime -> value.toInstant()
+                        else -> value
+                    }
+                    target[keyStr] = storedValue
                 }
             }
         }

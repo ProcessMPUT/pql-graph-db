@@ -3,6 +3,7 @@ package com.processm.processminterpreter.pql.model
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.OffsetDateTime
+import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.UUID
 
@@ -354,11 +355,14 @@ class DateTimeLiteral(
                     val dateTime = if (formatter == DateTimeFormatter.BASIC_ISO_DATE || formatter == dateFormatter) {
                          LocalDate.parse(cleaned, formatter).atStartOfDay()
                     } else {
+                        // Try OffsetDateTime first to properly handle timezone offsets
                         try {
-                            LocalDateTime.parse(cleaned, formatter)
+                            OffsetDateTime.parse(cleaned, formatter)
+                                .atZoneSameInstant(ZoneOffset.UTC)
+                                .toLocalDateTime()
                         } catch (e: Exception) {
-                            // Try as OffsetDateTime and convert
-                            OffsetDateTime.parse(cleaned, formatter).toLocalDateTime()
+                            // Fall back to LocalDateTime (no offset info)
+                            LocalDateTime.parse(cleaned, formatter)
                         }
                     }
                     return DateTimeLiteral(dateTime, scope, line, charPos)

@@ -129,7 +129,7 @@ class Function(
     }
 
     override fun toString(): String {
-        val scopePrefix = scope?.let { "${it.shortName}:" } ?: ""
+        val scopePrefix = scope?.let { "${it}:" } ?: ""
         val argsStr = children.joinToString(", ")
         return "$scopePrefix$name($argsStr)"
     }

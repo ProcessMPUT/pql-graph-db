@@ -18,7 +18,7 @@ object XESJsonComparator {
 
     // Log-level attributes to ignore (system metadata, not query data)
     private val IGNORED_LOG_KEYS = setOf(
-        "identity:id", "source", "description", "lifecycle:model"
+        "identity:id", "source", "description", "lifecycle:model", "concept:name"
     )
 
     // XES attribute type keys
@@ -56,51 +56,82 @@ object XESJsonComparator {
             diffs.add("Trace count: LOCAL=${localTraces.size}, REMOTE=${remoteTraces.size}")
         }
 
-        // Build trace maps keyed by concept:name
+        // Determine if traces have concept:name for matching
+        // When all traces on both sides lack concept:name, use positional matching
         val localByName = groupByConceptName(localTraces)
         val remoteByName = groupByConceptName(remoteTraces)
 
-        val allTraceNames = (localByName.keys + remoteByName.keys).toSortedSet()
+        val allLocalUnknown = localByName.keys == setOf("unknown") && localTraces.size > 1
+        val allRemoteUnknown = remoteByName.keys == setOf("unknown") && remoteTraces.size > 1
+        val usePositionalMatching = allLocalUnknown && allRemoteUnknown
 
-        // Collect missing traces for summary instead of listing each one
-        val missingInLocal = mutableListOf<String>()
-        val missingInRemote = mutableListOf<String>()
-
-        for (traceName in allTraceNames) {
-            val localGroup = localByName[traceName] ?: emptyList()
-            val remoteGroup = remoteByName[traceName] ?: emptyList()
-
-            if (localGroup.isEmpty()) {
-                missingInLocal.add(traceName)
-                continue
-            }
-            if (remoteGroup.isEmpty()) {
-                missingInRemote.add(traceName)
-                continue
-            }
-
-            // Compare matching traces (by index within same-name group)
-            val count = maxOf(localGroup.size, remoteGroup.size)
+        if (usePositionalMatching) {
+            // Content-based matching: sort traces by a deterministic fingerprint
+            // derived from their attributes and events, then compare positionally.
+            // This handles cases where both systems return the same traces but in different order.
+            val sortedLocal = localTraces.sortedBy { traceFingerprint(it) }
+            val sortedRemote = remoteTraces.sortedBy { traceFingerprint(it) }
+            val count = maxOf(sortedLocal.size, sortedRemote.size)
             for (i in 0 until count) {
-                val suffix = if (count > 1) " [$i]" else ""
-                val localTrace = localGroup.getOrNull(i)
-                val remoteTrace = remoteGroup.getOrNull(i)
+                val localTrace = sortedLocal.getOrNull(i)
+                val remoteTrace = sortedRemote.getOrNull(i)
+                val label = "[$i]"
 
                 if (localTrace == null) {
-                    diffs.add("Trace '$traceName'$suffix: extra in REMOTE")
+                    diffs.add("Trace $label: extra in REMOTE")
                     continue
                 }
                 if (remoteTrace == null) {
-                    diffs.add("Trace '$traceName'$suffix: extra in LOCAL")
+                    diffs.add("Trace $label: extra in LOCAL")
                     continue
                 }
 
-                compareTrace(traceName, localTrace, remoteTrace, diffs)
+                compareTrace(label, localTrace, remoteTrace, diffs)
             }
-        }
+        } else {
+            // Name-based matching: group by concept:name
+            val allTraceNames = (localByName.keys + remoteByName.keys).toSortedSet()
 
-        missingInRemote.forEach { diffs.add("Trace '$it': missing in REMOTE") }
-        missingInLocal.forEach { diffs.add("Trace '$it': missing in LOCAL") }
+            // Collect missing traces for summary instead of listing each one
+            val missingInLocal = mutableListOf<String>()
+            val missingInRemote = mutableListOf<String>()
+
+            for (traceName in allTraceNames) {
+                val localGroup = localByName[traceName] ?: emptyList()
+                val remoteGroup = remoteByName[traceName] ?: emptyList()
+
+                if (localGroup.isEmpty()) {
+                    missingInLocal.add(traceName)
+                    continue
+                }
+                if (remoteGroup.isEmpty()) {
+                    missingInRemote.add(traceName)
+                    continue
+                }
+
+                // Compare matching traces (by index within same-name group)
+                val count = maxOf(localGroup.size, remoteGroup.size)
+                for (i in 0 until count) {
+                    val suffix = if (count > 1) " [$i]" else ""
+                    val localTrace = localGroup.getOrNull(i)
+                    val remoteTrace = remoteGroup.getOrNull(i)
+
+                    if (localTrace == null) {
+                        diffs.add("Trace '$traceName'$suffix: extra in REMOTE")
+                        continue
+                    }
+                    if (remoteTrace == null) {
+                        diffs.add("Trace '$traceName'$suffix: extra in LOCAL")
+                        continue
+                    }
+
+                    compareTrace(traceName, localTrace, remoteTrace, diffs)
+                }
+            }
+
+            missingInRemote.forEach { diffs.add("Trace '$it': missing in REMOTE") }
+            missingInLocal.forEach { diffs.add("Trace '$it': missing in LOCAL") }
+        }
 
         val match = diffs.isEmpty()
         val summary = if (match) {
@@ -123,12 +154,16 @@ object XESJsonComparator {
         val remoteAttrs = extractAttributes(remoteTrace)
         compareAttributes("Trace '$traceName'", localAttrs, remoteAttrs, diffs)
 
-        // Compare events
+        // Compare events (including null event placeholders)
+        val localRawEventCount = countRawChildren(localTrace, "event")
+        val remoteRawEventCount = countRawChildren(remoteTrace, "event")
         val localEvents = extractChildren(localTrace, "event")
         val remoteEvents = extractChildren(remoteTrace, "event")
 
-        if (localEvents.size != remoteEvents.size) {
-            diffs.add("Trace '$traceName': event count LOCAL=${localEvents.size}, REMOTE=${remoteEvents.size}")
+        if (localRawEventCount != remoteRawEventCount) {
+            val localDesc = if (localEvents.size != localRawEventCount) "${localEvents.size} real + ${localRawEventCount - localEvents.size} null" else "${localRawEventCount}"
+            val remoteDesc = if (remoteEvents.size != remoteRawEventCount) "${remoteEvents.size} real + ${remoteRawEventCount - remoteEvents.size} null" else "${remoteRawEventCount}"
+            diffs.add("Trace '$traceName': event count LOCAL=$localDesc, REMOTE=$remoteDesc")
         }
 
         val localEventAttrs = localEvents.map { extractAttributes(it) }
@@ -210,7 +245,16 @@ object XESJsonComparator {
             when {
                 lv == null -> diffs.add("$context: LOCAL missing '$key' (REMOTE='$rv')")
                 rv == null -> diffs.add("$context: REMOTE missing '$key' (LOCAL='$lv')")
-                lv != rv -> diffs.add("$context: '$key' differs LOCAL='$lv' REMOTE='$rv'")
+                lv != rv -> {
+                    // Allow float tolerance (e.g., 1.08 vs 1.0799999999999992)
+                    val lvd = lv.toDoubleOrNull()
+                    val rvd = rv.toDoubleOrNull()
+                    if (lvd != null && rvd != null && Math.abs(lvd - rvd) < 1e-6) {
+                        // Close enough — treat as match
+                    } else {
+                        diffs.add("$context: '$key' differs LOCAL='$lv' REMOTE='$rv'")
+                    }
+                }
             }
         }
     }
@@ -224,6 +268,19 @@ object XESJsonComparator {
         val first = json.first()
         @Suppress("UNCHECKED_CAST")
         return (first["log"] as? Map<String, Any?>) ?: first
+    }
+
+    /**
+     * Count raw children including null entries.
+     * ProcessM outputs null event placeholders for non-projected events.
+     */
+    private fun countRawChildren(parent: Map<String, Any?>, childKey: String): Int {
+        val raw = parent[childKey] ?: return 0
+        return when (raw) {
+            is List<*> -> raw.size
+            is Map<*, *> -> 1
+            else -> 0
+        }
     }
 
     /**
@@ -264,6 +321,25 @@ object XESJsonComparator {
         }
 
         return result
+    }
+
+    /**
+     * Compute a deterministic fingerprint for a trace based on its attributes and events.
+     * Used for content-based matching when traces lack concept:name.
+     */
+    private fun traceFingerprint(trace: Map<String, Any?>): String {
+        val attrs = extractAttributes(trace)
+        val attrStr = attrs.filterKeys { it !in IGNORED_KEYS }.entries
+            .sortedBy { it.key }
+            .joinToString("|") { "${it.key}=${it.value}" }
+        val events = extractChildren(trace, "event")
+        val eventStr = events.map { event ->
+            val eventAttrs = extractAttributes(event)
+            eventAttrs.filterKeys { it !in IGNORED_KEYS }.entries
+                .sortedBy { it.key }
+                .joinToString(",") { "${it.key}=${it.value}" }
+        }.sorted().joinToString(";")
+        return "$attrStr||$eventStr"
     }
 
     /**

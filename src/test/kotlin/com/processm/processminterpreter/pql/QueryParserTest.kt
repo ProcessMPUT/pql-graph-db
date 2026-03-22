@@ -132,7 +132,7 @@ class QueryParserTest {
     @Test
     fun `selectAllImplicitTest - implicit select all when no SELECT clause`() {
         // ProcessM: (no SELECT clause - implicit SELECT *)
-        val query = parseQuery("where e:activity='test'")
+        val query = parseQuery("where e:name='test'")
 
         // All scopes should have implicit SELECT *
         assertTrue(query.isImplicitSelectAll[Scope.Log] ?: false, "Log should be implicit SELECT *")

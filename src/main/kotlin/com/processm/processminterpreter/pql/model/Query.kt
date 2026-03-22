@@ -216,6 +216,18 @@ class Query private constructor(
         }
 
     /**
+     * Tracks whether select attributes were propagated from GROUP BY (not explicit SELECT).
+     * When true, the isImplicitSelectAll getter skips the attribute-based explicit check.
+     */
+    private var _groupByPropagatedToSelect = false
+
+    /**
+     * Whether SELECT attributes came from GROUP BY propagation (not an explicit SELECT clause).
+     * When true, the apparent select attributes were auto-populated from GROUP BY, not user-specified.
+     */
+    val isGroupByPropagatedToSelect: Boolean get() = _groupByPropagatedToSelect
+
+    /**
      * Whether to select all attributes for each scope.
      *
      * - true: SELECT * explicitly specified
@@ -266,11 +278,15 @@ class Query private constructor(
     val isImplicitSelectAll: Map<Scope, Boolean>
         get() {
             // Check if ANY scope has explicit selection (SELECT * or specific attributes)
+            // When _groupByPropagatedToSelect is true, attributes were copied from GROUP BY,
+            // not from an explicit SELECT clause — skip attribute-based check.
             val hasAnyExplicitSelect = Scope.values().any { scope ->
                 _selectAll[scope] != null ||  // Explicit SELECT * or specific attributes
-                _selectStandardAttributes[scope]?.isNotEmpty() == true ||
-                _selectOtherAttributes[scope]?.isNotEmpty() == true ||
-                _selectExpressions[scope]?.isNotEmpty() == true
+                _selectExpressions[scope]?.isNotEmpty() == true ||
+                (!_groupByPropagatedToSelect && (
+                    _selectStandardAttributes[scope]?.isNotEmpty() == true ||
+                    _selectOtherAttributes[scope]?.isNotEmpty() == true
+                ))
             }
 
             // If any explicit selection exists, all scopes have implicit = false
@@ -280,11 +296,11 @@ class Query private constructor(
 
             // No explicit selection - check if truly implicit SELECT ALL
             return Scope.values().associateWith { scope ->
-                // If we are grouping by this scope, implicit select all is disabled
+                // If we are grouping by this scope (explicit or implicit), implicit select all is disabled
                 // Also disabled if any upper scope is grouped (because lower scope attributes would need aggregation)
                 var currentScope: Scope? = scope
                 while (currentScope != null) {
-                    if (isGroupBy[currentScope] == true) {
+                    if (isGroupBy[currentScope] == true || isImplicitGroupBy[currentScope] == true) {
                         return@associateWith false
                     }
                     currentScope = currentScope.upper
@@ -636,9 +652,9 @@ class Query private constructor(
 
                     // Emit warning (ProcessM behavior: warn but continue)
                     emitWarning(
-                        PQLSemanticException(
-                            "SELECT * conflicts with specific attribute selections for scope ${scope}. " +
-                                "The specific attributes will be ignored (SELECT * takes precedence).",
+                        PQLSyntaxException(
+                            PQLSyntaxException.Problem.SelectAllConflictsWithReferencingByName,
+                            -1, -1, scope.toString()
                         ),
                     )
 
@@ -672,9 +688,11 @@ class Query private constructor(
             val classifierAttrs = whereExpression.filter { it is Attribute && it.isClassifier }
             if (classifierAttrs.isNotEmpty()) {
                 val attr = classifierAttrs.first() as Attribute
-                throw InvalidClassifierUsageException(
-                    "Classifier '${attr.name}' cannot be used in WHERE clause. " +
-                        "Classifiers are only allowed in SELECT and GROUP BY.",
+                throw PQLSyntaxException(
+                    PQLSyntaxException.Problem.ClassifierInWhere,
+                    attr.line,
+                    attr.charPositionInLine,
+                    attr.name
                 )
             }
         }
@@ -688,9 +706,11 @@ class Query private constructor(
 
         if (logClassifiers.isNotEmpty()) {
             val attr = logClassifiers.first()
-            throw InvalidClassifierUsageException(
-                "Classifier '${attr.name}' cannot be used at LOG scope. " +
-                    "Classifiers are only available at TRACE and EVENT scopes.",
+            throw PQLSyntaxException(
+                PQLSyntaxException.Problem.ClassifierOnLog,
+                attr.line,
+                attr.charPositionInLine,
+                attr.name
             )
         }
     }
@@ -938,6 +958,42 @@ class Query private constructor(
     }
 
     /**
+     * Propagate GROUP BY attributes to SELECT when no explicit SELECT clause is present.
+     *
+     * ProcessM Rule: When GROUP BY is specified without a SELECT clause,
+     * the grouped attributes are automatically added to SELECT. Scopes without
+     * GROUP BY retain their implicit SELECT ALL behavior.
+     */
+    private fun propagateGroupByToSelect() {
+        // Only propagate if there's no explicit SELECT clause
+        val hasExplicitSelect = Scope.values().any { scope ->
+            _selectAll[scope] != null ||
+                _selectStandardAttributes[scope]?.isNotEmpty() == true ||
+                _selectOtherAttributes[scope]?.isNotEmpty() == true ||
+                _selectExpressions[scope]?.isNotEmpty() == true
+        }
+        if (hasExplicitSelect) return
+
+        // Only propagate if there's at least one GROUP BY scope
+        val hasGroupBy = Scope.values().any { isGroupBy[it] == true }
+        if (!hasGroupBy) return
+
+        // For each scope with GROUP BY, copy attributes to SELECT
+        Scope.values().forEach { scope ->
+            if (isGroupBy[scope] == true) {
+                _groupByStandardAttributes[scope]?.forEach { attr ->
+                    _selectStandardAttributes.getOrPut(scope) { LinkedHashSet() }.add(attr)
+                }
+                _groupByOtherAttributes[scope]?.forEach { attr ->
+                    _selectOtherAttributes.getOrPut(scope) { LinkedHashSet() }.add(attr)
+                }
+            }
+        }
+
+        _groupByPropagatedToSelect = true
+    }
+
+    /**
      * Validate all query constraints.
      *
      * This is a convenience method that calls all validation methods.
@@ -946,13 +1002,66 @@ class Query private constructor(
      * @throws PQLSemanticException if any validation fails
      */
     fun validate() {
+        // ProcessM validation: SELECT scope:* is incompatible with GROUP BY at that scope or above.
+        // Must run before validateSelectAll() which would throw a less-specific error.
+        for (selectAllScope in _selectAll.filterValues { it == true }.keys) {
+            var checkScope: Scope? = selectAllScope
+            while (checkScope != null) {
+                if (isGroupBy[checkScope] == true) {
+                    throw PQLSyntaxException(
+                        PQLSyntaxException.Problem.MixedScopes,
+                        -1, -1, selectAllScope.toString(), checkScope.toString()
+                    )
+                }
+                checkScope = checkScope.upper
+            }
+        }
         validateSelectAll()
+        validateOrderByWithImplicitGroupBy()
+        propagateGroupByToSelect()
         validateGroupBy()
         validateClassifiers()
         validateHoisting()
         validateHoistingInSelectAndOrderBy()
         validateWhereClause()
         validateDeleteConstraints()
+    }
+
+    /**
+     * Validate ORDER BY with implicit GROUP BY.
+     *
+     * ProcessM Rule: When ORDER BY contains only aggregation functions and
+     * implicit GROUP BY is active, ordering is meaningless (only one row per scope).
+     * Clear ORDER BY and emit a warning.
+     */
+    private fun validateOrderByWithImplicitGroupBy() {
+        Scope.values().forEach { scope ->
+            // Explicit GROUP BY at this scope → ORDER BY by aggregation is valid, don't clear
+            if (isGroupBy[scope] == true) return@forEach
+
+            val orderExprs = _orderByExpressions[scope] ?: return@forEach
+            if (orderExprs.isEmpty()) return@forEach
+
+            // Check if ALL order by expressions are aggregations
+            val allAggregation = orderExprs.all { ordered ->
+                ordered.base is com.processm.processminterpreter.pql.model.Function &&
+                    (ordered.base as com.processm.processminterpreter.pql.model.Function).functionType == FunctionType.Aggregation
+            }
+
+            if (allAggregation) {
+                // All ORDER BY expressions are aggregations → implicit GROUP BY at this scope
+                // Record it before clearing (so isImplicitGroupBy remains correct)
+                _isImplicitGroupBy[scope] = true
+                // Clear ORDER BY — ordering is meaningless with implicit GROUP BY (one row per scope)
+                _orderByExpressions[scope]?.clear()
+                emitWarning(
+                    PQLSyntaxException(
+                        PQLSyntaxException.Problem.OrderByClauseRemoved,
+                        -1, -1
+                    )
+                )
+            }
+        }
     }
 
     /**
@@ -1079,6 +1188,16 @@ class Query private constructor(
             return
         }
 
+        // Check 2b: Implicit per-trace grouping
+        // ProcessM implicitly groups by trace for event-level aggregation without explicit GROUP BY.
+        // Upper-scope attributes (trace, log) are always valid because each trace has a single value.
+        // e.g., "select t:name, count(e:name)" is valid — t:name is constant per trace.
+        val hasAnyExplicitGroupBy = isGroupBy.values.any { it == true }
+        if (!hasAnyExplicitGroupBy && scope.ordinal < Scope.Event.ordinal) {
+            // No explicit GROUP BY and attribute is at trace or log scope → implicit grouping key
+            return
+        }
+
         // Check 3: Hoisted version is grouped (going UP)
         // Example: select e:name group by ^e:name
         // We check if ^e:name, ^^e:name, etc. are in GROUP BY
@@ -1098,13 +1217,14 @@ class Query private constructor(
             }
         }
 
-        // Check 4: De-hoisted GROUP BY covers this attribute
+        // Check 4: De-hoisted GROUP BY covers this attribute (single-level hoisting only)
         // Example: select e:name ... group by ^e:name
         // ^e:name in GROUP BY at Trace scope has effectiveScope=Trace but declared scope=Event
         // This covers e:name (same declared scope + name) in SELECT
+        // Only ^ (one level) is allowed — ^^ or more means the grouping is too far up
         val allGroupByAttrs = groupByStandardAttributes.values.flatten() + groupByOtherAttributes.values.flatten()
         for (gbAttr in allGroupByAttrs) {
-            if (gbAttr.hoistingPrefix.isNotEmpty() &&
+            if (gbAttr.hoistingPrefix == "^" &&
                 gbAttr.scope == attr.scope &&
                 gbAttr.name == attr.name) {
                 return

@@ -421,9 +421,21 @@ class PQLQueryController(
                 }
 
                 val excludeAttrs = if (!isEventProjected) processMConfig.excludeEventAttrsInSelectStar else emptyList()
-                val projectedTraceAttrs2 = localResult.results.firstOrNull()?.keys
-                    ?.filter { it.startsWith("t_") && it != "t_traceId" }
-                    ?.toSet() ?: emptySet()
+                // When properties(trace) is in the result AND the user explicitly selected trace attributes,
+                // mark all standard trace attrs as projected. Without hasExplicitTraceSelect, properties(trace)
+                // is only there for internal grouping (e.g., aggregation queries) and shouldn't be exposed.
+                val hasFullTraceProperties = localResult.hasExplicitTraceSelect &&
+                    (localResult.results.firstOrNull()?.let { r ->
+                        r.containsKey("trace") && r["trace"] is Map<*, *>
+                    } ?: false)
+                val projectedTraceAttrs2 = if (hasFullTraceProperties) {
+                    // properties(trace) includes all trace attrs — mark all as projected
+                    setOf("t_name", "concept:name", "t_id", "t_currency", "t_total")
+                } else {
+                    localResult.results.firstOrNull()?.keys
+                        ?.filter { it.startsWith("t_") && it != "t_traceId" }
+                        ?.toSet() ?: emptySet()
+                }
                 val xesJson = XESJsonConverter.convertToXESJson(localResult.logs, isProjectedQuery, excludeAttrs, projectedTraceAttrs2)
                 listOf(xesJson)
             } else {

@@ -86,6 +86,7 @@ class RemoteProcessMService(
             val request = HttpRequest.newBuilder()
                 .uri(uri)
                 .header("Authorization", "Bearer $token")
+                .header("Accept", "application/json")
                 .GET()
                 .build()
 

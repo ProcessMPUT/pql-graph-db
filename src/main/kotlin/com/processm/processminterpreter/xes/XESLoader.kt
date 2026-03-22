@@ -111,7 +111,13 @@ class XESLoader(
                         updatedAt: ${'$'}updatedAt
                     })
                     SET log += ${'$'}attributes
+                    SET log.classifiers = ${'$'}classifiers
                 """
+                val classifiersJson = if (xesLog.classifiers.isNotEmpty()) {
+                    objectMapper.writeValueAsString(xesLog.classifiers)
+                } else {
+                    null
+                }
                 tx.run(
                     createLogQuery,
                     mapOf(
@@ -120,6 +126,7 @@ class XESLoader(
                         "createdAt" to xesLog.logNode.createdAt,
                         "updatedAt" to xesLog.logNode.updatedAt,
                         "attributes" to sanitizeAttributes(xesLog.logNode.attributes),
+                        "classifiers" to classifiersJson,
                     ),
                 ).consume()
             }
@@ -133,17 +140,18 @@ class XESLoader(
             val endTrace = (index * BATCH_SIZE) + traceBatch.size
             logger.info("Processing batch ${index + 1} / $totalBatches. Traces $startTrace to $endTrace")
 
-            val tracesData = traceBatch.map { trace ->
+            val tracesData = traceBatch.mapIndexed { traceIdx, trace ->
                 mapOf(
                     "traceId" to trace.traceNode.traceId,
                     "caseId" to trace.traceNode.caseId,
                     "createdAt" to trace.traceNode.createdAt,
+                    "importOrder" to (index * BATCH_SIZE + traceIdx),
                     "attributes" to sanitizeAttributes(trace.traceNode.attributes),
                 )
             }
 
             val eventsData = traceBatch.flatMap { trace ->
-                trace.events.map { event ->
+                trace.events.mapIndexed { eventIdx, event ->
                     mapOf(
                         "traceId" to trace.traceNode.traceId,
                         "eventId" to event.eventNode.eventId,
@@ -153,6 +161,7 @@ class XESLoader(
                         "lifecycle" to event.eventNode.lifecycle,
                         "cost" to event.eventNode.cost,
                         "createdAt" to event.eventNode.createdAt,
+                        "importOrder" to eventIdx,
                         "attributes" to sanitizeAttributes(event.eventNode.attributes),
                     )
                 }
@@ -178,7 +187,8 @@ class XESLoader(
                         CREATE (trace:Trace {
                             traceId: traceProps.traceId,
                             caseId: traceProps.caseId,
-                            createdAt: traceProps.createdAt
+                            createdAt: traceProps.createdAt,
+                            importOrder: traceProps.importOrder
                         })
                         SET trace += traceProps.attributes
                         CREATE (log)-[:CONTAINS]->(trace)
@@ -198,7 +208,8 @@ class XESLoader(
                             resource: eventProps.resource,
                             lifecycle: eventProps.lifecycle,
                             cost: eventProps.cost,
-                            createdAt: eventProps.createdAt
+                            createdAt: eventProps.createdAt,
+                            importOrder: eventProps.importOrder
                         })
                         SET event += eventProps.attributes
                         CREATE (trace)-[:HAS_EVENT]->(event)

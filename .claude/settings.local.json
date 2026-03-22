@@ -12,7 +12,10 @@
       "Bash(grep:*)",
       "Bash(curl:*)",
       "Bash(python -c:*)",
-      "Bash(./gradlew:*)"
+      "Bash(./gradlew:*)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:api.github.com)",
+      "mcp__ide__getDiagnostics"
     ]
   },
   "enabledPlugins": {

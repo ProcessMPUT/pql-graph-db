@@ -415,12 +415,16 @@ class QueryBuilder : QLParserBaseVisitor<Any>() {
             // Binary arithmetic: +, -, *, /
             ctx.childCount == 3 && ctx.getChild(1).text in listOf("+", "-", "*", "/") -> {
                 val op = ctx.getChild(1).text
+                // Use operator token's position (matches ProcessM behavior)
+                val opToken = (ctx.getChild(1) as? org.antlr.v4.runtime.tree.TerminalNode)?.symbol
+                val opLine = opToken?.line ?: line
+                val opCharPos = opToken?.charPositionInLine ?: charPos
                 BinaryOperator(
                     op,
                     buildArithExpr(ctx.arith_expr(0)),
                     buildArithExpr(ctx.arith_expr(1)),
-                    line,
-                    charPos,
+                    opLine,
+                    opCharPos,
                 )
             }
 
@@ -571,12 +575,22 @@ class QueryBuilder : QLParserBaseVisitor<Any>() {
      * limit: LIMIT limit_number (',' limit_number)*
      */
     private fun buildLimitClause(ctx: QLParser.LimitContext, query: Query) {
+        val isSingleLimit = ctx.limit_number().size == 1
         val seenScopes = mutableSetOf<Scope>()
         ctx.limit_number().forEachIndexed { index, limitCtx ->
             val text = limitCtx.NUMBER().text
             val line = limitCtx.NUMBER().symbol.line
             val charPos = limitCtx.NUMBER().symbol.charPositionInLine
             val (scope, value, hasDecimal) = parseScopedNumber(text, index)
+
+            // Single-scope limit with value 0 is rejected (e.g., "limit l:0")
+            // Multi-scope limit allows 0 (e.g., "limit l:1, t:2, e:0")
+            if (isSingleLimit && value == 0L) {
+                throw PQLSyntaxException(
+                    PQLSyntaxException.Problem.PositiveIntegerRequired,
+                    line, charPos, text
+                )
+            }
 
             if (scope != null) {
                 // Emit warning if decimal part was truncated (ProcessM behavior)
@@ -614,6 +628,14 @@ class QueryBuilder : QLParserBaseVisitor<Any>() {
             val line = offsetCtx.NUMBER().symbol.line
             val charPos = offsetCtx.NUMBER().symbol.charPositionInLine
             val (scope, value, hasDecimal) = parseScopedNumber(text, index)
+
+            // Offset 0 is always rejected (offset 0 = no offset = meaningless)
+            if (value == 0L) {
+                throw PQLSyntaxException(
+                    PQLSyntaxException.Problem.PositiveIntegerRequired,
+                    line, charPos, text
+                )
+            }
 
             if (scope != null) {
                 // Emit warning if decimal part was truncated (ProcessM behavior)
@@ -673,7 +695,7 @@ class QueryBuilder : QLParserBaseVisitor<Any>() {
             val roundedValue = kotlin.math.round(doubleValue).toLong()
             val hasDecimal = doubleValue != roundedValue.toDouble()
 
-            // Validate non-negative integer (>= 0)
+            // Validate non-negative (zero allowed here, checked by caller for context)
             if (roundedValue < 0) {
                 throw PQLSyntaxException(
                     PQLSyntaxException.Problem.PositiveIntegerRequired,

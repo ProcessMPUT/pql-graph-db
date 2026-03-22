@@ -31,7 +31,7 @@ class AntlrPQLTranslator(
      * @return CypherQuery object containing the Cypher query string and parameters
      * @throws IllegalArgumentException if the PQL query has syntax errors
      */
-    override fun translateToCypher(pqlQuery: String, logId: String?): CypherQuery {
+    override fun translateToCypher(pqlQuery: String, logId: String?, classifiers: Map<String, List<String>>, defaultTraceLimit: Int?): CypherQuery {
         logger.debug("Translating PQL query using ANTLR: $pqlQuery")
 
         try {
@@ -59,7 +59,13 @@ class AntlrPQLTranslator(
             errorListener.throwIfErrors()
 
             // Step 8: Visit the AST and generate Cypher query
-            val visitor = QLToCypherVisitor(logId, processMConfig.defaultTraceLimit)
+            // defaultTraceLimit: null = use config default, -1 = no limit, >0 = explicit limit
+            val effectiveTraceLimit = when (defaultTraceLimit) {
+                null -> processMConfig.defaultTraceLimit
+                -1 -> null  // no default limit (used by tests to match ProcessM test behavior)
+                else -> defaultTraceLimit
+            }
+            val visitor = QLToCypherVisitor(logId, effectiveTraceLimit, classifiers)
             val result = visitor.visit(tree) as CypherQuery
 
             logger.debug("Generated Cypher: ${result.query}")

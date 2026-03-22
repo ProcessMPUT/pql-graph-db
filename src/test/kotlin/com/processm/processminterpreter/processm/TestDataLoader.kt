@@ -93,9 +93,15 @@ class TestDataLoader {
     fun loadHospitalLog(): String? {
         return try {
             loadedLogs.getOrPut("Hospital") {
-                logger.info("Loading Hospital.xes test data...")
+                // Check Neo4j first — prevents re-loading after JVM restart
+                val existing = checkLogExists("Hospital-test")
+                if (existing != null) {
+                    logger.info("Hospital log already exists in Neo4j: $existing")
+                    return@getOrPut existing
+                }
 
-                val stream = javaClass.getResourceAsStream("/Hospital.xes")
+                logger.info("Loading Hospital.xes test data...")
+                val stream = javaClass.getResourceAsStream("/logs/Hospital_log.xes")
                     ?: return null // Hospital log not available
 
                 stream.use {
@@ -119,9 +125,15 @@ class TestDataLoader {
     fun loadBPILog(): String? {
         return try {
             loadedLogs.getOrPut("BPI") {
-                logger.info("Loading BPI Challenge 2013 log...")
+                // Check Neo4j first — prevents re-loading after JVM restart
+                val existing = checkLogExists("BPI-test")
+                if (existing != null) {
+                    logger.info("BPI log already exists in Neo4j: $existing")
+                    return@getOrPut existing
+                }
 
-                val stream = javaClass.getResourceAsStream("/BPI_Challenge_2013_open_problems.xes")
+                logger.info("Loading BPI Challenge 2013 log...")
+                val stream = javaClass.getResourceAsStream("/bpi_challenge_2013_open_problems.xes")
                     ?: return null
 
                 stream.use {
@@ -140,11 +152,24 @@ class TestDataLoader {
     }
 
     /**
-     * Clear all test data from Neo4j
+     * Clear all test data from Neo4j.
+     * Removes only logs with known test logIds (JournalReview-test, Hospital-test, BPI-test).
+     * Call this from @AfterAll if you need a clean database for the next test run.
      */
-    fun clearTestData() {
-        logger.info("Clearing test data from Neo4j...")
-        // TODO: Implement if needed
+    fun clearTestData(logIds: List<String> = listOf("JournalReview-test", "Hospital-test", "BPI-test")) {
+        logger.info("Clearing test data for logIds: $logIds")
+        neo4jDriver.session().use { session ->
+            for (logId in logIds) {
+                val deleted = session.run(
+                    """
+                    MATCH (log:Log {logId: ${'$'}logId})-[:CONTAINS]->(trace:Trace)-[:HAS_EVENT]->(event:Event)
+                    DETACH DELETE log, trace, event
+                    """.trimIndent(),
+                    mapOf("logId" to logId)
+                ).consume().counters().nodesDeleted()
+                if (deleted > 0) logger.info("Deleted $deleted nodes for logId: $logId")
+            }
+        }
         loadedLogs.clear()
     }
 }

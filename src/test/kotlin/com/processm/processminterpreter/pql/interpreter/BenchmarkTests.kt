@@ -46,7 +46,7 @@ class BenchmarkTests : BaseInterpreterTest() {
         println("Import Time: ${importTime}ms")
         
         println("Starting Query Execution...")
-        val query = "select t:caseId, count(e:eventId), sum(e:cost:total) group by t:caseId"
+        val query = "select t:name, count(e:name), sum([e:cost:total]) group by t:name"
         val queryTime = measureTimeMillis {
             val result = pqlQueryService.executePQLQuery(query)
             assertTrue(result.success)

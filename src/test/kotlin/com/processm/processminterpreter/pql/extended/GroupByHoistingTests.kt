@@ -95,16 +95,19 @@ class GroupByHoistingTests : BaseInterpreterTest() {
 
     @Test
     fun `test GROUP BY hoisted event attribute`() {
-        // Group by hoisted event attribute (^e:concept:name) which should be equivalent to t:concept:name
-        // This tests if hoisting logic correctly resolves ^e: to trace scope
+        // Group by hoisted event attribute (^e:concept:name) groups traces by event sequence.
+        // Trace1 has events [A, B], Trace2 has event [A] → 2 distinct groups.
+        // After UNWIND, 3 rows: group "A,B" → 2 rows, group "A" → 1 row.
         val query = "select ^e:concept:name, count(e:concept:name) group by ^e:concept:name"
         val result = executeQuery(query, logId)
 
-        assertEquals(2, result.size)
-        // Alias is generated based on declared scope 'e', so it is e_concept_name
-        val trace1 = result.find { it["e_concept_name"] == "Trace1" }
-        assertNotNull(trace1)
-        assertEquals(2L, trace1!!["count_e_concept_name_"])
+        // 2 groups unwound to 3 rows (group with 2 events → 2 rows + group with 1 event → 1 row)
+        assertEquals(3, result.size)
+        // Each row has e_concept_name (unwound event activity)
+        assertTrue(result.all { it.containsKey("e_concept_name") })
+        // The group with 2 events has count=2, the group with 1 event has count=1
+        val counts = result.map { (it["count_e_concept_name_"] as Number).toLong() }.distinct().sorted()
+        assertEquals(listOf(1L, 2L), counts, "Should have groups with count 1 and 2")
     }
 
     @Test

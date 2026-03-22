@@ -1,5 +1,7 @@
 package com.processm.processminterpreter.service
 
+import com.fasterxml.jackson.databind.ObjectMapper
+import com.fasterxml.jackson.core.type.TypeReference
 import com.processm.processminterpreter.pql.CypherQuery
 import com.processm.processminterpreter.pql.PQLTranslator
 import com.processm.processminterpreter.xes.XESWriter
@@ -26,6 +28,32 @@ class PQLQueryService(
     private val xesWriter: XESWriter,
 ) {
     private val logger = LoggerFactory.getLogger(PQLQueryService::class.java)
+    private val objectMapper = ObjectMapper()
+
+    /**
+     * Fetch classifier definitions from the Log node in Neo4j.
+     * Returns a map of classifier name → list of XES attribute keys.
+     */
+    private fun fetchClassifiers(logId: String?): Map<String, List<String>> {
+        if (logId == null) return emptyMap()
+        return try {
+            neo4jDriver.session().use { session ->
+                val result = session.run(
+                    "MATCH (log:Log {logId: \$logId}) RETURN log.classifiers AS classifiers",
+                    mapOf("logId" to logId)
+                )
+                if (result.hasNext()) {
+                    val json = result.single().get("classifiers").asString(null)
+                    if (json != null) {
+                        objectMapper.readValue(json, object : TypeReference<Map<String, List<String>>>() {})
+                    } else emptyMap()
+                } else emptyMap()
+            }
+        } catch (e: Exception) {
+            logger.warn("Failed to fetch classifiers for logId=$logId: ${e.message}")
+            emptyMap()
+        }
+    }
 
     /**
      * Execute PQL query and return results
@@ -33,19 +61,43 @@ class PQLQueryService(
     fun executePQLQuery(
         pqlQuery: String,
         logId: String? = null,
+        defaultTraceLimit: Int? = null,
     ): PQLQueryResult {
         logger.info("Executing PQL query: $pqlQuery (logId: $logId)")
 
         return try {
+            // Fetch classifier definitions from the log node
+            val classifiers = fetchClassifiers(logId)
+
             // Translate PQL to Cypher
-            val cypherQuery = pqlTranslator.translateToCypher(pqlQuery, logId)
+            val cypherQuery = pqlTranslator.translateToCypher(pqlQuery, logId, classifiers, defaultTraceLimit)
             logger.debug("Translated to Cypher: {}", cypherQuery)
+
+            // DELETE queries need a write transaction
+            if (cypherQuery.isDelete) {
+                val deletedCount = neo4jDriver.session().use { session ->
+                    session.executeWrite { tx ->
+                        val result = tx.run(cypherQuery.query, cypherQuery.parameters)
+                        result.consume().counters().nodesDeleted()
+                    }
+                }
+                logger.info("DELETE query removed $deletedCount nodes")
+                return PQLQueryResult(
+                    success = true,
+                    query = pqlQuery,
+                    cypherQuery = cypherQuery.query,
+                    results = emptyList(),
+                    logs = emptyList(),
+                    resultCount = deletedCount,
+                    executionTimeMs = 0,
+                )
+            }
 
             // Execute Cypher query (flat results)
             val flatResults = executeCypherQuery(cypherQuery)
 
             // Reconstruct hierarchical structure with limits
-            val hierarchicalLogs = HierarchyReconstructor.reconstruct(flatResults, cypherQuery.hierarchicalLimits, cypherQuery.columnAliases)
+            val hierarchicalLogs = HierarchyReconstructor.reconstruct(flatResults, cypherQuery.hierarchicalLimits, cypherQuery.columnAliases, cypherQuery.isAggregationResult, cypherQuery.hasTraceOrderBy)
 
             PQLQueryResult(
                 success = true,
@@ -55,6 +107,7 @@ class PQLQueryService(
                 logs = hierarchicalLogs,
                 resultCount = flatResults.size,
                 executionTimeMs = 0, // TODO: Add timing
+                hasExplicitTraceSelect = cypherQuery.hasExplicitTraceSelect,
             )
         } catch (e: Exception) {
             logger.error("Error executing PQL query: $pqlQuery", e)
@@ -309,6 +362,7 @@ data class PQLQueryResult(
     val resultCount: Int = 0,
     val executionTimeMs: Long = 0,
     val error: String? = null,
+    val hasExplicitTraceSelect: Boolean = false,
 ) {
     /**
      * Get first log (convenience method for tests)

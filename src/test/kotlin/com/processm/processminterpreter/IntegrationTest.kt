@@ -44,8 +44,8 @@ class IntegrationTest : BaseInterpreterTest() {
 
         // 3. Execute PQL Query
         // Count total events
-        val countQuery = "select count(e:id)"
-        val countResult = queryService.executePQLQuery(countQuery)
+        val countQuery = "select count(e:name)"
+        val countResult = queryService.executePQLQuery(countQuery, defaultTraceLimit = -1)
         
         if (!countResult.success) {
             println("Count query failed: ${countResult.error}")
@@ -58,8 +58,8 @@ class IntegrationTest : BaseInterpreterTest() {
 
         // 4. Verify Grouping and Aggregation
         // Count events per trace
-        val groupQuery = "select t:caseId, count(e:id) group by t:caseId order by t:caseId"
-        val groupResult = queryService.executePQLQuery(groupQuery)
+        val groupQuery = "select t:name, count(e:name) group by t:name order by t:name"
+        val groupResult = queryService.executePQLQuery(groupQuery, defaultTraceLimit = -1)
         
         if (!groupResult.success) {
             println("Group query failed: ${groupResult.error}")

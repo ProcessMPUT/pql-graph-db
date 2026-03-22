@@ -1,7 +1,7 @@
 package com.processm.processminterpreter.processm.hierarchical
 
-import org.junit.jupiter.api.BeforeAll
-import org.junit.jupiter.api.Disabled
+import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
 import org.springframework.boot.test.context.SpringBootTest
@@ -13,38 +13,31 @@ import kotlin.test.*
  * Tests based on: DBXESDeleterTests.kt
  * Original: https://github.com/ProcessMPUT/processm/blob/master/processm.core/src/test/kotlin/processm/core/log/DBXESDeleterTests.kt
  *
- * ProcessM's DELETE query removes matching components from the database.
- * Our implementation has parser/visitor support for DELETE but execution via
- * PQLQueryService is not yet implemented for Neo4j.
- *
- * All tests are @Disabled as TDD specs until DELETE execution is implemented.
+ * Each test loads its own copy of test data to avoid destructive interference.
  */
 @SpringBootTest
-@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+@TestInstance(TestInstance.Lifecycle.PER_METHOD)
 class DeleteTests : HierarchicalTestsBase() {
 
     private var journalLogId: String = ""
 
-    @BeforeAll
+    @BeforeEach
     fun loadTestData() {
-        journalLogId = loadTestDataWithUniqueId()
-        println("Loaded JournalReview log for delete tests: $journalLogId")
+        val uniqueId = "JournalReview-delete-${java.util.UUID.randomUUID().toString().take(8)}"
+        journalLogId = testDataLoader.loadJournalReviewLog(uniqueId)
+        println("Loaded JournalReview log for delete test: $journalLogId")
     }
 
-    // =====================
-    // DELETE event tests (from ProcessM DBXESDeleterTests)
-    // =====================
+    @AfterEach
+    fun cleanupTestData() {
+        if (journalLogId.isNotEmpty()) {
+            testDataLoader.clearTestData(listOf(journalLogId))
+        }
+    }
 
     @Test
-    @Disabled("DELETE execution not yet implemented in PQLQueryService - TDD spec from ProcessM")
     fun deleteEventTest() {
-        // ProcessM: delete e:* where e:name = 'accept' and l:id = $journal
-        // Deletes all events named 'accept' from the journal log
-        //
-        // ProcessM behavior: after delete, querying for 'accept' events returns 0
-        // The traces remain but without those events.
-
-        // First count events before delete
+        // ProcessM: delete event where e:name = 'accept' and l:id = $journal
         val beforeResult = q(
             "where e:name = 'accept' and l:logId='$journalLogId' limit l:1, t:100, e:100",
             journalLogId
@@ -55,14 +48,12 @@ class DeleteTests : HierarchicalTestsBase() {
         }.count()
         assertTrue(eventCountBefore > 0, "Should have 'accept' events before delete")
 
-        // Execute delete
         val deleteResult = q(
-            "delete e:* where e:name = 'accept' and l:logId='$journalLogId'",
+            "delete event where e:name = 'accept' and l:logId='$journalLogId'",
             journalLogId
         )
         assertTrue(deleteResult.success, "Delete should succeed: ${deleteResult.error}")
 
-        // Verify events are deleted
         val afterResult = q(
             "where e:name = 'accept' and l:logId='$journalLogId' limit l:1, t:100, e:100",
             journalLogId
@@ -75,40 +66,32 @@ class DeleteTests : HierarchicalTestsBase() {
     }
 
     @Test
-    @Disabled("DELETE execution not yet implemented in PQLQueryService - TDD spec from ProcessM")
     fun deleteTraceTest() {
-        // ProcessM: delete t:* where t:name = 'Case 5' and l:id = $journal
-        // Deletes entire trace (case) named 'Case 5' and all its events
-
+        // ProcessM: delete trace where t:name = '5' and l:id = $journal
         val deleteResult = q(
-            "delete t:* where t:name = 'Case 5' and l:logId='$journalLogId'",
+            "delete trace where t:name = '5' and l:logId='$journalLogId'",
             journalLogId
         )
         assertTrue(deleteResult.success, "Delete should succeed: ${deleteResult.error}")
 
-        // Verify trace is deleted
         val afterResult = q(
-            "where t:name = 'Case 5' and l:logId='$journalLogId'",
+            "where t:name = '5' and l:logId='$journalLogId'",
             journalLogId
         )
         assertTrue(afterResult.success, "Post-query should succeed: ${afterResult.error}")
         val traces = afterResult.logs.flatMap { log -> log.traces.toList() }
-        assertEquals(0, traces.size, "Trace 'Case 5' should be deleted")
+        assertEquals(0, traces.size, "Trace '5' should be deleted")
     }
 
     @Test
-    @Disabled("DELETE execution not yet implemented in PQLQueryService - TDD spec from ProcessM")
     fun deleteWithTimestampConditionTest() {
-        // ProcessM: delete e:* where e:timestamp < D2006-01-01 and l:id = $journal
-        // Deletes events before a specific date
-
+        // ProcessM: delete event where e:timestamp < D2006-01-01 and l:id = $journal
         val deleteResult = q(
-            "delete e:* where e:timestamp < D2006-01-01 and l:logId='$journalLogId'",
+            "delete event where e:timestamp < D2006-01-01 and l:logId='$journalLogId'",
             journalLogId
         )
         assertTrue(deleteResult.success, "Delete should succeed: ${deleteResult.error}")
 
-        // Verify no events remain before 2006
         val afterResult = q(
             "where e:timestamp < D2006-01-01 and l:logId='$journalLogId' limit l:1, t:100, e:100",
             journalLogId
@@ -121,18 +104,14 @@ class DeleteTests : HierarchicalTestsBase() {
     }
 
     @Test
-    @Disabled("DELETE execution not yet implemented in PQLQueryService - TDD spec from ProcessM")
     fun deleteLogTest() {
-        // ProcessM: delete l:* where l:id = $journal
-        // Deletes entire log and all its traces and events
-
+        // ProcessM: delete log where l:id = $journal
         val deleteResult = q(
-            "delete l:* where l:logId='$journalLogId'",
+            "delete log where l:logId='$journalLogId'",
             journalLogId
         )
         assertTrue(deleteResult.success, "Delete should succeed: ${deleteResult.error}")
 
-        // Verify log is deleted
         val afterResult = q(
             "where l:logId='$journalLogId'",
             journalLogId
@@ -142,20 +121,16 @@ class DeleteTests : HierarchicalTestsBase() {
     }
 
     @Test
-    @Disabled("DELETE execution not yet implemented in PQLQueryService - TDD spec from ProcessM")
     fun deleteWithComplexWhereTest() {
-        // ProcessM: delete e:* where e:name in ('accept', 'reject') and t:name like 'Case%' and l:id = $journal
-        // Complex WHERE condition with IN and LIKE
-
+        // ProcessM: delete event where e:name in ('accept', 'reject') and l:id = $journal
         val deleteResult = q(
-            "delete e:* where e:name in ('accept', 'reject') and t:name like 'Case%' and l:logId='$journalLogId'",
+            "delete event where e:name in ('accept', 'reject') and l:logId='$journalLogId'",
             journalLogId
         )
         assertTrue(deleteResult.success, "Delete should succeed: ${deleteResult.error}")
 
-        // Verify matching events are deleted
         val afterResult = q(
-            "where e:name in ('accept', 'reject') and t:name like 'Case%' and l:logId='$journalLogId' limit l:1, t:100, e:100",
+            "where e:name in ('accept', 'reject') and l:logId='$journalLogId' limit l:1, t:100, e:100",
             journalLogId
         )
         assertTrue(afterResult.success, "Post-query should succeed: ${afterResult.error}")

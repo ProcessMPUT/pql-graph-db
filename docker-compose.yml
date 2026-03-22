@@ -44,6 +44,65 @@ services:
       - PROCESSM_DEMOMODE=true
       - PROCESSM_BASEURL=http://localhost:80/
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:2080/api/users/session || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  processm-init:
+    image: python:3-slim
+    container_name: processm-init
+    depends_on:
+      processm:
+        condition: service_healthy
+    networks:
+      - processm-network
+    environment:
+      - PROCESSM_URL=http://processm:2080/api
+      - PROCESSM_LOGIN=admin@example.com
+      - PROCESSM_PASSWORD=Admin1234
+      - PROCESSM_ORG=TestOrg
+    entrypoint: ["python3", "-c", """
+import urllib.request, urllib.error, json, os, sys, time
+
+url = os.environ.get('PROCESSM_URL', 'http://processm:2080/api')
+email = os.environ.get('PROCESSM_LOGIN', 'admin@example.com')
+pwd = os.environ.get('PROCESSM_PASSWORD', 'Admin1234')
+org = os.environ.get('PROCESSM_ORG', 'TestOrg')
+
+def post(path, data):
+    req = urllib.request.Request(f'{url}{path}', json.dumps(data).encode(), {'Content-Type': 'application/json'})
+    try:
+        with urllib.request.urlopen(req) as r:
+            return json.loads(r.read()), r.status
+    except urllib.error.HTTPError as e:
+        return json.loads(e.read()), e.code
+
+# Try login first
+resp, code = post('/users/session', {'login': email, 'password': pwd})
+if 'authorizationToken' in resp:
+    print(f'User {email} already exists. Done.')
+    sys.exit(0)
+
+# Create user
+print(f'Creating user {email}...')
+resp, code = post('/users', {'userEmail': email, 'userPassword': pwd, 'newOrganization': True, 'organizationName': org})
+if code == 201 or 'already exists' in resp.get('error', ''):
+    print('User created (or already exists).')
+else:
+    print(f'Create response ({code}): {resp}')
+
+# Verify
+resp, code = post('/users/session', {'login': email, 'password': pwd})
+if 'authorizationToken' in resp:
+    print('Login verified OK.')
+else:
+    print(f'Login failed: {resp}')
+    sys.exit(1)
+"""]
+    restart: "no"
 
 
 volumes:
