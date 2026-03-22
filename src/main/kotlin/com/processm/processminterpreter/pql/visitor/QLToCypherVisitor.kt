@@ -179,6 +179,21 @@ class QLToCypherVisitor(
                 com.processm.processminterpreter.pql.model.Function.isAggregation(expr.name)
         }
 
+        // For pure log-scope aggregation (e.g. select avg(^^e:total)) without GROUP BY:
+        // ProcessM aggregates across ALL traces, not just the first 30.
+        // Remove trace limit from hierarchical limits so aggregation covers full dataset.
+        // The trace limit for display (30 traces with null events) is applied in Stage 2 re-MATCH.
+        val hasExplicitGroupByEarly = query.groupByStandardAttributes.values.any { it.isNotEmpty() } ||
+                query.groupByOtherAttributes.values.any { it.isNotEmpty() }
+        val isAllLogScopeAggEarly = hasAggregationInSelect && !hasExplicitGroupByEarly &&
+                query.selectExpressions.any { (_, exprs) -> exprs.isNotEmpty() } &&
+                query.selectExpressions.all { (scope, exprs) ->
+                    exprs.isEmpty() || scope == com.processm.processminterpreter.pql.model.Scope.Log
+                } &&
+                query.selectStandardAttributes.all { (_, attrs) -> attrs.isEmpty() } &&
+                query.selectOtherAttributes.all { (_, attrs) -> attrs.isEmpty() }
+        val logScopeAggTraceLimit = if (isAllLogScopeAggEarly) hierarchicalLimits.remove("trace") else null
+
         // Detect hoisted event→trace GROUP BY (^e:X) — needs multi-stage COLLECT/UNWIND Cypher.
         // This produces trace-variant grouping by collecting event sequences per trace, then
         // grouping by those sequences. Required for ProcessM-compatible GROUP BY ^e:name behavior.
@@ -287,7 +302,7 @@ class QLToCypherVisitor(
             }
 
             // Step 4: Aggregation WITH clause (Stage 1 for isAllLogScopeAggregation)
-            buildAggregationWithClause(cypher, query, hasExplicitGroupBy, isAllLogScopeAggregation)
+            buildAggregationWithClause(cypher, query, hasExplicitGroupBy, isAllLogScopeAggregation, logScopeAggTraceLimit = logScopeAggTraceLimit)
 
             // Step 5: RETURN
             cypher.append(" RETURN ")
@@ -792,7 +807,8 @@ class QLToCypherVisitor(
         query: Query,
         hasExplicitGroupBy: Boolean,
         isAllLogScopeAggregation: Boolean = false,
-        hoistedAggAliases: Map<String, String> = emptyMap()
+        hoistedAggAliases: Map<String, String> = emptyMap(),
+        logScopeAggTraceLimit: Int? = null
     ): Set<String> {
         val withParts = mutableListOf<String>()
         val addedAliases = mutableSetOf<String>()
@@ -998,7 +1014,21 @@ class QLToCypherVisitor(
         // For LOG-scope aggregations: Stage 2 re-MATCH expands the single log-level row
         // back into per-trace/event rows so HierarchyReconstructor can reconstruct hierarchy.
         if (isAllLogScopeAggregation) {
-            cypher.append(" MATCH (log)-[:CONTAINS]->(trace:Trace)-[:HAS_EVENT]->(event:Event)")
+            // Stage 2 re-MATCH: expand aggregated log-level results back to per-trace/event rows.
+            // Apply trace limit here (not before aggregation) so aggregation covers all data
+            // but output is limited to N traces (ProcessM's default 30).
+            if (logScopeAggTraceLimit != null) {
+                // Aggregation aliases are bound to log — they survive the MATCH.
+                // Collect traces with limit, then re-match events.
+                val aggPassthrough = addedAliases.filter { it !in setOf("log", "trace", TRACE_ORDER_ALIAS, EVENT_ORDER_ALIAS, IMPLICIT_GROUP_ALIAS) }.joinToString(", ")
+                cypher.append(" MATCH (log)-[:CONTAINS]->(trace:Trace)")
+                cypher.append(" WITH log, ${if (aggPassthrough.isNotEmpty()) "$aggPassthrough, " else ""}trace ORDER BY trace.importOrder ASC")
+                cypher.append(" WITH log, ${if (aggPassthrough.isNotEmpty()) "$aggPassthrough, " else ""}collect(trace)[0..$logScopeAggTraceLimit] AS traces")
+                cypher.append(" UNWIND traces AS trace")
+                cypher.append(" MATCH (trace)-[:HAS_EVENT]->(event:Event)")
+            } else {
+                cypher.append(" MATCH (log)-[:CONTAINS]->(trace:Trace)-[:HAS_EVENT]->(event:Event)")
+            }
         }
 
         // Stage 2 WITH: compute complex aggregation expressions from their extracted temp aliases.
@@ -1039,8 +1069,21 @@ class QLToCypherVisitor(
                 allGroupByAttrsR.all { it.effectiveScope == com.processm.processminterpreter.pql.model.Scope.Log }
 
         if (hasExplicitGroupBy && !isAllGroupByAtLogScope) {
-            // Add GROUP BY attribute aliases (skip for log-scope GROUP BY — attrs are no-op)
+            // Add GROUP BY attribute aliases to RETURN only if they're also in SELECT.
+            // GROUP BY attrs are needed in WITH for grouping but shouldn't leak to output
+            // when not explicitly selected (ProcessM behavior).
+            val allSelectAttrs = (query.selectStandardAttributes.values.flatten() +
+                    query.selectOtherAttributes.values.flatten())
+            fun isInSelect(attr: com.processm.processminterpreter.pql.model.Attribute): Boolean {
+                return allSelectAttrs.any { sel ->
+                    sel.scope == attr.scope &&
+                    (sel.isStandard && attr.isStandard && sel.standardName == attr.standardName ||
+                     !sel.isStandard && !attr.isStandard && sel.name == attr.name)
+                } || query.selectAll[attr.effectiveScope ?: attr.scope] == true
+            }
+
             fun addGroupByAlias(attr: com.processm.processminterpreter.pql.model.Attribute) {
+                if (!isInSelect(attr)) return
                 val prefix = scopePrefix(attr.scope)
                 val effectiveScope = mapScope(attr.effectiveScope ?: attr.scope)
                 val alias = "${prefix}_${groupByAttrAliasSuffix(attr, effectiveScope)}"
@@ -1251,7 +1294,11 @@ class QLToCypherVisitor(
         // ProcessM applies trace limit AFTER event-level WHERE filtering.
         // When event WHERE conditions exist, we defer trace limit to after event MATCH+WHERE
         // so that traces without matching events are excluded first, then we limit.
-        val deferTraceLimit = eventConditions.isNotEmpty() && needsEvent
+        // Defer trace limit when ORDER BY has aggregation expressions —
+        // limit must be applied AFTER aggregation + ORDER BY via Cypher LIMIT, not before via COLLECT slice.
+        val hasAggOrderBy = query.orderByExpressions.values.flatten().any { containsAggregation(it.base) }
+        val deferTraceLimitToEnd = hasAggOrderBy
+        val deferTraceLimit = (eventConditions.isNotEmpty() && needsEvent) || deferTraceLimitToEnd
         if (needsTrace || needsEvent) {
             cypher.append(" MATCH (log)-[:CONTAINS]->(trace:Trace)")
 
@@ -1285,9 +1332,9 @@ class QLToCypherVisitor(
                     cypher.append(" WHERE ").append(eventConditions.joinToString(" AND "))
                 }
 
-                // When trace limit was deferred, apply it now after event WHERE filtering
-                // This ensures traces without matching events are excluded before limiting
-                if (deferTraceLimit && (traceLimit != null || traceOffset > 0)) {
+                // When trace limit was deferred for event WHERE, apply it now after event filtering.
+                // Skip when deferring to end (aggregation ORDER BY) — limit is applied as Cypher LIMIT.
+                if (deferTraceLimit && !deferTraceLimitToEnd && (traceLimit != null || traceOffset > 0)) {
                     // Sort events BEFORE collecting to ensure deterministic order within each trace
                     cypher.append(" WITH log, trace, event ORDER BY event.timestamp ASC, event.importOrder ASC")
                     // First collect events per trace, then limit traces
@@ -1455,6 +1502,11 @@ class QLToCypherVisitor(
         } else if (needsEvent && eventLimit != 0 && !hasAggregationH && !needsAggregationGroupingH) {
             // No explicit ORDER BY - add default event ordering for ProcessM compatibility
             cypher.append(" ORDER BY event.timestamp ASC, event.importOrder ASC")
+        }
+
+        // When trace limit was deferred for aggregation ORDER BY, apply as Cypher LIMIT
+        if (deferTraceLimitToEnd && traceLimit != null) {
+            cypher.append(" LIMIT $traceLimit")
         }
 
         // Note: No need to pass hierarchicalLimits to HierarchyReconstructor

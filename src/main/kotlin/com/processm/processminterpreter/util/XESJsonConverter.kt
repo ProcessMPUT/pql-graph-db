@@ -173,6 +173,7 @@ object XESJsonConverter {
      * Convert a single Trace to JSON structure
      */
     private fun convertTrace(trace: Trace, excludeEventAttrs: List<String> = emptyList(), isProjectedQuery: Boolean = false, projectedTraceAttrs: Set<String> = emptySet()): Map<String, Any?> {
+        @Suppress("RemoveExplicitTypeArguments")
         val result = mutableMapOf<String, Any?>()
         val traceAttributes = mutableMapOf<String, MutableList<Map<String, String>>>()
 
@@ -230,7 +231,11 @@ object XESJsonConverter {
         // ADD EVENTS AFTER attributes to match ProcessM order
         val events = trace.events.toList()
         if (events.isNotEmpty()) {
-            val eventMaps = events.map { event -> convertEvent(event, excludeEventAttrs) }
+            val eventMaps = events.map { event ->
+                val converted = convertEvent(event, excludeEventAttrs)
+                // Empty event maps (no projected attributes) become null (ProcessM behavior)
+                if (converted.isEmpty()) null else converted
+            }
             result["event"] = toSingleOrArray(eventMaps)
         } else if (trace.nullEventCount > 1) {
             // ProcessM outputs null event placeholders for events that exist
@@ -313,6 +318,7 @@ object XESJsonConverter {
                 if (value != null) {
                     addAttributeByType(eventAttributes, key, value)
                 } else {
+                    // Expression evaluates to null → output with "null" value (ProcessM behavior)
                     addAttribute(eventAttributes, "string", key, "null")
                 }
             }
