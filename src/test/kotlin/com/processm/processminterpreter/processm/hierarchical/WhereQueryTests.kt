@@ -1,12 +1,16 @@
 package com.processm.processminterpreter.processm.hierarchical
 
 import org.junit.jupiter.api.BeforeAll
-import org.junit.jupiter.api.Disabled
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
 import org.springframework.boot.test.context.SpringBootTest
 import java.time.Instant
-import kotlin.test.*
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 /**
  * WHERE query tests ported from ProcessM
@@ -17,7 +21,6 @@ import kotlin.test.*
 @SpringBootTest
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class WhereQueryTests : HierarchicalTestsBase() {
-
     private var journalLogId: String = ""
 
     @BeforeAll
@@ -34,10 +37,11 @@ class WhereQueryTests : HierarchicalTestsBase() {
     fun whereSimpleTest() {
         // ProcessM: where dayofweek(e:timestamp) in (1, 7) and l:id=$journal
         // Events that occur on Saturday (7) or Sunday (1) - US convention
-        val result = q(
-            "where dayofweek(e:timestamp) in (1, 7) and l:logId='$journalLogId'",
-            journalLogId
-        )
+        val result =
+            q(
+                "where dayofweek(e:timestamp) in (1, 7) and l:logId='$journalLogId'",
+                journalLogId,
+            )
 
         assertTrue(result.success, "Query should succeed: ${result.error}")
         assertEquals(1, result.count(), "Should have exactly 1 log")
@@ -64,8 +68,10 @@ class WhereQueryTests : HierarchicalTestsBase() {
                 // Java DayOfWeek: MONDAY=1..SUNDAY=7
                 // US convention: Sunday=1, Saturday=7
                 val usDayOfWeek = if (dayOfWeek.value == 7) 1 else dayOfWeek.value + 1
-                assertTrue(usDayOfWeek == 1 || usDayOfWeek == 7,
-                    "Event should be on Saturday(7) or Sunday(1), got US dayofweek=$usDayOfWeek for $ts")
+                assertTrue(
+                    usDayOfWeek == 1 || usDayOfWeek == 7,
+                    "Event should be on Saturday(7) or Sunday(1), got US dayofweek=$usDayOfWeek for $ts",
+                )
             }
         }
     }
@@ -74,10 +80,11 @@ class WhereQueryTests : HierarchicalTestsBase() {
     fun whereSimpleWithHoistingTest() {
         // ProcessM: where dayofweek(^e:timestamp) in (1, 7) and l:id=$journal
         // Hoisting at trace level - filter traces that have at least one event on a weekend day
-        val result = q(
-            "where dayofweek(^e:timestamp) in (1, 7) and l:logId='$journalLogId'",
-            journalLogId
-        )
+        val result =
+            q(
+                "where dayofweek(^e:timestamp) in (1, 7) and l:logId='$journalLogId'",
+                journalLogId,
+            )
 
         assertTrue(result.success, "Query should succeed: ${result.error}")
         assertEquals(1, result.count(), "Should have exactly 1 log")
@@ -105,7 +112,7 @@ class WhereQueryTests : HierarchicalTestsBase() {
             val validDays = setOf(java.time.DayOfWeek.SATURDAY, java.time.DayOfWeek.SUNDAY)
             assertTrue(
                 trace.events.any { e -> e.timeTimestamp!!.atZone(java.time.ZoneOffset.UTC).dayOfWeek in validDays },
-                "Trace should have at least one weekend-day event (that's why it was included by hoisting)"
+                "Trace should have at least one weekend-day event (that's why it was included by hoisting)",
             )
             // NOT all events need to be weekend events (hoisting includes ALL trace events)
         }
@@ -115,10 +122,11 @@ class WhereQueryTests : HierarchicalTestsBase() {
     fun whereSimpleWithHoistingTest2() {
         // ProcessM: where dayofweek(^^e:timestamp) in (1, 7) and l:id=$journal
         // Double hoisting at log level — if ANY event in the log is on a weekend, the whole log is returned
-        val result = q(
-            "where dayofweek(^^e:timestamp) in (1, 7) and l:logId='$journalLogId'",
-            journalLogId
-        )
+        val result =
+            q(
+                "where dayofweek(^^e:timestamp) in (1, 7) and l:logId='$journalLogId'",
+                journalLogId,
+            )
 
         assertTrue(result.success, "Query should succeed: ${result.error}")
         assertEquals(1, result.count(), "Should have exactly 1 log (included because some events are on weekends)")
@@ -147,10 +155,11 @@ class WhereQueryTests : HierarchicalTestsBase() {
     fun whereLogicExprTest() {
         // ProcessM: where t:currency != e:currency and l:id=$journal
         // Filter events where trace currency (EUR) differs from event currency (USD)
-        val result = q(
-            "where t:currency != e:currency and l:logId='$journalLogId'",
-            journalLogId
-        )
+        val result =
+            q(
+                "where t:currency != e:currency and l:logId='$journalLogId'",
+                journalLogId,
+            )
 
         assertTrue(result.success, "Query should succeed: ${result.error}")
         assertEquals(1, result.count(), "Should have exactly 1 log")
@@ -191,10 +200,11 @@ class WhereQueryTests : HierarchicalTestsBase() {
     @Test
     fun whereLogicExprWithHoistingTest() {
         // ProcessM: where not(t:currency = ^e:currency) and l:id=$journal
-        val result = q(
-            "where not(t:currency = ^e:currency) and l:logId='$journalLogId'",
-            journalLogId
-        )
+        val result =
+            q(
+                "where not(t:currency = ^e:currency) and l:logId='$journalLogId'",
+                journalLogId,
+            )
 
         assertTrue(result.success, "Query should succeed: ${result.error}")
         assertEquals(1, result.count(), "Should have exactly 1 log")
@@ -235,10 +245,11 @@ class WhereQueryTests : HierarchicalTestsBase() {
     @Test
     fun whereLogicExpr2Test() {
         // ProcessM: where not(t:currency = ^e:currency) and t:total is null and l:id=$journal
-        val result = q(
-            "where not(t:currency = ^e:currency) and t:total is null and l:logId='$journalLogId'",
-            journalLogId
-        )
+        val result =
+            q(
+                "where not(t:currency = ^e:currency) and t:total is null and l:logId='$journalLogId'",
+                journalLogId,
+            )
 
         assertTrue(result.success, "Query should succeed: ${result.error}")
         assertEquals(1, result.count(), "Should have exactly 1 log")
@@ -280,10 +291,11 @@ class WhereQueryTests : HierarchicalTestsBase() {
     fun whereLogicExpr3Test() {
         // ProcessM: where (not(t:currency = ^e:currency) or ^e:timestamp >= D2007-01-01) and t:total is null and l:id=$journal
         val myBegin = Instant.parse("2007-01-01T00:00:00Z")
-        val result = q(
-            "where (not(t:currency = ^e:currency) or ^e:timestamp >= D2007-01-01) and t:total is null and l:logId='$journalLogId'",
-            journalLogId
-        )
+        val result =
+            q(
+                "where (not(t:currency = ^e:currency) or ^e:timestamp >= D2007-01-01) and t:total is null and l:logId='$journalLogId'",
+                journalLogId,
+            )
 
         assertTrue(result.success, "Query should succeed: ${result.error}")
         assertEquals(1, result.count(), "Should have exactly 1 log")
@@ -295,10 +307,13 @@ class WhereQueryTests : HierarchicalTestsBase() {
         // All traces must have null total (filtered by t:total is null)
         assertTrue(log.traces.all { t -> t.costTotal === null }, "All traces should have null cost:total")
         // The OR condition: trace included if (t:currency != some event currency) OR (some event timestamp >= 2007-01-01)
-        assertTrue(log.traces.all { t ->
-            t.events.any { e -> e.costCurrency != t.costCurrency } ||
-            t.events.any { e -> !e.timeTimestamp!!.isBefore(myBegin) }
-        }, "Each trace should satisfy the OR condition")
+        assertTrue(
+            log.traces.all { t ->
+                t.events.any { e -> e.costCurrency != t.costCurrency } ||
+                    t.events.any { e -> !e.timeTimestamp!!.isBefore(myBegin) }
+            },
+            "Each trace should satisfy the OR condition",
+        )
 
         for (trace in log.traces) {
             val conceptName = Integer.parseInt(trace.conceptName!!)
@@ -316,10 +331,11 @@ class WhereQueryTests : HierarchicalTestsBase() {
     @Test
     fun whereLikeAndMatchesTest() {
         // ProcessM: where t:name like '%5' and ^e:resource matches '^[SP]am$' and l:id=$journal
-        val result = q(
-            "where t:name like '%5' and ^e:resource matches '^[SP]am\$' and l:logId='$journalLogId'",
-            journalLogId
-        )
+        val result =
+            q(
+                "where t:name like '%5' and ^e:resource matches '^[SP]am\$' and l:logId='$journalLogId'",
+                journalLogId,
+            )
 
         assertTrue(result.success, "Query should succeed: ${result.error}")
         assertEquals(1, result.count(), "Should have exactly 1 log")
@@ -331,8 +347,10 @@ class WhereQueryTests : HierarchicalTestsBase() {
         for (trace in log.traces) {
             val traceName = trace.conceptName
             assertNotNull(traceName, "Trace should have name")
-            assertTrue(traceName.endsWith("5"),
-                "Trace name should end with '5', got: $traceName")
+            assertTrue(
+                traceName.endsWith("5"),
+                "Trace name should end with '5', got: $traceName",
+            )
             assertNull(trace.identityId)
             assertFalse(trace.isEventStream)
 
@@ -347,10 +365,11 @@ class WhereQueryTests : HierarchicalTestsBase() {
     @Test
     fun whereNotNull() {
         // ProcessM: where l:id=$journal and [t:cost:total] is not null
-        val result = q(
-            "where l:logId='$journalLogId' and [t:cost:total] is not null",
-            journalLogId
-        )
+        val result =
+            q(
+                "where l:logId='$journalLogId' and [t:cost:total] is not null",
+                journalLogId,
+            )
 
         assertTrue(result.success, "Query should succeed: ${result.error}")
         assertTrue(result.logs.isNotEmpty(), "Should have logs")
@@ -370,9 +389,11 @@ class WhereQueryTests : HierarchicalTestsBase() {
     @Test
     fun whereNotNull2() {
         // ProcessM: where l:id=$hospital and [t:Diagnosis] is not null
-        val hospitalLogId = testDataLoader.loadHospitalLog() ?: run {
-            println("Hospital dataset not available, skipping"); return
-        }
+        val hospitalLogId =
+            testDataLoader.loadHospitalLog() ?: run {
+                println("Hospital dataset not available, skipping")
+                return
+            }
         val result = q("where l:logId='$hospitalLogId' and [t:Diagnosis] is not null", hospitalLogId)
         assertTrue(result.success, "Query should succeed: ${result.error}")
         val traces = result.first().traces.toList()

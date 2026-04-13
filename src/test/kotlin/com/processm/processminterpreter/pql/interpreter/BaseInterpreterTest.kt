@@ -1,6 +1,5 @@
 package com.processm.processminterpreter.pql.interpreter
 
-import com.processm.processminterpreter.config.ProcessMConfig
 import com.processm.processminterpreter.pql.AntlrPQLTranslator
 import com.processm.processminterpreter.service.PQLQueryService
 import com.processm.processminterpreter.xes.XESWriter
@@ -17,11 +16,11 @@ import org.testcontainers.junit.jupiter.Testcontainers
 @Testcontainers
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 abstract class BaseInterpreterTest {
-
     companion object {
         @Container
-        val neo4jContainer = Neo4jContainer("neo4j:5.15.0")
-            .withAdminPassword("password")
+        val neo4jContainer =
+            Neo4jContainer("neo4j:5.15.0")
+                .withAdminPassword("password")
     }
 
     protected lateinit var driver: Driver
@@ -30,19 +29,21 @@ abstract class BaseInterpreterTest {
 
     @BeforeAll
     fun setup() {
-        driver = GraphDatabase.driver(
-            neo4jContainer.boltUrl,
-            AuthTokens.basic("neo4j", "password")
-        )
+        driver =
+            GraphDatabase.driver(
+                neo4jContainer.boltUrl,
+                AuthTokens.basic("neo4j", "password"),
+            )
 
         // Use real XESWriter since it has no external dependencies
         xesWriter = XESWriter()
 
-        pqlQueryService = PQLQueryService(
-            AntlrPQLTranslator(ProcessMConfig()),
-            driver,
-            xesWriter
-        )
+        pqlQueryService =
+            PQLQueryService(
+                AntlrPQLTranslator(),
+                driver,
+                xesWriter,
+            )
     }
 
     @AfterAll

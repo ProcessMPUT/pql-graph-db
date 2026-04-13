@@ -1,22 +1,19 @@
 package com.processm.processminterpreter.pql.extended
 
 import com.processm.processminterpreter.pql.interpreter.BaseInterpreterTest
-import com.processm.processminterpreter.pql.model.Scope
-import com.processm.processminterpreter.service.LogService
 import com.processm.processminterpreter.xes.XESLoader
 import com.processm.processminterpreter.xes.XESParser
-import org.junit.jupiter.api.Assertions.*
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Assertions.assertThrows
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
-import org.mockito.Mockito
-import org.springframework.beans.factory.annotation.Autowired
 import java.io.ByteArrayInputStream
 
 class GroupByHoistingTests : BaseInterpreterTest() {
-
     private lateinit var xesParser: XESParser
     private lateinit var xesLoader: XESLoader
-    private lateinit var logService: LogService
 
     private lateinit var logId: String
 
@@ -24,14 +21,14 @@ class GroupByHoistingTests : BaseInterpreterTest() {
     fun init() {
         // BaseInterpreterTest.setup() is @BeforeAll, so driver is already initialized
         xesParser = XESParser()
-        logService = Mockito.mock(LogService::class.java)
-        xesLoader = XESLoader(xesParser, logService, driver)
+        xesLoader = XESLoader(xesParser, driver)
 
         // Generate unique log ID for this test run
         logId = "groupby-test-log-${java.util.UUID.randomUUID()}"
 
         // Load sample data
-        val xesContent = """
+        val xesContent =
+            """
             <?xml version="1.0" encoding="UTF-8" ?>
             <log xes.version="1.0" xes.features="nested-attributes" openxes.version="1.0RC7">
                 <string key="concept:name" value="Test Log"/>
@@ -57,12 +54,15 @@ class GroupByHoistingTests : BaseInterpreterTest() {
                     </event>
                 </trace>
             </log>
-        """.trimIndent()
+            """.trimIndent()
 
         xesLoader.loadXESFile(ByteArrayInputStream(xesContent.toByteArray()), logId)
     }
 
-    private fun executeQuery(query: String, logId: String): List<Map<String, Any?>> {
+    private fun executeQuery(
+        query: String,
+        logId: String,
+    ): List<Map<String, Any?>> {
         val result = pqlQueryService.executePQLQuery(query, logId)
         if (!result.success) {
             throw IllegalArgumentException(result.error)
@@ -119,7 +119,7 @@ class GroupByHoistingTests : BaseInterpreterTest() {
         val result = executeQuery(query, logId)
 
         assertEquals(2, result.size)
-        
+
         val row1 = result.find { it["t_concept_name"] == "Trace1" && it["e_org_resource"] == "User1" }
         assertNotNull(row1)
         assertEquals(2L, row1!!["count_e_concept_name_"])
@@ -132,9 +132,10 @@ class GroupByHoistingTests : BaseInterpreterTest() {
         // because Event is a LOWER scope than Trace — lower-scope attributes must be in GROUP BY
         val query = "select e:org:resource, count(e:concept:name) group by t:concept:name"
 
-        val exception = assertThrows(IllegalArgumentException::class.java) {
-            executeQuery(query, logId)
-        }
+        val exception =
+            assertThrows(IllegalArgumentException::class.java) {
+                executeQuery(query, logId)
+            }
 
         assertTrue(exception.message!!.contains("must be present in GROUP BY clause"))
         assertTrue(exception.message!!.contains("e:org:resource"))

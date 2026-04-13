@@ -6,7 +6,6 @@ import org.neo4j.driver.Driver
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.stereotype.Component
-import java.util.*
 
 /**
  * Loads test data from XES files into Neo4j for ProcessM compatibility tests
@@ -44,8 +43,9 @@ class TestDataLoader {
 
             logger.info("Loading JournalReview-extra.xes test data with logId: $customLogId...")
 
-            val stream = javaClass.getResourceAsStream("/JournalReview-extra.xes")
-                ?: throw RuntimeException("Cannot find JournalReview-extra.xes in test resources")
+            val stream =
+                javaClass.getResourceAsStream("/JournalReview-extra.xes")
+                    ?: throw RuntimeException("Cannot find JournalReview-extra.xes in test resources")
 
             stream.use {
                 try {
@@ -68,13 +68,14 @@ class TestDataLoader {
     /**
      * Check if a log with the given ID already exists in Neo4j
      */
-    private fun checkLogExists(logId: String): String? {
-        return try {
+    private fun checkLogExists(logId: String): String? =
+        try {
             neo4jDriver.session().use { session ->
-                val result = session.run(
-                    "MATCH (log:Log {logId: \$logId}) RETURN log.logId as logId LIMIT 1",
-                    mapOf("logId" to logId)
-                )
+                val result =
+                    session.run(
+                        "MATCH (log:Log {logId: \$logId}) RETURN log.logId as logId LIMIT 1",
+                        mapOf("logId" to logId),
+                    )
                 if (result.hasNext()) {
                     result.single().get("logId").asString()
                 } else {
@@ -85,7 +86,6 @@ class TestDataLoader {
             logger.warn("Error checking if log exists: ${e.message}")
             null
         }
-    }
 
     /**
      * Load Hospital log (if available)
@@ -101,8 +101,9 @@ class TestDataLoader {
                 }
 
                 logger.info("Loading Hospital.xes test data...")
-                val stream = javaClass.getResourceAsStream("/logs/Hospital_log.xes")
-                    ?: return null // Hospital log not available
+                val stream =
+                    javaClass.getResourceAsStream("/logs/Hospital_log.xes")
+                        ?: return null // Hospital log not available
 
                 stream.use {
                     val result = xesLoader.loadXESFile(it, "Hospital-test")
@@ -133,8 +134,9 @@ class TestDataLoader {
                 }
 
                 logger.info("Loading BPI Challenge 2013 log...")
-                val stream = javaClass.getResourceAsStream("/bpi_challenge_2013_open_problems.xes")
-                    ?: return null
+                val stream =
+                    javaClass.getResourceAsStream("/bpi_challenge_2013_open_problems.xes")
+                        ?: return null
 
                 stream.use {
                     val result = xesLoader.loadXESFile(it, "BPI-test")
@@ -160,13 +162,17 @@ class TestDataLoader {
         logger.info("Clearing test data for logIds: $logIds")
         neo4jDriver.session().use { session ->
             for (logId in logIds) {
-                val deleted = session.run(
-                    """
-                    MATCH (log:Log {logId: ${'$'}logId})-[:CONTAINS]->(trace:Trace)-[:HAS_EVENT]->(event:Event)
-                    DETACH DELETE log, trace, event
-                    """.trimIndent(),
-                    mapOf("logId" to logId)
-                ).consume().counters().nodesDeleted()
+                val deleted =
+                    session
+                        .run(
+                            """
+                            MATCH (log:Log {logId: ${'$'}logId})-[:CONTAINS]->(trace:Trace)-[:HAS_EVENT]->(event:Event)
+                            DETACH DELETE log, trace, event
+                            """.trimIndent(),
+                            mapOf("logId" to logId),
+                        ).consume()
+                        .counters()
+                        .nodesDeleted()
                 if (deleted > 0) logger.info("Deleted $deleted nodes for logId: $logId")
             }
         }

@@ -1,6 +1,5 @@
 package com.processm.processminterpreter.pql.interpreter
 
-import com.processm.processminterpreter.service.LogService
 import com.processm.processminterpreter.xes.XESLoader
 import com.processm.processminterpreter.xes.XESParser
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -8,26 +7,23 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
-import org.mockito.Mockito
 import java.io.ByteArrayInputStream
 
 @Tag("Integration")
 class XESImportTests : BaseInterpreterTest() {
-
     private lateinit var xesLoader: XESLoader
-    private lateinit var logService: LogService
 
     @BeforeEach
     fun initLoader() {
-        logService = Mockito.mock(LogService::class.java)
-        xesLoader = XESLoader(XESParser(), logService, driver)
+        xesLoader = XESLoader(XESParser(), driver)
     }
 
     @Test
     fun `test import XES`() {
         clearDatabase()
 
-        val xesContent = """
+        val xesContent =
+            """
             <?xml version="1.0" encoding="UTF-8" ?>
             <log xes.version="1.0" xes.features="nested-attributes" xmlns="http://www.xes-standard.org/">
                 <extension name="Concept" prefix="concept" uri="http://www.xes-standard.org/concept.xesext"/>
@@ -48,7 +44,7 @@ class XESImportTests : BaseInterpreterTest() {
                     </event>
                 </trace>
             </log>
-        """.trimIndent()
+            """.trimIndent()
 
         val inputStream = ByteArrayInputStream(xesContent.toByteArray())
         val result = xesLoader.loadXESFile(inputStream, "test-log")
@@ -68,14 +64,18 @@ class XESImportTests : BaseInterpreterTest() {
             assertEquals("Case 1", traceResult.get("caseId").asString())
 
             // Check Events
-            val eventsResult = session.run("""
-                MATCH (t:Trace)-[:HAS_EVENT]->(e:Event) 
-                RETURN e.activity as activity, e.resource as resource, e.cost as cost 
-                ORDER BY e.timestamp
-            """.trimIndent()).list()
+            val eventsResult =
+                session
+                    .run(
+                        """
+                        MATCH (t:Trace)-[:HAS_EVENT]->(e:Event) 
+                        RETURN e.activity as activity, e.resource as resource, e.cost as cost 
+                        ORDER BY e.timestamp
+                        """.trimIndent(),
+                    ).list()
 
             assertEquals(2, eventsResult.size)
-            
+
             val event1 = eventsResult[0]
             assertEquals("A", event1.get("activity").asString())
             assertEquals("User1", event1.get("resource").asString())

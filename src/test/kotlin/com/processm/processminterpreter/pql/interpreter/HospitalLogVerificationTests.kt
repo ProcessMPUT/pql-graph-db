@@ -8,17 +8,19 @@ import java.io.File
 
 @Tag("Verification")
 class HospitalLogVerificationTests : BaseInterpreterTest() {
-
     private lateinit var xesLoader: com.processm.processminterpreter.xes.XESLoader
 
     @BeforeEach
     fun prepareData() {
         try {
             clearDatabase()
-            
-            val xesParser = com.processm.processminterpreter.xes.XESParser()
-            val logService = org.mockito.Mockito.mock(com.processm.processminterpreter.service.LogService::class.java)
-            xesLoader = com.processm.processminterpreter.xes.XESLoader(xesParser, logService, driver)
+
+            val xesParser =
+                com.processm.processminterpreter.xes
+                    .XESParser()
+            xesLoader =
+                com.processm.processminterpreter.xes
+                    .XESLoader(xesParser, driver)
 
             val logFile = File("src/main/resources/logs/Hospital_log.xes")
             if (!logFile.exists()) {
@@ -36,15 +38,16 @@ class HospitalLogVerificationTests : BaseInterpreterTest() {
 
     @Test
     fun verifyHospitalLogQueries() {
-        val queries = listOf(
-            "Basic Stats" to "select count(t:id), count(e:id)",
-            "Activities" to "select e:concept:name, count(e:id) group by e:concept:name order by count(e:id) desc limit 5",
-            "Resources" to "select e:org:group, count(e:id) group by e:org:group",
-            "Hoisting" to "select ^e:concept:name, count(e:concept:name) group by ^e:concept:name"
-        )
+        val queries =
+            listOf(
+                "Basic Stats" to "select count(t:id), count(e:id)",
+                "Activities" to "select e:concept:name, count(e:id) group by e:concept:name order by count(e:id) desc limit 5",
+                "Resources" to "select e:org:group, count(e:id) group by e:org:group",
+                "Hoisting" to "select ^e:concept:name, count(e:concept:name) group by ^e:concept:name",
+            )
 
         println("\n=== LOCAL HOSPITAL LOG VERIFICATION ===")
-        
+
         queries.forEach { (desc, query) ->
             println("\n--- $desc ---")
             println("Query: $query")

@@ -7,14 +7,14 @@ package com.processm.processminterpreter.pql
  * https://github.com/ProcessMPUT/processm/blob/master/processm.core/src/main/kotlin/processm/core/querylanguage/Attribute.kt
  */
 object StandardAttributeMapper {
-
     /**
      * Scope levels in ProcessM PQL hierarchy
      */
     enum class Scope {
         Log,
         Trace,
-        Event;
+        Event,
+        ;
 
         /**
          * Get the scope one level up (for hoisting with ^)
@@ -42,14 +42,17 @@ object StandardAttributeMapper {
             /**
              * Parse scope from PQL prefix: l/log/t/trace/e/event
              */
-            fun parse(prefix: String?): Scope {
-                return when (prefix?.lowercase()) {
+            fun parse(prefix: String?): Scope =
+                when (prefix?.lowercase()) {
                     "l", "log" -> Log
+
                     "t", "trace" -> Trace
-                    "e", "event", null -> Event // Default to Event
+
+                    "e", "event", null -> Event
+
+                    // Default to Event
                     else -> throw IllegalArgumentException("Unknown scope: $prefix")
                 }
-            }
         }
     }
 
@@ -103,9 +106,7 @@ object StandardAttributeMapper {
     fun isStandardAttribute(
         fieldName: String,
         scope: Scope,
-    ): Boolean {
-        return standardMappings[scope]?.containsKey(fieldName.lowercase()) == true
-    }
+    ): Boolean = standardMappings[scope]?.containsKey(fieldName.lowercase()) == true
 
     /**
      * Get the XES attribute name for a shorthand
@@ -114,9 +115,7 @@ object StandardAttributeMapper {
     fun getXESAttributeName(
         fieldName: String,
         scope: Scope,
-    ): String? {
-        return standardMappings[scope]?.get(fieldName.lowercase())?.first
-    }
+    ): String? = standardMappings[scope]?.get(fieldName.lowercase())?.first
 
     /**
      * Get the Neo4j property name for a shorthand
@@ -125,9 +124,7 @@ object StandardAttributeMapper {
     fun getNeo4jPropertyName(
         fieldName: String,
         scope: Scope,
-    ): String? {
-        return standardMappings[scope]?.get(fieldName.lowercase())?.second
-    }
+    ): String? = standardMappings[scope]?.get(fieldName.lowercase())?.second
 
     /**
      * Translate a field reference to Neo4j property

@@ -49,11 +49,7 @@ class Event : TraceOrEventBase() {
         return attributes == other.attributes
     }
 
-    override fun hashCode(): Int {
-        return attributes.hashCode()
-    }
+    override fun hashCode(): Int = attributes.hashCode()
 
-    override fun toString(): String {
-        return "Event(name=$conceptName, timestamp=$timeTimestamp, resource=$orgResource)"
-    }
+    override fun toString(): String = "Event(name=$conceptName, timestamp=$timeTimestamp, resource=$orgResource)"
 }

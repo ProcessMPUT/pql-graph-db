@@ -30,7 +30,7 @@ logging:
   level:
     org.neo4j.driver: INFO
     com.processm.processminterpreter: DEBUG
-    org.springframework.data.neo4j: DEBUG
+
 
 processm:
   xes:
@@ -44,10 +44,9 @@ processm:
   api:
     url: http://localhost:80/api
   compatibility:
-    default-trace-limit: 30
-    exclude-event-attrs-in-select-star:
-      - "concept:name"
-      - "cost:currency"
+    default-trace-limit:
+      enabled: true
+      limit: 30
   login: admin@example.com
   password: Admin1234
 

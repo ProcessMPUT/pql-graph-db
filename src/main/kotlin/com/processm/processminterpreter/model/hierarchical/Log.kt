@@ -43,9 +43,7 @@ class Log : XESComponent() {
         return result
     }
 
-    override fun toString(): String {
-        return "Log(name=$conceptName, traces=${traces.count()})"
-    }
+    override fun toString(): String = "Log(name=$conceptName, traces=${traces.count()})"
 }
 
 /**
@@ -56,21 +54,23 @@ typealias XESInputStream = Sequence<XESComponent>
 /**
  * Convert a single log to a flat sequence of components
  */
-fun Log.toFlatSequence(): XESInputStream = sequence {
-    yield(this@toFlatSequence)
-    traces.forEach { trace ->
-        yield(trace)
-        trace.events.forEach { event ->
-            yield(event)
+fun Log.toFlatSequence(): XESInputStream =
+    sequence {
+        yield(this@toFlatSequence)
+        traces.forEach { trace ->
+            yield(trace)
+            trace.events.forEach { event ->
+                yield(event)
+            }
         }
     }
-}
 
 /**
  * Convert a sequence of logs to a flat sequence of components
  */
-fun Sequence<Log>.toFlatSequence(): XESInputStream = sequence {
-    this@toFlatSequence.forEach { log ->
-        yieldAll(log.toFlatSequence())
+fun Sequence<Log>.toFlatSequence(): XESInputStream =
+    sequence {
+        this@toFlatSequence.forEach { log ->
+            yieldAll(log.toFlatSequence())
+        }
     }
-}

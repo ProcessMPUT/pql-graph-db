@@ -2,7 +2,14 @@ package com.processm.processminterpreter.pql.visitor
 
 import com.processm.processminterpreter.pql.model.PQLParserException
 import com.processm.processminterpreter.pql.model.TokenSequence
-import org.antlr.v4.runtime.*
+import org.antlr.v4.runtime.BaseErrorListener
+import org.antlr.v4.runtime.FailedPredicateException
+import org.antlr.v4.runtime.InputMismatchException
+import org.antlr.v4.runtime.LexerNoViableAltException
+import org.antlr.v4.runtime.NoViableAltException
+import org.antlr.v4.runtime.RecognitionException
+import org.antlr.v4.runtime.Recognizer
+import org.antlr.v4.runtime.Token
 import org.slf4j.LoggerFactory
 
 /**
@@ -12,7 +19,6 @@ import org.slf4j.LoggerFactory
  * Throws PQLParserException with proper Problem classification.
  */
 class PQLErrorListener : BaseErrorListener() {
-
     private val logger = LoggerFactory.getLogger(PQLErrorListener::class.java)
     private val errors = mutableListOf<ErrorInfo>()
 
@@ -25,7 +31,7 @@ class PQLErrorListener : BaseErrorListener() {
         val message: String?,
         val offendingToken: Token?,
         val exception: RecognitionException?,
-        val problem: PQLParserException.Problem
+        val problem: PQLParserException.Problem,
     )
 
     override fun syntaxError(
@@ -39,14 +45,15 @@ class PQLErrorListener : BaseErrorListener() {
         val token = offendingSymbol as? Token
         val problem = classifyProblem(e, msg)
 
-        val errorInfo = ErrorInfo(
-            line = line,
-            charPositionInLine = charPositionInLine,
-            message = msg,
-            offendingToken = token,
-            exception = e,
-            problem = problem
-        )
+        val errorInfo =
+            ErrorInfo(
+                line = line,
+                charPositionInLine = charPositionInLine,
+                message = msg,
+                offendingToken = token,
+                exception = e,
+                problem = problem,
+            )
 
         val errorMsg = "Syntax error at line $line:$charPositionInLine - $msg"
         logger.error(errorMsg)
@@ -56,7 +63,10 @@ class PQLErrorListener : BaseErrorListener() {
     /**
      * Classify the recognition exception into a Problem enum
      */
-    private fun classifyProblem(e: RecognitionException?, msg: String?): PQLParserException.Problem {
+    private fun classifyProblem(
+        e: RecognitionException?,
+        msg: String?,
+    ): PQLParserException.Problem {
         // First try to classify by exception type
         when (e) {
             is FailedPredicateException -> return PQLParserException.Problem.FailedPredicate
@@ -85,9 +95,10 @@ class PQLErrorListener : BaseErrorListener() {
     /**
      * Get all collected error messages
      */
-    fun getErrors(): List<String> = errors.map {
-        "Syntax error at line ${it.line}:${it.charPositionInLine} - ${it.message}"
-    }
+    fun getErrors(): List<String> =
+        errors.map {
+            "Syntax error at line ${it.line}:${it.charPositionInLine} - ${it.message}"
+        }
 
     /**
      * Throw exception if there are any errors
@@ -97,28 +108,38 @@ class PQLErrorListener : BaseErrorListener() {
             val first = errors.first()
 
             // Build offending token sequence
-            val offendingToken = first.offendingToken?.let { token ->
-                TokenSequence(
-                    value = token.text ?: "",
-                    startIndex = token.startIndex,
-                    stopIndex = token.stopIndex
+            val offendingToken =
+                first.offendingToken?.let { token ->
+                    TokenSequence(
+                        value = token.text ?: "",
+                        startIndex = token.startIndex,
+                        stopIndex = token.stopIndex,
+                    )
+                } ?: TokenSequence(
+                    value = "",
+                    startIndex = -1,
+                    stopIndex = -1,
                 )
-            } ?: TokenSequence(
-                value = "",
-                startIndex = -1,
-                stopIndex = -1
-            )
 
             // Extract expected tokens from the exception
-            val expectedTokens: Collection<String>? = when (val ex = first.exception) {
-                is InputMismatchException -> ex.expectedTokens?.toList()?.map {
-                    ex.recognizer?.vocabulary?.getDisplayName(it) ?: it.toString()
+            val expectedTokens: Collection<String>? =
+                when (val ex = first.exception) {
+                    is InputMismatchException -> {
+                        ex.expectedTokens?.toList()?.map {
+                            ex.recognizer?.vocabulary?.getDisplayName(it) ?: it.toString()
+                        }
+                    }
+
+                    is NoViableAltException -> {
+                        ex.expectedTokens?.toList()?.map {
+                            ex.recognizer?.vocabulary?.getDisplayName(it) ?: it.toString()
+                        }
+                    }
+
+                    else -> {
+                        null
+                    }
                 }
-                is NoViableAltException -> ex.expectedTokens?.toList()?.map {
-                    ex.recognizer?.vocabulary?.getDisplayName(it) ?: it.toString()
-                }
-                else -> null
-            }
 
             throw PQLParserException(
                 problem = first.problem,
@@ -127,7 +148,7 @@ class PQLErrorListener : BaseErrorListener() {
                 offendingToken = offendingToken,
                 expectedTokens = expectedTokens,
                 originalMessage = first.message,
-                baseException = first.exception
+                baseException = first.exception,
             )
         }
     }

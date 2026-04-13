@@ -1,14 +1,14 @@
 package com.processm.processminterpreter.processm.querylanguage
 
+import QLLexer
+import QLParser
 import com.processm.processminterpreter.pql.model.*
-import com.processm.processminterpreter.pql.model.Function as PQLFunction
 import com.processm.processminterpreter.pql.visitor.QueryBuilder
 import org.antlr.v4.runtime.CharStreams
 import org.antlr.v4.runtime.CommonTokenStream
 import org.junit.jupiter.api.Tag
-import QLLexer
-import QLParser
 import kotlin.test.*
+import com.processm.processminterpreter.pql.model.Function as PQLFunction
 
 /**
  * Query Tests - 1:1 copy of original ProcessM QueryTests.kt
@@ -21,7 +21,6 @@ import kotlin.test.*
 @Tag("PQL")
 @Suppress("MapGetWithNotNullAssertionOperator")
 class QueryTests {
-
     // Query(pql: String) now uses the built-in constructor which handles parsing
     // with proper error handling. No helper needed.
 
@@ -93,7 +92,7 @@ class QueryTests {
         assertIs<PQLSyntaxException>(query.warning)
         assertEquals(
             PQLSyntaxException.Problem.SelectAllConflictsWithReferencingByName,
-            (query.warning as PQLSyntaxException).problem
+            (query.warning as PQLSyntaxException).problem,
         )
     }
 
@@ -135,7 +134,7 @@ class QueryTests {
         assertEquals(0, query.selectExpressions[Scope.Event]!!.size)
         assertEquals(
             "classifier:activity_resource",
-            query.selectStandardAttributes[Scope.Event]!!.elementAt(0).standardName
+            query.selectStandardAttributes[Scope.Event]!!.elementAt(0).standardName,
         )
         assertTrue(query.selectStandardAttributes[Scope.Event]!!.all { it.isStandard })
         assertTrue(query.selectStandardAttributes[Scope.Event]!!.all { it.effectiveScope == Scope.Event })
@@ -169,7 +168,7 @@ class QueryTests {
         assertEquals(0, query.selectExpressions[Scope.Event]!!.size)
         assertEquals(
             "classifier:concept:name+lifecycle:transition",
-            query.selectOtherAttributes[Scope.Event]!!.elementAt(0).name
+            query.selectOtherAttributes[Scope.Event]!!.elementAt(0).name,
         )
         assertTrue(query.selectOtherAttributes[Scope.Event]!!.none { it.isStandard })
         assertTrue(query.selectOtherAttributes[Scope.Event]!!.all { it.effectiveScope == Scope.Event })
@@ -238,10 +237,11 @@ class QueryTests {
 
     @Test
     fun selectExpressionTest() {
-        val query = Query(
-            "select [e:conceptowy:name] + e:resource, max(timestamp) - \t \n min(timestamp)" +
-                    "group by [e:conceptowy:name], e:resource"
-        )
+        val query =
+            Query(
+                "select [e:conceptowy:name] + e:resource, max(timestamp) - \t \n min(timestamp)" +
+                    "group by [e:conceptowy:name], e:resource",
+            )
         assertFalse(query.isImplicitSelectAll[Scope.Log]!!)
         assertFalse(query.isImplicitSelectAll[Scope.Trace]!!)
         assertFalse(query.isImplicitSelectAll[Scope.Event]!!)
@@ -262,11 +262,11 @@ class QueryTests {
         assertEquals(2, query.selectExpressions[Scope.Event]!!.size)
         assertEquals(
             "[event:conceptowy:name] + event:org:resource",
-            query.selectExpressions[Scope.Event]!!.elementAt(0).toString()
+            query.selectExpressions[Scope.Event]!!.elementAt(0).toString(),
         )
         assertEquals(
             "max(event:time:timestamp) - min(event:time:timestamp)",
-            query.selectExpressions[Scope.Event]!!.elementAt(1).toString()
+            query.selectExpressions[Scope.Event]!!.elementAt(1).toString(),
         )
         assertTrue(query.selectExpressions[Scope.Event]!!.all { !it.isTerminal })
     }
@@ -332,8 +332,9 @@ class QueryTests {
 
     @Test
     fun selectISO8601Test() {
-        val query = Query(
-            """select
+        val query =
+            Query(
+                """select
                     D2020-03-13,
                     D2020-03-13T16:45,
                     D2020-03-13T16:45:50,
@@ -351,8 +352,8 @@ class QueryTests {
                     D20200313164550.333,
                     D202003131645+0200,
                     D202003131645Z
-                    """
-        )
+                    """,
+            )
         assertFalse(query.isImplicitSelectAll[Scope.Log]!!)
         assertFalse(query.isImplicitSelectAll[Scope.Trace]!!)
         assertFalse(query.isImplicitSelectAll[Scope.Event]!!)
@@ -394,9 +395,10 @@ class QueryTests {
 
     @Test
     fun selectIEEE754Test() {
-        val query = Query(
-            "select 0, 0.0, 0.00, -0, -0.0, 1, 1.0, -1, -1.0, ${Math.PI}, ${Double.MIN_VALUE}, ${Double.MAX_VALUE}"
-        )
+        val query =
+            Query(
+                "select 0, 0.0, 0.00, -0, -0.0, 1, 1.0, -1, -1.0, ${Math.PI}, ${Double.MIN_VALUE}, ${Double.MAX_VALUE}",
+            )
         assertFalse(query.isImplicitSelectAll[Scope.Log]!!)
         assertFalse(query.isImplicitSelectAll[Scope.Trace]!!)
         assertFalse(query.isImplicitSelectAll[Scope.Event]!!)
@@ -535,7 +537,7 @@ class QueryTests {
                 "offset e:${Double.NaN}",
                 "offset e:${Double.POSITIVE_INFINITY}",
                 "offset e:${Double.NEGATIVE_INFINITY}",
-                "offset offset 1" // UnwantedToken
+                "offset offset 1", // UnwantedToken
             )
 
         invalidSyntax.forEach {
@@ -546,12 +548,13 @@ class QueryTests {
             }
         }
 
-        val invalidAttributes = listOf(
-            "select e:conceptowy:name",
-            "select e:date",
-            "select t:timestamp",
-            "select e:t:timestamp"
-        )
+        val invalidAttributes =
+            listOf(
+                "select e:conceptowy:name",
+                "select e:date",
+                "select t:timestamp",
+                "select e:t:timestamp",
+            )
         invalidAttributes.forEach {
             assertFailsWith<PQLSyntaxException>(it) { Query(it) }.apply {
                 assertEquals(PQLSyntaxException.Problem.NoSuchAttribute, problem)
@@ -560,26 +563,28 @@ class QueryTests {
             }
         }
 
-        val illegalOperations = listOf(
-            "select ^e:concept:name",
-            "select e:timestamp group by e:name",
-            "group by e:name order by e:timestamp",
-            "select e:name, sum(e:total) where l:name='JournalReview' group by ^^e:name", // implicit group by at event scope + ungrouped attribute
-            "select e:total + 10 group by e:name",
-            "select avg(e:total), e:resource",
-            "where avg(e:total) > 100",
-            "select *, avg(e:total)",
-            "select ^e:42",
-            "where ^t:c:myclassifier not in ('a', 'b')",
-            "limit 42",
-            "limit l:-1",
-            "limit l:0",
-            "limit l:0.1",
-            "limit l:-0.01",
-            "offset 42",
-            "offset l:-1",
-            "offset l:0"
-        )
+        val illegalOperations =
+            listOf(
+                "select ^e:concept:name",
+                "select e:timestamp group by e:name",
+                "group by e:name order by e:timestamp",
+                // implicit group by at event scope + ungrouped attribute
+                "select e:name, sum(e:total) where l:name='JournalReview' group by ^^e:name",
+                "select e:total + 10 group by e:name",
+                "select avg(e:total), e:resource",
+                "where avg(e:total) > 100",
+                "select *, avg(e:total)",
+                "select ^e:42",
+                "where ^t:c:myclassifier not in ('a', 'b')",
+                "limit 42",
+                "limit l:-1",
+                "limit l:0",
+                "limit l:0.1",
+                "limit l:-0.01",
+                "offset 42",
+                "offset l:-1",
+                "offset l:0",
+            )
         illegalOperations.forEach {
             assertFailsWith<PQLSyntaxException>(it) { Query(it) }.apply {
                 assertNotNull(message)
@@ -589,20 +594,22 @@ class QueryTests {
 
     @Test
     fun invalidUseOfClassifiersTest() {
-        val invalidHoisting = listOf(
-            "group by [^^c:Event Name]",
-            "group by ^t:c:name",
-            "select [l:c:main]",
-            "where [e:classifier:concept:name+lifecycle:transition] in ('acceptcomplete', 'rejectcomplete')"
-        )
+        val invalidHoisting =
+            listOf(
+                "group by [^^c:Event Name]",
+                "group by ^t:c:name",
+                "select [l:c:main]",
+                "where [e:classifier:concept:name+lifecycle:transition] in ('acceptcomplete', 'rejectcomplete')",
+            )
 
         invalidHoisting.forEach {
             assertFailsWith<PQLSyntaxException>(it) { Query(it) }.apply {
                 assertTrue {
-                    problem in setOf(
-                        PQLSyntaxException.Problem.ClassifierInWhere,
-                        PQLSyntaxException.Problem.ClassifierOnLog
-                    )
+                    problem in
+                        setOf(
+                            PQLSyntaxException.Problem.ClassifierInWhere,
+                            PQLSyntaxException.Problem.ClassifierOnLog,
+                        )
                 }
             }
         }
@@ -666,7 +673,7 @@ class QueryTests {
         assertTrue(query.isImplicitSelectAll[Scope.Event]!!)
         assertEquals(
             "not (trace:cost:currency = ^event:cost:currency) and trace:cost:total is null",
-            query.whereExpression.toString()
+            query.whereExpression.toString(),
         )
         assertEquals(Scope.Trace, query.whereExpression.effectiveScope)
     }
@@ -678,8 +685,9 @@ class QueryTests {
         assertTrue(query.isImplicitSelectAll[Scope.Trace]!!)
         assertTrue(query.isImplicitSelectAll[Scope.Event]!!)
         assertEquals(
-            "(not (trace:cost:currency = ^event:cost:currency) or ^event:time:timestamp >= D2020-01-01T00:00:00Z) and trace:cost:total is null",
-            query.whereExpression.toString()
+            "(not (trace:cost:currency = ^event:cost:currency) or " +
+                "^event:time:timestamp >= D2020-01-01T00:00:00Z) and trace:cost:total is null",
+            query.whereExpression.toString(),
         )
         assertEquals(Scope.Trace, query.whereExpression.effectiveScope)
     }
@@ -689,7 +697,7 @@ class QueryTests {
         val query = Query("where t:name like 'transaction %' and ^e:resource matches '^[A-Z][a-z]+ [A-Z][a-z]+$'")
         assertEquals(
             "trace:concept:name like transaction % and ^event:org:resource matches ^[A-Z][a-z]+ [A-Z][a-z]+\$",
-            query.whereExpression.toString()
+            query.whereExpression.toString(),
         )
 
         assertNull(query.warning)
@@ -721,10 +729,11 @@ class QueryTests {
 
     @Test
     fun groupEventByStandardAttributeTest() {
-        val query = Query(
-            """select t:name, e:name, sum(e:total)
-            group by e:name"""
-        )
+        val query =
+            Query(
+                """select t:name, e:name, sum(e:total)
+            group by e:name""",
+            )
         assertFalse(query.isImplicitSelectAll[Scope.Log]!!)
         assertFalse(query.isImplicitSelectAll[Scope.Trace]!!)
         assertFalse(query.isImplicitSelectAll[Scope.Event]!!)
@@ -751,10 +760,11 @@ class QueryTests {
 
     @Test
     fun groupTraceByEventStandardAttributeTest() {
-        val query = Query(
-            """select e:name, sum(e:total)
-            group by ^e:name, e:name"""
-        )
+        val query =
+            Query(
+                """select e:name, sum(e:total)
+            group by ^e:name, e:name""",
+            )
         assertFalse(query.isImplicitSelectAll[Scope.Log]!!)
         assertFalse(query.isImplicitSelectAll[Scope.Trace]!!)
         assertFalse(query.isImplicitSelectAll[Scope.Event]!!)
@@ -782,10 +792,11 @@ class QueryTests {
 
     @Test
     fun groupLogByEventStandardAttributeTest() {
-        val query = Query(
-            """select sum(e:total)
-            group by ^^e:name"""
-        )
+        val query =
+            Query(
+                """select sum(e:total)
+            group by ^^e:name""",
+            )
         assertFalse(query.isImplicitSelectAll[Scope.Log]!!)
         assertFalse(query.isImplicitSelectAll[Scope.Trace]!!)
         assertFalse(query.isImplicitSelectAll[Scope.Event]!!)
@@ -951,12 +962,13 @@ class QueryTests {
      */
     @Test
     fun groupByWithHoistingAndOrderByCountTest() {
-        val query = Query(
-            "select l:name, count(t:name), e:name\n" +
+        val query =
+            Query(
+                "select l:name, count(t:name), e:name\n" +
                     "group by ^e:name\n" +
                     "order by count(t:name) desc\n" +
-                    "limit l:1\n"
-        )
+                    "limit l:1\n",
+            )
         assertEquals(1, query.selectStandardAttributes[Scope.Log]!!.size)
         assertEquals(0, query.selectStandardAttributes[Scope.Trace]!!.size)
         assertEquals(1, query.selectStandardAttributes[Scope.Event]!!.size)
@@ -1019,27 +1031,31 @@ class QueryTests {
         assertEquals(0, query.orderByExpressions[Scope.Log]!!.size)
         assertEquals(1, query.orderByExpressions[Scope.Trace]!!.size)
         assertEquals(OrderDirection.Ascending, query.orderByExpressions[Scope.Trace]!![0].direction)
-        assertTrue(query.orderByExpressions[Scope.Trace]!![0].base.let {
-            it is PQLFunction
-                    && it.functionType == FunctionType.Aggregation
-                    && it.effectiveScope == Scope.Trace
-                    && it.children[0].scope == Scope.Event
-        })
+        assertTrue(
+            query.orderByExpressions[Scope.Trace]!![0].base.let {
+                it is PQLFunction &&
+                    it.functionType == FunctionType.Aggregation &&
+                    it.effectiveScope == Scope.Trace &&
+                    it.children[0].scope == Scope.Event
+            },
+        )
         assertEquals(0, query.orderByExpressions[Scope.Event]!!.size)
     }
 
     @Test
     fun orderByExpression2Test() {
-        val query = Query(
-            """group by ^e:name
-            |order by [l:basePrice] * avg(^e:total) * 3.141592 desc""".trimMargin()
-        )
+        val query =
+            Query(
+                """group by ^e:name
+            |order by [l:basePrice] * avg(^e:total) * 3.141592 desc
+                """.trimMargin(),
+            )
         assertEquals(0, query.orderByExpressions[Scope.Log]!!.size)
         assertEquals(1, query.orderByExpressions[Scope.Trace]!!.size)
         assertEquals(OrderDirection.Descending, query.orderByExpressions[Scope.Trace]!![0].direction)
         assertEquals(
             "[log:basePrice] * avg(^event:cost:total) * 3.141592 desc",
-            query.orderByExpressions[Scope.Trace]!![0].toString()
+            query.orderByExpressions[Scope.Trace]!![0].toString(),
         )
         val expression = query.orderByExpressions[Scope.Trace]!![0].base
         assertEquals(Scope.Trace, expression.effectiveScope)
@@ -1165,12 +1181,13 @@ class QueryTests {
 
     @Test
     fun commentLineTest() {
-        val query = Query(
-            """select e:name
+        val query =
+            Query(
+                """select e:name
             --where e:timestamp > D2020-01-01
             order by e:timestamp
-            """
-        )
+            """,
+            )
         assertEquals(1, query.selectStandardAttributes[Scope.Event]!!.size)
         assertEquals(Expression.empty, query.whereExpression)
         assertEquals(1, query.orderByExpressions[Scope.Event]!!.size)
@@ -1178,12 +1195,13 @@ class QueryTests {
 
     @Test
     fun commentLine2Test() {
-        val query = Query(
-            """select e:name
+        val query =
+            Query(
+                """select e:name
             //where e:timestamp > D2020-01-01
             order by e:timestamp
-            """
-        )
+            """,
+            )
         assertEquals(1, query.selectStandardAttributes[Scope.Event]!!.size)
         assertEquals(Expression.empty, query.whereExpression)
         assertEquals(1, query.orderByExpressions[Scope.Event]!!.size)
@@ -1191,14 +1209,15 @@ class QueryTests {
 
     @Test
     fun commentBlockTest() {
-        val query = Query(
-            """select e:name
+        val query =
+            Query(
+                """select e:name
             |/*where e:timestamp > D2020-01-01
             |group by e:name
             |*/
             |order by e:timestamp
-            """.trimMargin()
-        )
+                """.trimMargin(),
+            )
         assertEquals(1, query.selectStandardAttributes[Scope.Event]!!.size)
         assertEquals(Expression.empty, query.whereExpression)
         assertFalse(query.isImplicitGroupBy[Scope.Log]!!)
@@ -1212,7 +1231,8 @@ class QueryTests {
 
     @Test
     fun toStringTest() {
-        val q = """select e:name
+        val q =
+            """select e:name
             |/*where e:timestamp > D2020-01-01
             |group by e:name
             |*/
@@ -1266,9 +1286,10 @@ class QueryTests {
 
     @Test
     fun deleteWithGroupByNotAllowed() {
-        val ex = assertFailsWith<PQLParserException> {
-            Query("delete event group by l:name")
-        }
+        val ex =
+            assertFailsWith<PQLParserException> {
+                Query("delete event group by l:name")
+            }
         assertEquals(PQLParserException.Problem.InputMismatch, ex.problem)
         assertEquals("group by", ex.offendingToken.value)
         assertEquals(true, ex.expectedTokens?.isNotEmpty())
@@ -1276,9 +1297,10 @@ class QueryTests {
 
     @Test
     fun deleteWithSelectNotAllowed() {
-        val ex = assertFailsWith<PQLParserException> {
-            Query("select e:name delete event where l:name='abc'")
-        }
+        val ex =
+            assertFailsWith<PQLParserException> {
+                Query("select e:name delete event where l:name='abc'")
+            }
         assertIs<PQLParserException>(ex)
         assertEquals(PQLParserException.Problem.InputMismatch, ex.problem)
         assertEquals("delete", ex.offendingToken.value)

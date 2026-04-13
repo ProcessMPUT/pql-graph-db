@@ -80,12 +80,13 @@ class LogController(
             }
 
             // Handle gzip decompression if needed
-            val inputStream = if (isGzippedXES) {
-                logger.info("Decompressing gzipped XES file: $filename")
-                java.util.zip.GZIPInputStream(file.inputStream)
-            } else {
-                file.inputStream
-            }
+            val inputStream =
+                if (isGzippedXES) {
+                    logger.info("Decompressing gzipped XES file: $filename")
+                    java.util.zip.GZIPInputStream(file.inputStream)
+                } else {
+                    file.inputStream
+                }
 
             // Load XES file
             val result = xesLoader.loadXESFile(inputStream, logId)
@@ -186,11 +187,12 @@ class LogController(
         logger.info("Creating new log: ${request.logId}")
 
         return try {
-            val log = logService.createLog(
-                logId = request.logId,
-                name = request.name,
-                attributes = request.attributes,
-            )
+            val log =
+                logService.createLog(
+                    logId = request.logId,
+                    name = request.name,
+                    attributes = request.attributes,
+                )
 
             ResponseEntity.status(HttpStatus.CREATED).body(LogResponse.from(log))
         } catch (e: IllegalArgumentException) {
@@ -281,27 +283,28 @@ class LogController(
         logger.debug("Searching logs with criteria: {}", request)
 
         return try {
-            val logs = when {
-                !request.name.isNullOrBlank() -> {
-                    logService.searchLogsByName(request.name)
-                }
+            val logs =
+                when {
+                    !request.name.isNullOrBlank() -> {
+                        logService.searchLogsByName(request.name)
+                    }
 
-                request.createdAfter != null && request.createdBefore != null -> {
-                    logService.getLogsCreatedBetween(request.createdAfter, request.createdBefore)
-                }
+                    request.createdAfter != null && request.createdBefore != null -> {
+                        logService.getLogsCreatedBetween(request.createdAfter, request.createdBefore)
+                    }
 
-                request.createdAfter != null -> {
-                    logService.getLogsCreatedAfter(request.createdAfter)
-                }
+                    request.createdAfter != null -> {
+                        logService.getLogsCreatedAfter(request.createdAfter)
+                    }
 
-                request.attributeKey != null && request.attributeValue != null -> {
-                    logService.findLogsByAttribute(request.attributeKey, request.attributeValue)
-                }
+                    request.attributeKey != null && request.attributeValue != null -> {
+                        logService.findLogsByAttribute(request.attributeKey, request.attributeValue)
+                    }
 
-                else -> {
-                    logService.getAllLogs()
+                    else -> {
+                        logService.getAllLogs()
+                    }
                 }
-            }
 
             ResponseEntity.ok(logs.map { LogResponse.from(it) })
         } catch (e: IllegalArgumentException) {
@@ -325,11 +328,12 @@ class LogController(
         logger.info("Updating log: $logId")
 
         return try {
-            val updatedLog = logService.updateLog(
-                logId = logId,
-                name = request.name,
-                attributes = request.attributes,
-            )
+            val updatedLog =
+                logService.updateLog(
+                    logId = logId,
+                    name = request.name,
+                    attributes = request.attributes,
+                )
 
             ResponseEntity.ok(LogResponse.from(updatedLog))
         } catch (e: LogNotFoundException) {
@@ -351,16 +355,17 @@ class LogController(
     @DeleteMapping("/{logId}")
     fun deleteLog(
         @PathVariable logId: String,
-        @RequestParam(defaultValue = "false") deleteAllData: Boolean,
+        @RequestParam(defaultValue = "true") deleteAllData: Boolean,
     ): ResponseEntity<DeleteResponse> {
         logger.info("Deleting log: $logId (deleteAllData: $deleteAllData)")
 
         return try {
-            val success = if (deleteAllData) {
-                logService.deleteLogWithAllData(logId)
-            } else {
-                logService.deleteLog(logId)
-            }
+            val success =
+                if (deleteAllData) {
+                    logService.deleteLogWithAllData(logId)
+                } else {
+                    logService.deleteLog(logId)
+                }
 
             if (success) {
                 ResponseEntity.ok(
@@ -435,10 +440,11 @@ class LogController(
     fun handleException(e: Exception): ResponseEntity<ErrorResponse> {
         logger.error("Unhandled exception in LogController", e)
 
-        val errorResponse = ErrorResponse(
-            error = e.javaClass.simpleName,
-            message = e.message ?: "An unexpected error occurred",
-        )
+        val errorResponse =
+            ErrorResponse(
+                error = e.javaClass.simpleName,
+                message = e.message ?: "An unexpected error occurred",
+            )
 
         return ResponseEntity.internalServerError().body(errorResponse)
     }

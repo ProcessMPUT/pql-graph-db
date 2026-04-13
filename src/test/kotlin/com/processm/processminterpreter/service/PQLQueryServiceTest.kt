@@ -3,7 +3,10 @@ package com.processm.processminterpreter.service
 import com.processm.processminterpreter.pql.CypherQuery
 import com.processm.processminterpreter.pql.PQLTranslator
 import com.processm.processminterpreter.xes.XESWriter
-import org.junit.jupiter.api.Assertions.*
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.mockito.ArgumentMatchers.any
@@ -13,19 +16,17 @@ import org.mockito.ArgumentMatchers.anyString
 import org.mockito.ArgumentMatchers.eq
 import org.mockito.Mock
 import org.mockito.Mockito
-import org.mockito.Mockito.`when`
 import org.mockito.Mockito.never
 import org.mockito.Mockito.verify
+import org.mockito.Mockito.`when`
 import org.mockito.MockitoAnnotations
 import org.neo4j.driver.Driver
 import org.neo4j.driver.Record
 import org.neo4j.driver.Result
 import org.neo4j.driver.Session
-import java.io.OutputStream
 import java.util.function.Function
 
 class PQLQueryServiceTest {
-
     @Mock
     private lateinit var pqlTranslator: PQLTranslator
 
@@ -60,7 +61,7 @@ class PQLQueryServiceTest {
         val pqlQuery = "select * from event"
         val cypherQueryString = "MATCH (n) RETURN n"
         val cypherQuery = CypherQuery(cypherQueryString, emptyMap())
-        
+
         `when`(pqlTranslator.translateToCypher(pqlQuery, null)).thenReturn(cypherQuery)
         `when`(session.run(eq(cypherQueryString), anyMap<String, Any>())).thenReturn(result)
         // Use raw type or wildcard to avoid type inference issues with Mockito's any()
@@ -82,7 +83,7 @@ class PQLQueryServiceTest {
         // Given
         val pqlQuery = "invalid query"
         val errorMessage = "Syntax error"
-        
+
         `when`(pqlTranslator.translateToCypher(anyString(), any(), anyMap(), any())).thenThrow(IllegalArgumentException(errorMessage))
 
         // When
@@ -99,7 +100,7 @@ class PQLQueryServiceTest {
         // Given
         val pqlQuery = "select * from event"
         val cypherQuery = CypherQuery("MATCH (n) RETURN n", emptyMap())
-        
+
         `when`(pqlTranslator.translateToCypher(pqlQuery, null)).thenReturn(cypherQuery)
 
         // When
@@ -114,7 +115,7 @@ class PQLQueryServiceTest {
     fun `validatePQLQuery should return invalid result for incorrect query`() {
         // Given
         val pqlQuery = "invalid query"
-        
+
         `when`(pqlTranslator.translateToCypher(anyString(), any(), anyMap(), any())).thenThrow(IllegalArgumentException("Error"))
 
         // When
@@ -130,7 +131,7 @@ class PQLQueryServiceTest {
         // Given
         val pqlQuery = "select * from event"
         val cypherQuery = CypherQuery("MATCH (n) RETURN n", emptyMap())
-        
+
         `when`(pqlTranslator.translateToCypher(pqlQuery, null)).thenReturn(cypherQuery)
         `when`(session.run(eq(cypherQuery.query), anyMap<String, Any>())).thenReturn(result)
         `when`(result.list(any<Function<Record, Map<String, Any?>>>())).thenReturn(emptyList())
@@ -143,7 +144,7 @@ class PQLQueryServiceTest {
     }
 
     private fun <T> anyObject(): T {
-        Mockito.any<T>()
+        any<T>()
         return null as T
     }
 }

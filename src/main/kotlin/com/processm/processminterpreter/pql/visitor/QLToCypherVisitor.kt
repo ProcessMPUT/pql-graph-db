@@ -70,16 +70,21 @@ class QLToCypherVisitor(
     private val parameters get() = translationCtx.parameters
     private var paramCounter: Int
         get() = translationCtx.paramCounter
-        set(value) { translationCtx.paramCounter = value }
+        set(value) {
+            translationCtx.paramCounter = value
+        }
     private var currentScope: Scope
         get() = translationCtx.currentScope
-        set(value) { translationCtx.currentScope = value }
-    private val scopeStack get() = translationCtx.scopeStack
+        set(value) {
+            translationCtx.currentScope = value
+        }
     private val usedScopes get() = translationCtx.usedScopes
     private val columnAliases get() = translationCtx.columnAliases
     private var hoistedEventNodeVar: String?
         get() = translationCtx.hoistedEventNodeVar
-        set(value) { translationCtx.hoistedEventNodeVar = value }
+        set(value) {
+            translationCtx.hoistedEventNodeVar = value
+        }
 
     /** Expression translator — handles IExpression → Cypher string conversion. */
     private val exprTranslator = ExpressionTranslator(translationCtx, ::attributeToCypherField)
@@ -167,25 +172,32 @@ class QLToCypherVisitor(
         logger.debug("Extracted hierarchicalLimits: {}", hierarchicalLimits)
         logger.debug("Extracted hierarchicalOffsets: {}", hierarchicalOffsets)
 
-        // Apply default trace limit if no explicit trace limit is set.
-        // ProcessM always defaults to 30 traces (DBHierarchicalXESInputStream constructor default).
-        if (defaultTraceLimit != null && !hierarchicalLimits.containsKey("trace")) {
-            hierarchicalLimits["trace"] = defaultTraceLimit
+        // Apply default trace limit: ProcessM REST API caps traces at 30.
+        // If no explicit trace limit → use default. If explicit > default → cap at default.
+        if (defaultTraceLimit != null && defaultTraceLimit > 0) {
+            val explicitTrace = hierarchicalLimits["trace"]
+            if (explicitTrace == null || explicitTrace > defaultTraceLimit) {
+                hierarchicalLimits["trace"] = defaultTraceLimit
+            }
         }
 
         // Detect aggregation in SELECT (used later for Cypher generation logic)
-        val hasAggregationInSelect = query.selectExpressions.values.flatten().any { expr ->
-            expr is com.processm.processminterpreter.pql.model.Function &&
-                com.processm.processminterpreter.pql.model.Function.isAggregation(expr.name)
-        }
+        val hasAggregationInSelect =
+            query.selectExpressions.values.flatten().any { expr ->
+                expr is com.processm.processminterpreter.pql.model.Function &&
+                    com.processm.processminterpreter.pql.model.Function
+                        .isAggregation(expr.name)
+            }
 
         // For pure log-scope aggregation (e.g. select avg(^^e:total)) without GROUP BY:
         // ProcessM aggregates across ALL traces, not just the first 30.
         // Remove trace limit from hierarchical limits so aggregation covers full dataset.
         // The trace limit for display (30 traces with null events) is applied in Stage 2 re-MATCH.
-        val hasExplicitGroupByEarly = query.groupByStandardAttributes.values.any { it.isNotEmpty() } ||
+        val hasExplicitGroupByEarly =
+            query.groupByStandardAttributes.values.any { it.isNotEmpty() } ||
                 query.groupByOtherAttributes.values.any { it.isNotEmpty() }
-        val isAllLogScopeAggEarly = hasAggregationInSelect && !hasExplicitGroupByEarly &&
+        val isAllLogScopeAggEarly =
+            hasAggregationInSelect && !hasExplicitGroupByEarly &&
                 query.selectExpressions.any { (_, exprs) -> exprs.isNotEmpty() } &&
                 query.selectExpressions.all { (scope, exprs) ->
                     exprs.isEmpty() || scope == com.processm.processminterpreter.pql.model.Scope.Log
@@ -197,11 +209,13 @@ class QLToCypherVisitor(
         // Detect hoisted event→trace GROUP BY (^e:X) — needs multi-stage COLLECT/UNWIND Cypher.
         // This produces trace-variant grouping by collecting event sequences per trace, then
         // grouping by those sequences. Required for ProcessM-compatible GROUP BY ^e:name behavior.
-        val allGroupByAttrsEarly = query.groupByStandardAttributes.values.flatten() +
+        val allGroupByAttrsEarly =
+            query.groupByStandardAttributes.values.flatten() +
                 query.groupByOtherAttributes.values.flatten()
-        val hasHoistedEventToTraceGroupBy = allGroupByAttrsEarly.any {
-            it.hoistingPrefix == "^" && it.scope == com.processm.processminterpreter.pql.model.Scope.Event
-        }
+        val hasHoistedEventToTraceGroupBy =
+            allGroupByAttrsEarly.any {
+                it.hoistingPrefix == "^" && it.scope == com.processm.processminterpreter.pql.model.Scope.Event
+            }
         if (hasHoistedEventToTraceGroupBy) {
             // Populate usedScopes — always need log, trace, event for hoisted GROUP BY
             val primaryScopeH = determinePrimaryScope(query)
@@ -230,26 +244,30 @@ class QLToCypherVisitor(
         populateUsedScopes(query)
 
         // Event-level aggregation requires trace and log in MATCH for per-trace grouping
-        val hasAggInSelect = query.selectExpressions.values.flatten().any { expr ->
-            expr is com.processm.processminterpreter.pql.model.Function &&
-                com.processm.processminterpreter.pql.model.Function.isAggregation(expr.name)
-        }
+        val hasAggInSelect =
+            query.selectExpressions.values.flatten().any { expr ->
+                expr is com.processm.processminterpreter.pql.model.Function &&
+                    com.processm.processminterpreter.pql.model.Function
+                        .isAggregation(expr.name)
+            }
         if (hasAggInSelect && usedScopes.contains(Scope.Event)) {
             usedScopes.add(Scope.Trace)
             usedScopes.add(Scope.Log)
         }
 
         // Check for aggregation (in SELECT or ORDER BY)
-        val hasAggregationInOrderBy = query.orderByExpressions.values.flatten().any { ordered ->
-            containsAggregation(ordered.base)
-        }
+        val hasAggregationInOrderBy =
+            query.orderByExpressions.values.flatten().any { ordered ->
+                containsAggregation(ordered.base)
+            }
         val hasAggregation = hasAggregationInSelect || hasAggregationInOrderBy
 
         // GROUP BY handling:
         // - Explicit GROUP BY: "select t:name, count(e:name) group by t:name"
         // - Implicit per-trace grouping: "select count(e:name)" (no GROUP BY, events aggregated per trace)
         // Cypher has no GROUP BY keyword — non-aggregated expressions in WITH/RETURN become grouping keys.
-        val hasExplicitGroupBy = query.groupByStandardAttributes.values.any { it.isNotEmpty() } ||
+        val hasExplicitGroupBy =
+            query.groupByStandardAttributes.values.any { it.isNotEmpty() } ||
                 query.groupByOtherAttributes.values.any { it.isNotEmpty() }
         // isImplicitGroupBy=true when ORDER BY had only aggregations — treat as per-trace grouping
         val hasImplicitGroupBy = query.isImplicitGroupBy.values.any { it }
@@ -261,7 +279,8 @@ class QLToCypherVisitor(
         // and don't add Event to usedScopes — we must detect these independently.
         // Note: selectExpressions is an EnumMap initialized with ALL scopes (Log, Trace, Event),
         // so we must allow empty-list entries — only non-empty entry scopes matter.
-        val isAllLogScopeAggregation = hasAggregation && !hasExplicitGroupBy &&
+        val isAllLogScopeAggregation =
+            hasAggregation && !hasExplicitGroupBy &&
                 query.selectExpressions.any { (_, exprs) -> exprs.isNotEmpty() } &&
                 query.selectExpressions.all { (scope, exprs) ->
                     exprs.isEmpty() || scope == com.processm.processminterpreter.pql.model.Scope.Log
@@ -269,7 +288,8 @@ class QLToCypherVisitor(
                 query.selectStandardAttributes.all { (_, attrs) -> attrs.isEmpty() } &&
                 query.selectOtherAttributes.all { (_, attrs) -> attrs.isEmpty() }
 
-        val needsImplicitTraceGrouping = (hasAggregation || hasImplicitGroupBy) && !hasExplicitGroupBy &&
+        val needsImplicitTraceGrouping =
+            (hasAggregation || hasImplicitGroupBy) && !hasExplicitGroupBy &&
                 (usedScopes.contains(Scope.Event) || isAllLogScopeAggregation)
         val needsAggregationGrouping = hasExplicitGroupBy || needsImplicitTraceGrouping
 
@@ -302,7 +322,13 @@ class QLToCypherVisitor(
             }
 
             // Step 4: Aggregation WITH clause (Stage 1 for isAllLogScopeAggregation)
-            buildAggregationWithClause(cypher, query, hasExplicitGroupBy, isAllLogScopeAggregation, logScopeAggTraceLimit = logScopeAggTraceLimit)
+            buildAggregationWithClause(
+                cypher,
+                query,
+                hasExplicitGroupBy,
+                isAllLogScopeAggregation,
+                logScopeAggTraceLimit = logScopeAggTraceLimit,
+            )
 
             // Step 5: RETURN
             cypher.append(" RETURN ")
@@ -353,16 +379,17 @@ class QLToCypherVisitor(
             cypher.append(" ORDER BY ")
             if (needsAggregationGrouping) {
                 // Replace aggregation expressions with their aliases in ORDER BY
-                val orderByParts = query.orderByExpressions.values.flatten().map { ordered ->
-                    val expr = ordered.base
-                    val dir = ordered.direction.toString().uppercase()
-                    if (containsAggregation(expr)) {
-                        "${expressionToAlias(expr)} $dir"
-                    } else {
-                        val cypherExpr = translateExpressionToCypher(expr)
-                        "$cypherExpr $dir"
+                val orderByParts =
+                    query.orderByExpressions.values.flatten().map { ordered ->
+                        val expr = ordered.base
+                        val dir = ordered.direction.toString().uppercase()
+                        if (containsAggregation(expr)) {
+                            "${expressionToAlias(expr)} $dir"
+                        } else {
+                            val cypherExpr = translateExpressionToCypher(expr)
+                            "$cypherExpr $dir"
+                        }
                     }
-                }
                 cypher.append(orderByParts.joinToString(", "))
             } else {
                 cypher.append(orderByClause.joinToString(", ") { "${it.expression} ${it.direction}" })
@@ -379,9 +406,10 @@ class QLToCypherVisitor(
         }
 
         // Build SKIP (OFFSET) clause
-        val offset = query.offset[primaryScope]
-            ?: query.offset[com.processm.processminterpreter.pql.model.Scope.Event]
-            ?: query.offset.values.firstOrNull()
+        val offset =
+            query.offset[primaryScope]
+                ?: query.offset[com.processm.processminterpreter.pql.model.Scope.Event]
+                ?: query.offset.values.firstOrNull()
 
         if (offset != null) {
             cypher.append(" SKIP $offset")
@@ -412,23 +440,26 @@ class QLToCypherVisitor(
     private fun buildHoistedGroupByQuery(
         query: Query,
         hierarchicalLimits: Map<String, Int?> = emptyMap(),
-        hierarchicalOffsets: Map<String, Int?> = emptyMap()
+        hierarchicalOffsets: Map<String, Int?> = emptyMap(),
     ): CypherQuery {
         val cypher = StringBuilder()
 
-        val allGroupByAttrs = query.groupByStandardAttributes.values.flatten() +
+        val allGroupByAttrs =
+            query.groupByStandardAttributes.values.flatten() +
                 query.groupByOtherAttributes.values.flatten()
         // ^e: attrs → sequence-based grouping
-        val hoistedGroupByAttrs = allGroupByAttrs.filter {
-            it.hoistingPrefix == "^" && it.scope == com.processm.processminterpreter.pql.model.Scope.Event
-        }
+        val hoistedGroupByAttrs =
+            allGroupByAttrs.filter {
+                it.hoistingPrefix == "^" && it.scope == com.processm.processminterpreter.pql.model.Scope.Event
+            }
         // non-hoisted attrs (e.g. t:name) become additional grouping keys alongside the sequence
         val nonHoistedGroupByAttrs = allGroupByAttrs.filter { it.hoistingPrefix.isEmpty() }
 
         // Pre-sort detection: ORDER BY on non-aggregate event attr → sort events before COLLECT
         // This changes which variant group a trace falls into (alphabetical sort → fewer variants)
-        val eventOrderByExprs = query.orderByExpressions[com.processm.processminterpreter.pql.model.Scope.Event]
-            ?: emptyList()
+        val eventOrderByExprs =
+            query.orderByExpressions[com.processm.processminterpreter.pql.model.Scope.Event]
+                ?: emptyList()
         val preSortExprs = eventOrderByExprs.filter { !containsAggregation(it.base) }
         val hasPreSort = preSortExprs.isNotEmpty()
 
@@ -437,25 +468,31 @@ class QLToCypherVisitor(
         // Note: GROUP BY propagates its attrs to selectStandardAttributes, so we must exclude
         // propagated attrs from the "explicit SELECT" check (isGroupByPropagatedToSelect flag).
         // For explicit SELECT, only UNWIND if event-scope attributes are explicitly selected.
-        val hasExplicitNonGroupBySelect = !query.isGroupByPropagatedToSelect && (
-            query.selectStandardAttributes.values.any { it.isNotEmpty() } ||
-            query.selectOtherAttributes.values.any { it.isNotEmpty() }
-        ) || query.selectExpressions.values.any { it.isNotEmpty() }
+        val hasExplicitNonGroupBySelect =
+            (
+                !query.isGroupByPropagatedToSelect && (
+                    query.selectStandardAttributes.values.any { it.isNotEmpty() } ||
+                        query.selectOtherAttributes.values.any { it.isNotEmpty() }
+                )
+            ) || query.selectExpressions.values.any { it.isNotEmpty() }
         // Check if SELECT includes hoisted event-scope attributes (stored under Trace scope
         // by effectiveScope, but data lives on event nodes collected into sequences).
-        val hasHoistedEventInSelect = query.selectStandardAttributes.values.flatten().any {
-            it.hoistingPrefix.isNotEmpty() && it.scope == com.processm.processminterpreter.pql.model.Scope.Event
-        } || query.selectOtherAttributes.values.flatten().any {
-            it.hoistingPrefix.isNotEmpty() && it.scope == com.processm.processminterpreter.pql.model.Scope.Event
-        }
-        val needsUnwind = if (!hasExplicitNonGroupBySelect) {
-            // Implicit SELECT * — include event sequences in output
-            true
-        } else {
-            hasHoistedEventInSelect ||
-            query.selectStandardAttributes[com.processm.processminterpreter.pql.model.Scope.Event]?.isNotEmpty() == true ||
-            query.selectOtherAttributes[com.processm.processminterpreter.pql.model.Scope.Event]?.isNotEmpty() == true
-        }
+        val hasHoistedEventInSelect =
+            query.selectStandardAttributes.values.flatten().any {
+                it.hoistingPrefix.isNotEmpty() && it.scope == com.processm.processminterpreter.pql.model.Scope.Event
+            } ||
+                query.selectOtherAttributes.values.flatten().any {
+                    it.hoistingPrefix.isNotEmpty() && it.scope == com.processm.processminterpreter.pql.model.Scope.Event
+                }
+        val needsUnwind =
+            if (!hasExplicitNonGroupBySelect) {
+                // Implicit SELECT * — include event sequences in output
+                true
+            } else {
+                hasHoistedEventInSelect ||
+                    query.selectStandardAttributes[com.processm.processminterpreter.pql.model.Scope.Event]?.isNotEmpty() == true ||
+                    query.selectOtherAttributes[com.processm.processminterpreter.pql.model.Scope.Event]?.isNotEmpty() == true
+            }
 
         // ── MATCH log (+ optional early log limit) ────────────────────────────────────────
         val logLimit = hierarchicalLimits["log"]
@@ -472,18 +509,22 @@ class QLToCypherVisitor(
         // WHERE conditions (log/trace level only — not duplicating logId filter)
         val whereClause = buildWhereClauseFromQuery(query)
         // When logId is set, the WHERE from the query may re-check logId — skip it to avoid duplication
-        val effectiveWhere = if (logId != null && whereClause != null) {
-            // Strip simple logId equality from the where clause if logId is already in MATCH
-            val stripped = whereClause
-                .replace("(log.logId = \$param\\d+)".toRegex(), "")
-                .replace("AND ()".toRegex(), "")
-                .replace("() AND".toRegex(), "")
-                .trim().trimStart('(').trimEnd(')')
-                .trim()
-            stripped.ifEmpty { null }
-        } else {
-            whereClause
-        }
+        val effectiveWhere =
+            if (logId != null && whereClause != null) {
+                // Strip simple logId equality from the where clause if logId is already in MATCH
+                val stripped =
+                    whereClause
+                        .replace("(log.logId = \$param\\d+)".toRegex(), "")
+                        .replace("AND ()".toRegex(), "")
+                        .replace("() AND".toRegex(), "")
+                        .trim()
+                        .trimStart('(')
+                        .trimEnd(')')
+                        .trim()
+                stripped.ifEmpty { null }
+            } else {
+                whereClause
+            }
         if (effectiveWhere != null) {
             cypher.append(" WHERE $effectiveWhere")
         }
@@ -499,6 +540,24 @@ class QLToCypherVisitor(
 
         cypher.append(" MATCH (trace)-[:HAS_EVENT]->(event:Event)")
 
+        // Classifier IS NOT NULL filter: nonexistent classifiers should produce empty results
+        val classifierConditions = mutableListOf<String>()
+        for (attr in allGroupByAttrs + (
+            query.orderByExpressions.values.flatten().mapNotNull {
+                it.base as? com.processm.processminterpreter.pql.model.Attribute
+            }
+        )) {
+            if (attr.isClassifier) {
+                val scope = mapScope(attr.scope)
+                val nodeLabel = scopeToNodeLabel(scope)
+                val cypherField = attributeToCypherField(attr, nodeLabel, scope)
+                classifierConditions.add("$cypherField IS NOT NULL")
+            }
+        }
+        if (classifierConditions.isNotEmpty()) {
+            cypher.append(" WHERE ${classifierConditions.joinToString(" AND ")}")
+        }
+
         // ── STAGE 0: Pre-sort ─────────────────────────────────────────────────────────────
         // ALWAYS sort events before COLLECT to ensure deterministic sequence ordering.
         // Without ORDER BY, collect() order is non-deterministic → different traces with the
@@ -506,16 +565,17 @@ class QLToCypherVisitor(
         // Default: sort by timestamp (natural XES order → 97 groups for JournalReview).
         // Override: if ORDER BY specifies a non-aggregate event attribute (e.g. "order by name"),
         //   use that sort → alphabetical ordering → 78 groups.
-        val preSortStr = if (hasPreSort) {
-            preSortExprs.joinToString(", ") {
-                "${translateExpressionToCypher(it.base)} ${it.direction.toString().uppercase()}"
+        val preSortStr =
+            if (hasPreSort) {
+                preSortExprs.joinToString(", ") {
+                    "${translateExpressionToCypher(it.base)} ${it.direction.toString().uppercase()}"
+                }
+            } else {
+                // Default: sort by Neo4j internal node ID (id(event)) to match XES file insertion order.
+                // id(event) is integer, assigned sequentially during XES import → preserves file order.
+                // This yields the same trace-variant grouping as ProcessM's natural order (97 groups).
+                "id(event) ASC"
             }
-        } else {
-            // Default: sort by Neo4j internal node ID (id(event)) to match XES file insertion order.
-            // id(event) is integer, assigned sequentially during XES import → preserves file order.
-            // This yields the same trace-variant grouping as ProcessM's natural order (97 groups).
-            "id(event) ASC"
-        }
         val stage0Parts = mutableListOf<String>()
         if (usedScopes.contains(Scope.Log) || logId != null) stage0Parts.add("log")
         stage0Parts.add("trace")
@@ -528,7 +588,11 @@ class QLToCypherVisitor(
         stage1Parts.add("trace")
 
         // Non-hoisted GROUP BY keys (e.g. t:name → trace.caseId AS t_name)
-        data class NonHoistedKey(val cypherField: String, val alias: String)
+        data class NonHoistedKey(
+            val cypherField: String,
+            val alias: String,
+        )
+
         val nonHoistedKeys = mutableListOf<NonHoistedKey>()
         for (attr in nonHoistedGroupByAttrs) {
             val effectiveScope = mapScope(attr.effectiveScope ?: attr.scope)
@@ -542,7 +606,12 @@ class QLToCypherVisitor(
         }
 
         // Hoisted attrs: collect per-trace event sequences
-        data class HoistedSeq(val attr: com.processm.processminterpreter.pql.model.Attribute, val seqAlias: String, val unwindAlias: String)
+        data class HoistedSeq(
+            val attr: com.processm.processminterpreter.pql.model.Attribute,
+            val seqAlias: String,
+            val unwindAlias: String,
+        )
+
         val hoistedSeqs = mutableListOf<HoistedSeq>()
         for (attr in hoistedGroupByAttrs) {
             val baseScope = mapScope(attr.scope) // Event
@@ -565,33 +634,43 @@ class QLToCypherVisitor(
             val aggFn: String,
             val eventField: String,
             val stage1Alias: String,
-            val stage2Expr: String
+            val stage2Expr: String,
         )
+
         val eventAggPreList = mutableListOf<EventAggPre>()
         val addedPreKeys = mutableSetOf<String>()
 
         fun collectEventAggExprs(expr: com.processm.processminterpreter.pql.model.IExpression) {
             if (expr is com.processm.processminterpreter.pql.model.Function &&
-                com.processm.processminterpreter.pql.model.Function.isAggregation(expr.name)) {
+                com.processm.processminterpreter.pql.model.Function
+                    .isAggregation(expr.name)
+            ) {
                 val innerAttr = expr.children.firstOrNull() as? com.processm.processminterpreter.pql.model.Attribute
                 if (innerAttr != null && innerAttr.scope == com.processm.processminterpreter.pql.model.Scope.Event) {
                     val baseScope = mapScope(innerAttr.scope)
                     val nodeLabel = scopeToNodeLabel(baseScope)
                     val field = attributeToCypherField(innerAttr, nodeLabel, baseScope)
                     // Skip if already covered by a hoisted seq (handled via size())
-                    val coveredByHoisted = hoistedSeqs.any { hs ->
-                        val hsBase = mapScope(hs.attr.scope)
-                        attributeToCypherField(hs.attr, scopeToNodeLabel(hsBase), hsBase) == field
-                    }
+                    val coveredByHoisted =
+                        hoistedSeqs.any { hs ->
+                            val hsBase = mapScope(hs.attr.scope)
+                            attributeToCypherField(hs.attr, scopeToNodeLabel(hsBase), hsBase) == field
+                        }
                     val key = "${expr.name.lowercase()}|$field"
                     if (!coveredByHoisted && key !in addedPreKeys) {
-                        val safeField = field.replace(".", "_").replace("`", "").replace(":", "_")
-                            .replace("[", "_").replace("]", "_")
+                        val safeField =
+                            field
+                                .replace(".", "_")
+                                .replace("`", "")
+                                .replace(":", "_")
+                                .replace("[", "_")
+                                .replace("]", "_")
                         val stage1Alias = "_pre_${expr.name.lowercase()}_$safeField"
-                        val stage2Expr = when (expr.name.lowercase()) {
-                            "count" -> "sum($stage1Alias)"
-                            else -> "${expr.name.lowercase()}($stage1Alias)"
-                        }
+                        val stage2Expr =
+                            when (expr.name.lowercase()) {
+                                "count" -> "sum($stage1Alias)"
+                                else -> "${expr.name.lowercase()}($stage1Alias)"
+                            }
                         eventAggPreList.add(EventAggPre(expr.name.lowercase(), field, stage1Alias, stage2Expr))
                         addedPreKeys.add(key)
                     }
@@ -599,15 +678,21 @@ class QLToCypherVisitor(
             }
             expr.children.forEach { collectEventAggExprs(it) }
         }
-        query.selectExpressions.values.flatten().forEach { collectEventAggExprs(it) }
-        query.orderByExpressions.values.flatten().forEach { collectEventAggExprs(it.base) }
+        query.selectExpressions.values
+            .flatten()
+            .forEach { collectEventAggExprs(it) }
+        query.orderByExpressions.values
+            .flatten()
+            .forEach { collectEventAggExprs(it.base) }
         for (ep in eventAggPreList) {
             stage1Parts.add("${ep.aggFn}(${ep.eventField}) AS ${ep.stage1Alias}")
         }
 
         cypher.append(" WITH ${stage1Parts.joinToString(", ")}")
 
-        // ── STAGE 2: Aggregate by (log, seq, non-hoisted-keys) ────────────────────────────
+        // ── STAGE 2: Group traces by sequence → collect ALL trace nodes per variant ─────
+        // ProcessM's approach: traces with identical event sequences form one "variant" group.
+        // Each variant becomes one trace in output, with events from ALL traces in the group.
         val stage2Parts = mutableListOf<String>()
         val addedAliases = mutableSetOf<String>()
 
@@ -626,24 +711,35 @@ class QLToCypherVisitor(
             }
         }
 
+        // Note: no _group_traces needed — ProcessM pools events from ALL traces via UNWIND of sequence
+
         // Helper: translate aggregation expressions for Stage 2.
-        // In Stage 2 `event` is not in scope. Two strategies:
-        // 1. count/agg(^e:X) where ^e:X is the GROUP BY attr → size(hoistedSeq)
-        // 2. agg(event.X) pre-computed in Stage 1 → use pre-computed alias
+        // In Stage 2, `event` and `trace` are not in scope (collected into sequences/_group_traces).
         fun translateStage2Expr(expr: com.processm.processminterpreter.pql.model.IExpression): String {
             if (expr is com.processm.processminterpreter.pql.model.Function &&
-                com.processm.processminterpreter.pql.model.Function.isAggregation(expr.name)) {
+                com.processm.processminterpreter.pql.model.Function
+                    .isAggregation(expr.name)
+            ) {
                 val innerAttr = expr.children.firstOrNull() as? com.processm.processminterpreter.pql.model.Attribute
+                // Trace-scope count → count(DISTINCT trace) (count of traces in variant).
+                // Hoisted event-scope (^e:) falls through to Strategy 1 (size of seq)
+                // or Strategy 2 (pre-computed) below — NOT trace counting.
+                if (innerAttr != null && expr.name.lowercase() == "count" &&
+                    innerAttr.scope == com.processm.processminterpreter.pql.model.Scope.Trace
+                ) {
+                    return "count(DISTINCT trace)"
+                }
                 if (innerAttr != null && innerAttr.scope == com.processm.processminterpreter.pql.model.Scope.Event) {
                     val baseScope = mapScope(innerAttr.scope)
                     val nodeLabel = scopeToNodeLabel(baseScope)
                     val innerField = attributeToCypherField(innerAttr, nodeLabel, baseScope)
                     // Strategy 1: matches a hoisted GROUP BY sequence
-                    val matchedSeq = hoistedSeqs.firstOrNull { hs ->
-                        val hsBaseScope = mapScope(hs.attr.scope)
-                        val hsNodeLabel = scopeToNodeLabel(hsBaseScope)
-                        attributeToCypherField(hs.attr, hsNodeLabel, hsBaseScope) == innerField
-                    }
+                    val matchedSeq =
+                        hoistedSeqs.firstOrNull { hs ->
+                            val hsBaseScope = mapScope(hs.attr.scope)
+                            val hsNodeLabel = scopeToNodeLabel(hsBaseScope)
+                            attributeToCypherField(hs.attr, hsNodeLabel, hsBaseScope) == innerField
+                        }
                     if (matchedSeq != null) {
                         return "size(${matchedSeq.seqAlias})"
                     }
@@ -656,6 +752,32 @@ class QLToCypherVisitor(
                 }
             }
             return translateExpressionToCypher(expr)
+        }
+
+        // Standard attributes from SELECT (e.g., l:name, t:name)
+        // These are in selectStandardAttributes, not selectExpressions.
+        // Event-scope attrs are handled by UNWIND; log/trace-scope need explicit aliasing.
+        // Use attr.scope (not effectiveScope) to also skip hoisted event attrs (^e:name)
+        // whose data lives in the hoisted sequences, not on trace/log nodes.
+        query.selectStandardAttributes.forEach { (modelScope, attrs) ->
+            attrs.forEach { attr ->
+                // Skip event-scope attrs — handled by UNWIND aliases.
+                // Check both original scope AND effective scope: hoisted event attrs (^e:name)
+                // have scope=Event but effectiveScope=Trace — their data is in sequences, not trace properties.
+                if (attr.scope == com.processm.processminterpreter.pql.model.Scope.Event) return@forEach
+                val effectiveModelScope = attr.effectiveScope ?: modelScope
+                if (effectiveModelScope == com.processm.processminterpreter.pql.model.Scope.Event) return@forEach
+                val baseScope = mapScope(effectiveModelScope)
+                val nodeLabel = scopeToNodeLabel(baseScope)
+                val cypherField = attributeToCypherField(attr, nodeLabel, baseScope)
+                val alias = expressionToAlias(attr)
+                if (alias !in addedAliases) {
+                    stage2Parts.add("$cypherField AS $alias")
+                    addedAliases.add(alias)
+                    val scopeName = scopeDisplayName(modelScope)
+                    columnAliases[alias] = ColumnAlias(attr.toString(), scopeName)
+                }
+            }
         }
 
         // Aggregation expressions from SELECT
@@ -684,15 +806,10 @@ class QLToCypherVisitor(
             }
         }
 
-        // Note: log-scope SELECT attrs (l:name etc.) are covered by "properties(log) AS log" in RETURN.
-        // No need to project them individually in stage 2 — log node is already a grouping key.
-
-        // Ensure at least one aggregate in stage 2 (required for Cypher grouping semantics)
-        val hasAnyAgg = stage2Parts.any { part ->
-            listOf("count(", "sum(", "avg(", "min(", "max(").any { fn -> part.contains(fn) }
-        }
+        // Always add trace count per variant (ProcessM's COUNT(*) on grouped entities).
+        // This is the number of original traces in each variant group.
         val implicitCountAlias = "count_t_concept_name_"
-        if (!hasAnyAgg) {
+        if (implicitCountAlias !in addedAliases) {
             stage2Parts.add("count(DISTINCT trace) AS $implicitCountAlias")
             addedAliases.add(implicitCountAlias)
             columnAliases[implicitCountAlias] = ColumnAlias("count(trace:concept:name)", "TRACE")
@@ -700,26 +817,69 @@ class QLToCypherVisitor(
 
         cypher.append(" WITH ${stage2Parts.joinToString(", ")}")
 
-        // ── ORDER BY on groups (aggregate-based) + LIMIT on trace-groups ──────────────────
-        // When multiple logs are present (no logId filter), sort by log creation order first
-        // to ensure stable log ordering (JournalReview before BPI, etc. matching ProcessM behavior).
-        val aggOrderByExprs = query.orderByExpressions.values.flatten().filter { containsAggregation(it.base) }
+        // ── ORDER BY on groups + LIMIT ──────────────────────────────────────────────────
+        val aggOrderByExprs =
+            query.orderByExpressions.values
+                .flatten()
+                .filter { containsAggregation(it.base) }
         val hasMultipleLogs = logId == null && (usedScopes.contains(Scope.Log))
-        val logOrderPrefix = if (hasMultipleLogs && (usedScopes.contains(Scope.Log) || logId != null)) "id(log) ASC, " else ""
+        val logOrderPrefix = if (hasMultipleLogs) "id(log) ASC, " else ""
+        // Deterministic secondary sort: use variant sequence as tiebreaker so results
+        // are stable regardless of Neo4j's internal GROUP BY ordering
+        val mainSeqForSort = hoistedSeqs.firstOrNull()?.seqAlias ?: "_seq"
+        val variantTiebreaker = "reduce(_s = '', _x IN $mainSeqForSort | _s + _x + '|')"
         if (aggOrderByExprs.isNotEmpty() || logOrderPrefix.isNotEmpty()) {
-            val orderStr = aggOrderByExprs.joinToString(", ") {
-                "${expressionToAlias(it.base)} ${it.direction.toString().uppercase()}"
-            }
+            val orderStr =
+                aggOrderByExprs.joinToString(", ") {
+                    "${expressionToAlias(it.base)} ${it.direction.toString().uppercase()}"
+                }
             val fullOrderStr = if (orderStr.isNotEmpty()) "$logOrderPrefix$orderStr" else logOrderPrefix.trimEnd(',', ' ')
-            if (fullOrderStr.isNotEmpty()) cypher.append(" ORDER BY $fullOrderStr")
+            cypher.append(" ORDER BY $fullOrderStr, $variantTiebreaker")
+        } else {
+            cypher.append(" ORDER BY $variantTiebreaker")
         }
         val traceLimit = hierarchicalLimits["trace"]
         val traceOffset = hierarchicalOffsets["trace"] ?: 0
         if (traceOffset > 0) cypher.append(" SKIP $traceOffset")
         if (traceLimit != null) cypher.append(" LIMIT $traceLimit")
 
-        // ── UNWIND sequences (only when SELECT has event-scope attributes) ─────────────────
+        // ── STAGE 3: UNWIND sequences → one row per event in the variant ────
+        // ProcessM pools events from ALL traces in a variant. Since all traces share the same
+        // event sequence (by definition of hoisted GROUP BY), we UNWIND the collected sequence
+        // lists instead of re-MATCHing from a representative trace.
         if (needsUnwind) {
+            // Build a unique variant key string to avoid Neo4j list-comparison merging in subsequent WITH
+            val mainSeqAlias = hoistedSeqs.firstOrNull()?.seqAlias ?: "_seq"
+            val variantKeyExpr =
+                if (nonHoistedKeys.isNotEmpty()) {
+                    val initStr = nonHoistedKeys.joinToString(" + '||' + ") { "toString(${it.alias})" }
+                    "reduce(_s = ($initStr + '||'), _x IN $mainSeqAlias | _s + _x + '||')"
+                } else {
+                    "reduce(_s = '', _x IN $mainSeqAlias | _s + _x + '||')"
+                }
+
+            // Build passthrough list (excluding list-based seq aliases which will be UNWINDed)
+            val stage3Aliases = mutableListOf<String>()
+            if (usedScopes.contains(Scope.Log) || logId != null) stage3Aliases.add("log")
+            stage3Aliases.add("_variant_key")
+            for (alias in addedAliases) {
+                if (alias != "log" && hoistedSeqs.none { it.seqAlias == alias }) {
+                    stage3Aliases.add(alias)
+                }
+            }
+
+            // WITH: compute _variant_key + pass through seq aliases for UNWIND
+            val withParts =
+                stage3Aliases
+                    .map {
+                        if (it == "_variant_key") "$variantKeyExpr AS _variant_key" else it
+                    }.toMutableList()
+            for (hs in hoistedSeqs) {
+                withParts.add(hs.seqAlias)
+            }
+            cypher.append(" WITH ${withParts.joinToString(", ")}")
+
+            // UNWIND each hoisted sequence to get individual event values
             for (hs in hoistedSeqs) {
                 cypher.append(" UNWIND ${hs.seqAlias} AS ${hs.unwindAlias}")
             }
@@ -731,24 +891,32 @@ class QLToCypherVisitor(
 
         if (usedScopes.contains(Scope.Log) || logId != null) {
             returnParts.add("log.logId AS l_logId")
-            returnParts.add("properties(log) AS log")
+            // Only include full log properties for SELECT l:* (non-projected).
+            // For projected queries (SELECT l:name, ...), individual attrs are already aliased.
+            if (query.selectAll[com.processm.processminterpreter.pql.model.Scope.Log] == true) {
+                returnParts.add("properties(log) AS log")
+            }
             returnAdded.add("l_logId")
         }
 
-        // Synthetic t_traceId: unique string key per group, built from non-hoisted keys + sequence.
-        // Uses reduce() because toString() does not accept lists in Neo4j Cypher.
-        val mainSeqAlias = hoistedSeqs.firstOrNull()?.seqAlias ?: "_seq"
-        val traceIdExpr = if (nonHoistedKeys.isNotEmpty()) {
-            // Start the reduce accumulator with non-hoisted keys (e.g. trace name), then append sequence items
-            val initStr = nonHoistedKeys.joinToString(" + '||' + ") { "toString(${it.alias})" }
-            "reduce(_s = ($initStr + '||'), _x IN $mainSeqAlias | _s + _x + '||')"
+        // Synthetic t_traceId: unique string key per group
+        if (needsUnwind) {
+            // _variant_key was already computed in Stage 3
+            returnParts.add("_variant_key AS t_traceId")
         } else {
-            "reduce(_s = '', _x IN $mainSeqAlias | _s + _x + '||')"
+            val mainSeqAlias = hoistedSeqs.firstOrNull()?.seqAlias ?: "_seq"
+            val traceIdExpr =
+                if (nonHoistedKeys.isNotEmpty()) {
+                    val initStr = nonHoistedKeys.joinToString(" + '||' + ") { "toString(${it.alias})" }
+                    "reduce(_s = ($initStr + '||'), _x IN $mainSeqAlias | _s + _x + '||')"
+                } else {
+                    "reduce(_s = '', _x IN $mainSeqAlias | _s + _x + '||')"
+                }
+            returnParts.add("$traceIdExpr AS t_traceId")
         }
-        returnParts.add("$traceIdExpr AS t_traceId")
         returnAdded.add("t_traceId")
 
-        // Non-hoisted key aliases (e.g. t_name for trace.conceptName)
+        // Non-hoisted key aliases
         for (nk in nonHoistedKeys) {
             if (nk.alias !in returnAdded) {
                 returnParts.add(nk.alias)
@@ -756,7 +924,22 @@ class QLToCypherVisitor(
             }
         }
 
-        // Aggregation aliases
+        // Standard attribute aliases (l:name, t:name — NOT event-scope, handled by UNWIND)
+        query.selectStandardAttributes.forEach { (modelScope, attrs) ->
+            attrs.forEach { attr ->
+                // Skip event-scope attrs (including hoisted ^e:) — handled by UNWIND
+                if (attr.scope == com.processm.processminterpreter.pql.model.Scope.Event) return@forEach
+                val effScope = attr.effectiveScope ?: modelScope
+                if (effScope == com.processm.processminterpreter.pql.model.Scope.Event) return@forEach
+                val alias = expressionToAlias(attr)
+                if (alias !in returnAdded) {
+                    returnParts.add(alias)
+                    returnAdded.add(alias)
+                }
+            }
+        }
+
+        // Aggregation/expression aliases
         query.selectExpressions.forEach { (_, exprs) ->
             exprs.forEach { expr ->
                 val alias = expressionToAlias(expr)
@@ -767,13 +950,15 @@ class QLToCypherVisitor(
             }
         }
 
-        // Implicit count alias (if added when no explicit aggregate was present)
+        // Implicit count alias — always include in RETURN for hoisted GROUP BY.
+        // ProcessM exposes this as Trace.count (not an attribute), but our tests rely on
+        // it being in trace.attributes["count(trace:concept:name)"].
         if (implicitCountAlias in addedAliases && implicitCountAlias !in returnAdded) {
             returnParts.add(implicitCountAlias)
             returnAdded.add(implicitCountAlias)
         }
 
-        // Event attrs from UNWIND
+        // Event data from UNWIND sequences (not from re-MATCH — event node is not in scope)
         if (needsUnwind) {
             for (hs in hoistedSeqs) {
                 if (hs.unwindAlias !in returnAdded) {
@@ -784,22 +969,33 @@ class QLToCypherVisitor(
         }
 
         cypher.append(" RETURN ${returnParts.joinToString(", ")}")
-        // Note: log limit is applied early (before trace matching) — not at end — to avoid
-        // cutting flattened UNWIND rows instead of actual log count.
+
+        // Sort variants. UNWIND preserves list order for events within each variant.
+        // Aggregate ORDER BY (e.g. count DESC) comes first to preserve group ordering from Stage 2.
+        if (needsUnwind) {
+            val finalAggOrder =
+                aggOrderByExprs.joinToString(", ") {
+                    "${expressionToAlias(it.base)} ${it.direction.toString().uppercase()}"
+                }
+            if (finalAggOrder.isNotEmpty()) {
+                cypher.append(" ORDER BY $finalAggOrder, _variant_key")
+            } else {
+                cypher.append(" ORDER BY _variant_key")
+            }
+        }
 
         val generatedCypher = cypher.toString()
         logger.debug("Generated hoisted GROUP BY Cypher: $generatedCypher")
         return CypherQuery(generatedCypher, parameters.toMap(), hierarchicalLimits, columnAliases.toMap(), true)
     }
 
-    /**
+    /*
      * Build WITH clause for aggregation queries (both explicit GROUP BY and implicit per-trace grouping).
      *
      * Cypher has no GROUP BY keyword. Non-aggregated expressions in WITH automatically become grouping keys.
      * For explicit GROUP BY: adds GROUP BY attributes as grouping keys + aggregation expressions.
      * For implicit grouping: adds log, trace as grouping keys + aggregation expressions.
-     */
-    /**
+     *
      * @return set of aliases added to the WITH clause (used by caller to check for _trace_order_ etc.)
      */
     private fun buildAggregationWithClause(
@@ -808,16 +1004,19 @@ class QLToCypherVisitor(
         hasExplicitGroupBy: Boolean,
         isAllLogScopeAggregation: Boolean = false,
         hoistedAggAliases: Map<String, String> = emptyMap(),
-        logScopeAggTraceLimit: Int? = null
+        logScopeAggTraceLimit: Int? = null,
     ): Set<String> {
         val withParts = mutableListOf<String>()
         val addedAliases = mutableSetOf<String>()
 
         // When ALL GROUP BY attrs have effectiveScope=Log (e.g. group by ^^e:name),
         // grouping is at log-scope — don't add trace as a grouping key.
-        val allGroupByAttrs = (query.groupByStandardAttributes.values.flatten() +
-                query.groupByOtherAttributes.values.flatten())
-        val isAllGroupByAtLogScope = hasExplicitGroupBy && allGroupByAttrs.isNotEmpty() &&
+        val allGroupByAttrs = (
+            query.groupByStandardAttributes.values.flatten() +
+                query.groupByOtherAttributes.values.flatten()
+        )
+        val isAllGroupByAtLogScope =
+            hasExplicitGroupBy && allGroupByAttrs.isNotEmpty() &&
                 allGroupByAttrs.all { it.effectiveScope == com.processm.processminterpreter.pql.model.Scope.Log }
 
         // Include log and trace for HierarchyReconstructor identity (only if present in MATCH)
@@ -832,8 +1031,9 @@ class QLToCypherVisitor(
         // means "aggregate all events per trace". So trace IS a grouping key.
         // For other aggregations: add trace when event scope or explicit GROUP BY is active.
         if (!isAllLogScopeAggregation &&
-                (usedScopes.contains(Scope.Trace) || usedScopes.contains(Scope.Event)) &&
-                (usedScopes.contains(Scope.Event) || hasExplicitGroupBy)) {
+            (usedScopes.contains(Scope.Trace) || usedScopes.contains(Scope.Event)) &&
+            (usedScopes.contains(Scope.Event) || hasExplicitGroupBy)
+        ) {
             withParts.add("trace")
         }
 
@@ -872,43 +1072,61 @@ class QLToCypherVisitor(
         // (e.g. max(e:ts) - min(e:ts)) — two aggregation functions combined with arithmetic.
         // Cypher requires each aggregation to be standalone; we extract sub-aggregations into
         // temp aliases (_cagg_N) in Stage 1, then compute the arithmetic in Stage 2 WITH.
-        class ComplexAggInfo(val alias: String, val modifiedExpr: String, val extracted: List<Pair<String, String>>)
+        class ComplexAggInfo(
+            val alias: String,
+            val modifiedExpr: String,
+            val extracted: List<Pair<String, String>>,
+        )
+
         val complexAggInfos = mutableListOf<ComplexAggInfo>()
         val caggCounter = intArrayOf(0)
 
         fun extractAggsFromExpr(expr: com.processm.processminterpreter.pql.model.IExpression): Pair<String, List<Pair<String, String>>> {
             val extracted = mutableListOf<Pair<String, String>>()
-            fun rebuild(e: com.processm.processminterpreter.pql.model.IExpression): String = when {
-                e is com.processm.processminterpreter.pql.model.Function &&
-                        com.processm.processminterpreter.pql.model.Function.isAggregation(e.name) -> {
-                    val ce = translateExpressionToCypher(e)
-                    // Check if this aggregation was pre-computed as a hoisted aggregation
-                    val hoistedAlias = hoistedAggAliases[ce]
-                    if (hoistedAlias != null) {
-                        // Use pre-computed alias directly — don't add to extracted
-                        hoistedAlias
-                    } else {
-                        extracted.find { it.first == ce }?.second ?: run {
-                            val a = "_cagg_${caggCounter[0]++}"
-                            extracted.add(Pair(ce, a))
-                            a
+
+            fun rebuild(e: com.processm.processminterpreter.pql.model.IExpression): String =
+                when {
+                    e is com.processm.processminterpreter.pql.model.Function &&
+                        com.processm.processminterpreter.pql.model.Function
+                            .isAggregation(e.name) -> {
+                        val ce = translateExpressionToCypher(e)
+                        // Check if this aggregation was pre-computed as a hoisted aggregation
+                        val hoistedAlias = hoistedAggAliases[ce]
+                        if (hoistedAlias != null) {
+                            // Use pre-computed alias directly — don't add to extracted
+                            hoistedAlias
+                        } else {
+                            extracted.find { it.first == ce }?.second ?: run {
+                                val a = "_cagg_${caggCounter[0]++}"
+                                extracted.add(Pair(ce, a))
+                                a
+                            }
                         }
                     }
-                }
-                e is BinaryOperator -> {
-                    val l = rebuild(e.left)
-                    val r = rebuild(e.right)
-                    if (e.operator == "-" && exprTranslator.isTemporalAggExpression(e.left) && exprTranslator.isTemporalAggExpression(e.right)) {
-                        // Neo4j cannot subtract LocalDateTime from LocalDateTime;
-                        // ProcessM returns duration as days (float), so use duration.inDays().days
-                        "toFloat(duration.inDays($r, $l).days)"
-                    } else {
-                        "($l ${e.operator} $r)"
+
+                    e is BinaryOperator -> {
+                        val l = rebuild(e.left)
+                        val r = rebuild(e.right)
+                        if (e.operator == "-" && exprTranslator.isTemporalAggExpression(e.left) &&
+                            exprTranslator.isTemporalAggExpression(e.right)
+                        ) {
+                            // Neo4j cannot subtract LocalDateTime from LocalDateTime;
+                            // ProcessM returns duration as fractional days (e.g. 1760.839...).
+                            // duration.inSeconds().seconds gives total seconds (including sub-day precision).
+                            "toFloat(duration.inSeconds($r, $l).seconds) / 86400.0"
+                        } else {
+                            "($l ${e.operator} $r)"
+                        }
+                    }
+
+                    e is UnaryOperator -> {
+                        "(${e.operator} ${rebuild(e.operand)})"
+                    }
+
+                    else -> {
+                        translateExpressionToCypher(e)
                     }
                 }
-                e is UnaryOperator -> "(${e.operator} ${rebuild(e.operand)})"
-                else -> translateExpressionToCypher(e)
-            }
             return Pair(rebuild(expr), extracted)
         }
 
@@ -946,13 +1164,25 @@ class QLToCypherVisitor(
         }
 
         // Add non-aggregated SELECT attributes not already covered by GROUP BY
-        fun addSelectAttr(attr: com.processm.processminterpreter.pql.model.Attribute, modelScope: com.processm.processminterpreter.pql.model.Scope) {
+        fun addSelectAttr(
+            attr: com.processm.processminterpreter.pql.model.Attribute,
+            modelScope: com.processm.processminterpreter.pql.model.Scope,
+        ) {
             val scope = mapScope(attr.effectiveScope ?: modelScope)
             val nodeLabel = scopeToNodeLabel(scope)
             val cypherField = attributeToCypherField(attr, nodeLabel, scope)
             val prefix = scopePrefix(attr.scope)
             // For classifiers, use groupByAttrAliasSuffix to match the alias used in GROUP BY
-            val alias = "${prefix}_${if (attr.isClassifier) groupByAttrAliasSuffix(attr, scope) else attr.name.replace(ALIAS_SANITIZER, "_")}"
+            val alias = "${prefix}_${
+                if (attr.isClassifier) {
+                    groupByAttrAliasSuffix(
+                        attr,
+                        scope,
+                    )
+                } else {
+                    attr.name.replace(ALIAS_SANITIZER, "_")
+                }
+            }"
             if (alias !in addedAliases) {
                 withParts.add("$cypherField AS $alias")
                 addedAliases.add(alias)
@@ -976,9 +1206,10 @@ class QLToCypherVisitor(
 
         // Cypher requires at least one aggregate function in WITH to trigger grouping.
         // Without an aggregate, all rows pass through unmodified.
-        val hasAnyAggregate = withParts.any { part ->
-            listOf("count(", "sum(", "avg(", "min(", "max(").any { fn -> part.contains(fn) }
-        }
+        val hasAnyAggregate =
+            withParts.any { part ->
+                listOf("count(", "sum(", "avg(", "min(", "max(").any { fn -> part.contains(fn) }
+            }
         if (!hasAnyAggregate && usedScopes.contains(Scope.Event)) {
             if (hasExplicitGroupBy) {
                 // Explicit GROUP BY without SELECT aggregation: add implicit count(e:name) per ProcessM
@@ -1020,10 +1251,19 @@ class QLToCypherVisitor(
             if (logScopeAggTraceLimit != null) {
                 // Aggregation aliases are bound to log — they survive the MATCH.
                 // Collect traces with limit, then re-match events.
-                val aggPassthrough = addedAliases.filter { it !in setOf("log", "trace", TRACE_ORDER_ALIAS, EVENT_ORDER_ALIAS, IMPLICIT_GROUP_ALIAS) }.joinToString(", ")
+                val aggPassthrough =
+                    addedAliases
+                        .filter {
+                            it !in
+                                setOf("log", "trace", TRACE_ORDER_ALIAS, EVENT_ORDER_ALIAS, IMPLICIT_GROUP_ALIAS)
+                        }.joinToString(", ")
                 cypher.append(" MATCH (log)-[:CONTAINS]->(trace:Trace)")
-                cypher.append(" WITH log, ${if (aggPassthrough.isNotEmpty()) "$aggPassthrough, " else ""}trace ORDER BY trace.importOrder ASC")
-                cypher.append(" WITH log, ${if (aggPassthrough.isNotEmpty()) "$aggPassthrough, " else ""}collect(trace)[0..$logScopeAggTraceLimit] AS traces")
+                cypher.append(
+                    " WITH log, ${if (aggPassthrough.isNotEmpty()) "$aggPassthrough, " else ""}trace ORDER BY trace.importOrder ASC",
+                )
+                cypher.append(
+                    " WITH log, ${if (aggPassthrough.isNotEmpty()) "$aggPassthrough, " else ""}collect(trace)[0..$logScopeAggTraceLimit] AS traces",
+                )
                 cypher.append(" UNWIND traces AS trace")
                 cypher.append(" MATCH (trace)-[:HAS_EVENT]->(event:Event)")
             } else {
@@ -1038,9 +1278,9 @@ class QLToCypherVisitor(
             for (part in withParts) {
                 val trimmed = part.trim()
                 if (!trimmed.contains(" AS ")) {
-                    stage2Parts.add(trimmed)  // plain variable like "log", "trace"
+                    stage2Parts.add(trimmed) // plain variable like "log", "trace"
                 } else {
-                    stage2Parts.add(trimmed.substringAfterLast(" AS ").trim())  // pass alias through
+                    stage2Parts.add(trimmed.substringAfterLast(" AS ").trim()) // pass alias through
                 }
             }
             for (ci in complexAggInfos) {
@@ -1058,29 +1298,36 @@ class QLToCypherVisitor(
     private fun buildAggregationReturnClause(
         query: Query,
         hasExplicitGroupBy: Boolean,
-        isAllLogScopeAggregation: Boolean = false
+        isAllLogScopeAggregation: Boolean = false,
     ): String {
         val returnParts = mutableListOf<String>()
         val addedAliases = mutableSetOf<String>()
 
-        val allGroupByAttrsR = (query.groupByStandardAttributes.values.flatten() +
-                query.groupByOtherAttributes.values.flatten())
-        val isAllGroupByAtLogScope = hasExplicitGroupBy && allGroupByAttrsR.isNotEmpty() &&
+        val allGroupByAttrsR = (
+            query.groupByStandardAttributes.values.flatten() +
+                query.groupByOtherAttributes.values.flatten()
+        )
+        val isAllGroupByAtLogScope =
+            hasExplicitGroupBy && allGroupByAttrsR.isNotEmpty() &&
                 allGroupByAttrsR.all { it.effectiveScope == com.processm.processminterpreter.pql.model.Scope.Log }
 
         if (hasExplicitGroupBy && !isAllGroupByAtLogScope) {
             // Add GROUP BY attribute aliases to RETURN only if they're also in SELECT.
             // GROUP BY attrs are needed in WITH for grouping but shouldn't leak to output
             // when not explicitly selected (ProcessM behavior).
-            val allSelectAttrs = (query.selectStandardAttributes.values.flatten() +
-                    query.selectOtherAttributes.values.flatten())
-            fun isInSelect(attr: com.processm.processminterpreter.pql.model.Attribute): Boolean {
-                return allSelectAttrs.any { sel ->
+            val allSelectAttrs = (
+                query.selectStandardAttributes.values.flatten() +
+                    query.selectOtherAttributes.values.flatten()
+            )
+
+            fun isInSelect(attr: com.processm.processminterpreter.pql.model.Attribute): Boolean =
+                allSelectAttrs.any { sel ->
                     sel.scope == attr.scope &&
-                    (sel.isStandard && attr.isStandard && sel.standardName == attr.standardName ||
-                     !sel.isStandard && !attr.isStandard && sel.name == attr.name)
+                        (
+                            (sel.isStandard && attr.isStandard && sel.standardName == attr.standardName) ||
+                                (!sel.isStandard && !attr.isStandard && sel.name == attr.name)
+                        )
                 } || query.selectAll[attr.effectiveScope ?: attr.scope] == true
-            }
 
             fun addGroupByAlias(attr: com.processm.processminterpreter.pql.model.Attribute) {
                 if (!isInSelect(attr)) return
@@ -1116,7 +1363,16 @@ class QLToCypherVisitor(
             val prefix = scopePrefix(attr.scope)
             // For classifiers, use groupByAttrAliasSuffix to match the alias used in GROUP BY (no duplicates)
             val effectiveScope = mapScope(attr.effectiveScope ?: attr.scope)
-            val alias = "${prefix}_${if (attr.isClassifier) groupByAttrAliasSuffix(attr, effectiveScope) else attr.name.replace(ALIAS_SANITIZER, "_")}"
+            val alias = "${prefix}_${
+                if (attr.isClassifier) {
+                    groupByAttrAliasSuffix(
+                        attr,
+                        effectiveScope,
+                    )
+                } else {
+                    attr.name.replace(ALIAS_SANITIZER, "_")
+                }
+            }"
             if (alias !in addedAliases) {
                 returnParts.add(alias)
                 addedAliases.add(alias)
@@ -1128,9 +1384,10 @@ class QLToCypherVisitor(
 
         // When GROUP BY has no SELECT aggregation, return implicit count(e:name) (ProcessM behavior)
         // Use containsAggregation to cover complex expressions like max(e:ts)-min(e:ts)
-        val hasSelectAggregation = query.selectExpressions.values.flatten().any { expr ->
-            containsAggregation(expr)
-        }
+        val hasSelectAggregation =
+            query.selectExpressions.values.flatten().any { expr ->
+                containsAggregation(expr)
+            }
         if (hasExplicitGroupBy && usedScopes.contains(Scope.Event) && !hasSelectAggregation) {
             val implicitCountAlias = "count_e_concept_name_"
             if (implicitCountAlias !in addedAliases) {
@@ -1150,12 +1407,14 @@ class QLToCypherVisitor(
             // Include trace ID only when trace is in the WITH clause (event scope or explicit GROUP BY).
             // Without this guard, referencing trace after a WITH that omits it causes a Cypher error.
             if ((usedScopes.contains(Scope.Trace) || usedScopes.contains(Scope.Event)) &&
-                    (usedScopes.contains(Scope.Event) || hasExplicitGroupBy) &&
-                    !returnParts.any { it.contains("t_traceId") }) {
+                (usedScopes.contains(Scope.Event) || hasExplicitGroupBy) &&
+                !returnParts.any { it.contains("t_traceId") }
+            ) {
                 returnParts.add("trace.traceId AS t_traceId")
             }
             if ((usedScopes.contains(Scope.Log) || logId != null) &&
-                    !returnParts.any { it.contains("l_logId") }) {
+                !returnParts.any { it.contains("l_logId") }
+            ) {
                 returnParts.add("log.logId AS l_logId")
             }
 
@@ -1163,17 +1422,20 @@ class QLToCypherVisitor(
             // For explicit GROUP BY with explicit SELECT (not SELECT *), skip properties(log/trace) —
             // selected attributes are already aliased individually, and full properties would leak
             // non-selected attributes (description, source, etc.)
-            val hasExplicitLogSelect = hasExplicitGroupBy &&
+            val hasExplicitLogSelect =
+                hasExplicitGroupBy &&
                     query.selectAll[com.processm.processminterpreter.pql.model.Scope.Log] != true
-            val hasExplicitTraceSelect = hasExplicitGroupBy &&
+            val hasExplicitTraceSelect =
+                hasExplicitGroupBy &&
                     query.selectAll[com.processm.processminterpreter.pql.model.Scope.Trace] != true
 
             if (!hasExplicitLogSelect && (usedScopes.contains(Scope.Log) || logId != null)) {
                 returnParts.add("properties(log) AS log")
             }
             if (!hasExplicitTraceSelect &&
-                    (usedScopes.contains(Scope.Trace) || usedScopes.contains(Scope.Event)) &&
-                    (usedScopes.contains(Scope.Event) || hasExplicitGroupBy)) {
+                (usedScopes.contains(Scope.Trace) || usedScopes.contains(Scope.Event)) &&
+                (usedScopes.contains(Scope.Event) || hasExplicitGroupBy)
+            ) {
                 returnParts.add("properties(trace) AS trace")
             }
         }
@@ -1191,12 +1453,12 @@ class QLToCypherVisitor(
      * Uses COLLECT to limit at each level, then UNWIND to continue processing.
      * WHERE conditions are applied at the appropriate scope level.
      *
-     * List slicing: collect(x)[offset..offset+limit] or collect(x)[offset..] if no limit
+     * List slicing: collect(x) sliced from offset to offset+limit, or from offset to end if no limit
      */
     private fun buildHierarchicalQueryWithLimits(
         query: Query,
         hierarchicalLimits: Map<String, Int?>,
-        hierarchicalOffsets: Map<String, Int?> = emptyMap()
+        hierarchicalOffsets: Map<String, Int?> = emptyMap(),
     ): CypherQuery {
         val cypher = StringBuilder()
 
@@ -1209,8 +1471,9 @@ class QLToCypherVisitor(
         // Ensure log/trace nodes are matched when hierarchical limits reference them,
         // even if no log/trace attributes are explicitly selected
         val hasTraceLimit = hierarchicalLimits.containsKey("trace")
-        val needsLog = usedScopes.contains(Scope.Log) || logId != null ||
-            hierarchicalLimits.containsKey("log") || hasTraceLimit
+        val needsLog =
+            usedScopes.contains(Scope.Log) || logId != null ||
+                hierarchicalLimits.containsKey("log") || hasTraceLimit
         val needsTrace = usedScopes.contains(Scope.Trace) || hasTraceLimit
         val needsEvent = usedScopes.contains(Scope.Event)
 
@@ -1281,14 +1544,16 @@ class QLToCypherVisitor(
         // Compute trace-level ORDER BY for intermediate trace sorting.
         // When query has explicit trace-level ORDER BY (e.g., "t:total desc"),
         // use that instead of default trace.importOrder for trace limit slicing.
-        val traceOrderByExprs = buildOrderByClauseFromQuery(query)?.filter {
-            it.expression.startsWith("trace.")
-        }
-        val traceOrderStr = if (!traceOrderByExprs.isNullOrEmpty()) {
-            traceOrderByExprs.joinToString(", ") { "${it.expression} ${it.direction}" } + ", trace.importOrder ASC"
-        } else {
-            "trace.importOrder ASC"
-        }
+        val traceOrderByExprs =
+            buildOrderByClauseFromQuery(query)?.filter {
+                it.expression.startsWith("trace.")
+            }
+        val traceOrderStr =
+            if (!traceOrderByExprs.isNullOrEmpty()) {
+                traceOrderByExprs.joinToString(", ") { "${it.expression} ${it.direction}" } + ", trace.importOrder ASC"
+            } else {
+                "trace.importOrder ASC"
+            }
 
         // Step 2: MATCH traces
         // ProcessM applies trace limit AFTER event-level WHERE filtering.
@@ -1296,7 +1561,10 @@ class QLToCypherVisitor(
         // so that traces without matching events are excluded first, then we limit.
         // Defer trace limit when ORDER BY has aggregation expressions —
         // limit must be applied AFTER aggregation + ORDER BY via Cypher LIMIT, not before via COLLECT slice.
-        val hasAggOrderBy = query.orderByExpressions.values.flatten().any { containsAggregation(it.base) }
+        val hasAggOrderBy =
+            query.orderByExpressions.values
+                .flatten()
+                .any { containsAggregation(it.base) }
         val deferTraceLimitToEnd = hasAggOrderBy
         val deferTraceLimit = (eventConditions.isNotEmpty() && needsEvent) || deferTraceLimitToEnd
         if (needsTrace || needsEvent) {
@@ -1358,11 +1626,12 @@ class QLToCypherVisitor(
                     // Always append importOrder as tiebreaker for deterministic same-timestamp ordering
                     val eventOrderBy = buildOrderByClauseFromQuery(query)
                     val eventOrderExprs = eventOrderBy?.filter { it.expression.startsWith("event.") }
-                    val eventOrderStr = if (!eventOrderExprs.isNullOrEmpty()) {
-                        eventOrderExprs.joinToString(", ") { "${it.expression} ${it.direction}" } + ", event.importOrder ASC"
-                    } else {
-                        "event.timestamp ASC, event.importOrder ASC"
-                    }
+                    val eventOrderStr =
+                        if (!eventOrderExprs.isNullOrEmpty()) {
+                            eventOrderExprs.joinToString(", ") { "${it.expression} ${it.direction}" } + ", event.importOrder ASC"
+                        } else {
+                            "event.timestamp ASC, event.importOrder ASC"
+                        }
                     cypher.append(" WITH log, trace, event ORDER BY id(log), $traceOrderStr, $eventOrderStr")
                     val endIndex = if (eventLimit != null) eventOffset + eventLimit else null
                     val sliceExpr = if (endIndex != null) "[$eventOffset..$endIndex]" else "[$eventOffset..]"
@@ -1373,25 +1642,32 @@ class QLToCypherVisitor(
         }
 
         // Detect aggregation/GROUP BY — these need WITH-based grouping (per-trace)
-        val hasAggregationH = query.selectExpressions.values.flatten().any { expr ->
-            containsAggregation(expr)
-        }
-        val hasAggregationInOrderByH = query.orderByExpressions.values.flatten().any { ordered ->
-            containsAggregation(ordered.base)
-        }
-        val hasExplicitGroupByH = query.groupByStandardAttributes.values.any { it.isNotEmpty() } ||
+        val hasAggregationH =
+            query.selectExpressions.values.flatten().any { expr ->
+                containsAggregation(expr)
+            }
+        val hasAggregationInOrderByH =
+            query.orderByExpressions.values.flatten().any { ordered ->
+                containsAggregation(ordered.base)
+            }
+        val hasExplicitGroupByH =
+            query.groupByStandardAttributes.values.any { it.isNotEmpty() } ||
                 query.groupByOtherAttributes.values.any { it.isNotEmpty() }
         val hasImplicitGroupByH = query.isImplicitGroupBy.values.any { it }
-        val needsAggregationGroupingH = hasExplicitGroupByH ||
-                ((hasAggregationH || hasAggregationInOrderByH || hasImplicitGroupByH) &&
-                        (usedScopes.contains(Scope.Event) || needsEvent))
+        val needsAggregationGroupingH =
+            hasExplicitGroupByH ||
+                (
+                    (hasAggregationH || hasAggregationInOrderByH || hasImplicitGroupByH) &&
+                        (usedScopes.contains(Scope.Event) || needsEvent)
+                )
 
         // Null event placeholder counting for ProcessM compatibility:
         // When no event attributes are selected but traces are matched,
         // ProcessM returns null event placeholders (one per event in the trace,
         // capped by event limit if specified). This infrastructure pipes through
         // Trace.nullEventCount → XESJsonConverter for JSON output.
-        val hasAnyAggregationH = hasAggregationH || hasAggregationInOrderByH ||
+        val hasAnyAggregationH =
+            hasAggregationH || hasAggregationInOrderByH ||
                 hasExplicitGroupByH || hasImplicitGroupByH
         val addNullEventCount = !needsEvent && needsTrace && !hasAnyAggregationH
 
@@ -1400,12 +1676,18 @@ class QLToCypherVisitor(
             cypher.append(" OPTIONAL MATCH (trace)-[:HAS_EVENT]->(_nev:Event)")
             if (eventLimit != null) {
                 if (eventOffset > 0) {
-                    cypher.append(" WITH log, trace, CASE WHEN count(_nev) - $eventOffset > $eventLimit THEN $eventLimit WHEN count(_nev) > $eventOffset THEN count(_nev) - $eventOffset ELSE 0 END AS _null_event_count_")
+                    cypher.append(
+                        " WITH log, trace, CASE WHEN count(_nev) - $eventOffset > $eventLimit THEN $eventLimit WHEN count(_nev) > $eventOffset THEN count(_nev) - $eventOffset ELSE 0 END AS _null_event_count_",
+                    )
                 } else {
-                    cypher.append(" WITH log, trace, CASE WHEN count(_nev) > $eventLimit THEN $eventLimit ELSE count(_nev) END AS _null_event_count_")
+                    cypher.append(
+                        " WITH log, trace, CASE WHEN count(_nev) > $eventLimit THEN $eventLimit ELSE count(_nev) END AS _null_event_count_",
+                    )
                 }
             } else if (eventOffset > 0) {
-                cypher.append(" WITH log, trace, CASE WHEN count(_nev) > $eventOffset THEN count(_nev) - $eventOffset ELSE 0 END AS _null_event_count_")
+                cypher.append(
+                    " WITH log, trace, CASE WHEN count(_nev) > $eventOffset THEN count(_nev) - $eventOffset ELSE 0 END AS _null_event_count_",
+                )
             } else {
                 cypher.append(" WITH log, trace, count(_nev) AS _null_event_count_")
             }
@@ -1458,26 +1740,28 @@ class QLToCypherVisitor(
             if (needsAggregationGroupingH) {
                 // After WITH clause, original node vars (event, trace) may not be in scope.
                 // Use aliases from WITH clause for all ORDER BY expressions.
-                val orderByParts = query.orderByExpressions.values.flatten().map { ordered ->
-                    val expr = ordered.base
-                    val dir = ordered.direction.toString().uppercase()
-                    if (containsAggregation(expr)) {
-                        "${expressionToAlias(expr)} $dir"
-                    } else if (expr is com.processm.processminterpreter.pql.model.Attribute) {
-                        // Compute alias matching buildAggregationWithClause logic
-                        val prefix = when (expr.scope) {
-                            com.processm.processminterpreter.pql.model.Scope.Event -> "e"
-                            com.processm.processminterpreter.pql.model.Scope.Trace -> "t"
-                            com.processm.processminterpreter.pql.model.Scope.Log -> "l"
+                val orderByParts =
+                    query.orderByExpressions.values.flatten().map { ordered ->
+                        val expr = ordered.base
+                        val dir = ordered.direction.toString().uppercase()
+                        if (containsAggregation(expr)) {
+                            "${expressionToAlias(expr)} $dir"
+                        } else if (expr is com.processm.processminterpreter.pql.model.Attribute) {
+                            // Compute alias matching buildAggregationWithClause logic
+                            val prefix =
+                                when (expr.scope) {
+                                    com.processm.processminterpreter.pql.model.Scope.Event -> "e"
+                                    com.processm.processminterpreter.pql.model.Scope.Trace -> "t"
+                                    com.processm.processminterpreter.pql.model.Scope.Log -> "l"
+                                }
+                            val effectiveScope = mapScope(expr.effectiveScope ?: expr.scope)
+                            val alias = "${prefix}_${groupByAttrAliasSuffix(expr, effectiveScope)}"
+                            "$alias $dir"
+                        } else {
+                            val cypherExpr = translateExpressionToCypher(expr)
+                            "$cypherExpr $dir"
                         }
-                        val effectiveScope = mapScope(expr.effectiveScope ?: expr.scope)
-                        val alias = "${prefix}_${groupByAttrAliasSuffix(expr, effectiveScope)}"
-                        "$alias $dir"
-                    } else {
-                        val cypherExpr = translateExpressionToCypher(expr)
-                        "$cypherExpr $dir"
                     }
-                }
                 cypher.append(orderByParts.joinToString(", "))
             } else {
                 cypher.append(orderByClause.joinToString(", ") { "${it.expression} ${it.direction}" })
@@ -1516,7 +1800,8 @@ class QLToCypherVisitor(
 
         // Detect whether trace-scope attributes were explicitly selected (t:*, t:name, etc.)
         val traceScope = com.processm.processminterpreter.pql.model.Scope.Trace
-        val hasExplicitTraceSelectH = query.selectAll[traceScope] == true ||
+        val hasExplicitTraceSelectH =
+            query.selectAll[traceScope] == true ||
                 query.isImplicitSelectAll[traceScope] == true ||
                 query.selectStandardAttributes[traceScope]?.isNotEmpty() == true ||
                 query.selectOtherAttributes[traceScope]?.isNotEmpty() == true ||
@@ -1525,7 +1810,15 @@ class QLToCypherVisitor(
         // Detect if there's an explicit ORDER BY on trace-scope attributes
         val hasTraceOrderByH = query.orderByExpressions[com.processm.processminterpreter.pql.model.Scope.Trace]?.isNotEmpty() == true
 
-        return CypherQuery(generatedCypher, parameters.toMap(), hierarchicalLimits, columnAliases.toMap(), needsAggregationGroupingH, hasExplicitTraceSelectH, hasTraceOrderBy = hasTraceOrderByH)
+        return CypherQuery(
+            generatedCypher,
+            parameters.toMap(),
+            hierarchicalLimits,
+            columnAliases.toMap(),
+            needsAggregationGroupingH,
+            hasExplicitTraceSelectH,
+            hasTraceOrderBy = hasTraceOrderByH,
+        )
     }
 
     /**
@@ -1561,15 +1854,17 @@ class QLToCypherVisitor(
 
         // For DELETE with LIMIT/ORDER, we need to collect IDs first
         val orderByClause = buildOrderByClauseFromQuery(query)
-        
+
         // Robust lookup: Primary Scope -> EVENT Scope -> Any Scope
-        val limit = query.limit[deleteScope] 
-            ?: query.limit[com.processm.processminterpreter.pql.model.Scope.Event]
-            ?: query.limit.values.firstOrNull()
-            
-        val offset = query.offset[deleteScope]
-            ?: query.offset[com.processm.processminterpreter.pql.model.Scope.Event]
-            ?: query.offset.values.firstOrNull()
+        val limit =
+            query.limit[deleteScope]
+                ?: query.limit[com.processm.processminterpreter.pql.model.Scope.Event]
+                ?: query.limit.values.firstOrNull()
+
+        val offset =
+            query.offset[deleteScope]
+                ?: query.offset[com.processm.processminterpreter.pql.model.Scope.Event]
+                ?: query.offset.values.firstOrNull()
 
         if (limit != null || offset != null || orderByClause != null) {
             val nodeLabel = scopeToNodeLabel(mappedScope)
@@ -1662,7 +1957,7 @@ class QLToCypherVisitor(
         query: Query,
         logConditions: MutableList<String>,
         traceConditions: MutableList<String>,
-        eventConditions: MutableList<String>
+        eventConditions: MutableList<String>,
     ) {
         if (query.whereExpression == com.processm.processminterpreter.pql.model.Expression.empty) {
             return
@@ -1682,7 +1977,7 @@ class QLToCypherVisitor(
         expr: com.processm.processminterpreter.pql.model.IExpression,
         logConditions: MutableList<String>,
         traceConditions: MutableList<String>,
-        eventConditions: MutableList<String>
+        eventConditions: MutableList<String>,
     ) {
         when (expr) {
             is BinaryOperator -> {
@@ -1693,21 +1988,24 @@ class QLToCypherVisitor(
                     processWhereExpression(expr.right, logConditions, traceConditions, eventConditions)
                 } else {
                     val scope = determineExpressionScope(expr)
-                    val condition = if (containsHoistedAttributes(expr)) {
+                    val condition =
+                        if (containsHoistedAttributes(expr)) {
+                            translateHoistedConditionAsExists(expr, scope)
+                        } else {
+                            translateExpressionToCypher(expr)
+                        }
+                    addConditionToScope(scope, condition, logConditions, traceConditions, eventConditions)
+                }
+            }
+
+            else -> {
+                val scope = determineExpressionScope(expr)
+                val condition =
+                    if (containsHoistedAttributes(expr)) {
                         translateHoistedConditionAsExists(expr, scope)
                     } else {
                         translateExpressionToCypher(expr)
                     }
-                    addConditionToScope(scope, condition, logConditions, traceConditions, eventConditions)
-                }
-            }
-            else -> {
-                val scope = determineExpressionScope(expr)
-                val condition = if (containsHoistedAttributes(expr)) {
-                    translateHoistedConditionAsExists(expr, scope)
-                } else {
-                    translateExpressionToCypher(expr)
-                }
                 addConditionToScope(scope, condition, logConditions, traceConditions, eventConditions)
             }
         }
@@ -1719,7 +2017,9 @@ class QLToCypherVisitor(
      * Returns the lowest (most specific) scope used in the expression.
      * LOG < TRACE < EVENT (EVENT is lowest/most specific)
      */
-    private fun determineExpressionScope(expr: com.processm.processminterpreter.pql.model.IExpression): com.processm.processminterpreter.pql.model.Scope {
+    private fun determineExpressionScope(
+        expr: com.processm.processminterpreter.pql.model.IExpression,
+    ): com.processm.processminterpreter.pql.model.Scope {
         val scopes = mutableSetOf<com.processm.processminterpreter.pql.model.Scope>()
         collectExpressionScopes(expr, scopes)
 
@@ -1733,7 +2033,7 @@ class QLToCypherVisitor(
      */
     private fun collectExpressionScopes(
         expr: com.processm.processminterpreter.pql.model.IExpression,
-        scopes: MutableSet<com.processm.processminterpreter.pql.model.Scope>
+        scopes: MutableSet<com.processm.processminterpreter.pql.model.Scope>,
     ) {
         when (expr) {
             is com.processm.processminterpreter.pql.model.Attribute -> {
@@ -1741,19 +2041,24 @@ class QLToCypherVisitor(
                 val scope = expr.effectiveScope ?: com.processm.processminterpreter.pql.model.Scope.Event
                 scopes.add(scope)
             }
+
             is com.processm.processminterpreter.pql.model.Function -> {
                 expr.children.forEach { collectExpressionScopes(it, scopes) }
             }
+
             is BinaryOperator -> {
                 collectExpressionScopes(expr.left, scopes)
                 collectExpressionScopes(expr.right, scopes)
             }
+
             is UnaryOperator -> {
                 collectExpressionScopes(expr.operand, scopes)
             }
+
             is InListExpression -> {
                 // InListExpression values are literals, no scope
             }
+
             // Literals have no scope
             else -> {}
         }
@@ -1767,7 +2072,7 @@ class QLToCypherVisitor(
         condition: String,
         logConditions: MutableList<String>,
         traceConditions: MutableList<String>,
-        eventConditions: MutableList<String>
+        eventConditions: MutableList<String>,
     ) {
         when (scope) {
             com.processm.processminterpreter.pql.model.Scope.Log -> logConditions.add(condition)
@@ -1799,7 +2104,7 @@ class QLToCypherVisitor(
      */
     private fun translateHoistedConditionAsExists(
         expr: com.processm.processminterpreter.pql.model.IExpression,
-        effectiveScope: com.processm.processminterpreter.pql.model.Scope
+        effectiveScope: com.processm.processminterpreter.pql.model.Scope,
     ): String {
         val subqueryNodeVar = "_hev"
         hoistedEventNodeVar = subqueryNodeVar
@@ -1807,13 +2112,20 @@ class QLToCypherVisitor(
             val innerCondition = translateExpressionToCypher(expr)
 
             // Build the EXISTS subquery MATCH path based on effective→base scope relationship
-            val matchPath = when (effectiveScope) {
-                com.processm.processminterpreter.pql.model.Scope.Trace ->
-                    "(trace)-[:HAS_EVENT]->($subqueryNodeVar:Event)"
-                com.processm.processminterpreter.pql.model.Scope.Log ->
-                    "(log)-[:CONTAINS]->(_ht:Trace)-[:HAS_EVENT]->($subqueryNodeVar:Event)"
-                else -> throw IllegalStateException("Unsupported hoisting effectiveScope: $effectiveScope")
-            }
+            val matchPath =
+                when (effectiveScope) {
+                    com.processm.processminterpreter.pql.model.Scope.Trace -> {
+                        "(trace)-[:HAS_EVENT]->($subqueryNodeVar:Event)"
+                    }
+
+                    com.processm.processminterpreter.pql.model.Scope.Log -> {
+                        "(log)-[:CONTAINS]->(_ht:Trace)-[:HAS_EVENT]->($subqueryNodeVar:Event)"
+                    }
+
+                    else -> {
+                        throw IllegalStateException("Unsupported hoisting effectiveScope: $effectiveScope")
+                    }
+                }
 
             return "EXISTS { MATCH $matchPath WHERE $innerCondition }"
         } finally {
@@ -1832,7 +2144,10 @@ class QLToCypherVisitor(
      * Build RETURN clause from Query object.
      * Iterates through all scopes that have SELECT attributes and includes them in the RETURN.
      */
-    private fun buildReturnClauseFromQuery(query: Query, eventLimit: Int? = null): String {
+    private fun buildReturnClauseFromQuery(
+        query: Query,
+        eventLimit: Int? = null,
+    ): String {
         val allParts = mutableListOf<String>()
         val usedAliases = mutableSetOf<String>()
 
@@ -1909,7 +2224,7 @@ class QLToCypherVisitor(
             if (modelScope == com.processm.processminterpreter.pql.model.Scope.Trace) {
                 val hasProjectedAttributes =
                     (query.selectStandardAttributes[modelScope]?.isNotEmpty() == true) ||
-                    (query.selectOtherAttributes[modelScope]?.isNotEmpty() == true)
+                        (query.selectOtherAttributes[modelScope]?.isNotEmpty() == true)
 
                 if (hasProjectedAttributes && query.selectAll[modelScope] != true && query.isImplicitSelectAll[modelScope] != true) {
                     allParts.add("$nodeLabel.traceId AS t_traceId")
@@ -1942,10 +2257,12 @@ class QLToCypherVisitor(
         // can properly group events into separate traces and logs.
         // Skip this for aggregation queries - they don't need grouping IDs and
         // the MATCH clause may not include trace/log nodes.
-        val hasAggregationInReturn = query.selectExpressions.values.flatten().any { expr ->
-            expr is com.processm.processminterpreter.pql.model.Function &&
-                com.processm.processminterpreter.pql.model.Function.isAggregation(expr.name)
-        }
+        val hasAggregationInReturn =
+            query.selectExpressions.values.flatten().any { expr ->
+                expr is com.processm.processminterpreter.pql.model.Function &&
+                    com.processm.processminterpreter.pql.model.Function
+                        .isAggregation(expr.name)
+            }
         val hasEventScope = scopesWithSelects.contains(com.processm.processminterpreter.pql.model.Scope.Event)
         val hasTraceScope = scopesWithSelects.contains(com.processm.processminterpreter.pql.model.Scope.Trace)
         val hasLogScope = scopesWithSelects.contains(com.processm.processminterpreter.pql.model.Scope.Log)
@@ -1990,11 +2307,12 @@ class QLToCypherVisitor(
         val propertyName = StandardAttributeMapper.translateToNeo4jProperty(attr.name, targetScope)
 
         // Neo4j requires backticks for property names with special characters (like colons)
-        val escapedProperty = if (propertyName.contains(":")) {
-            "`$propertyName`"
-        } else {
-            propertyName
-        }
+        val escapedProperty =
+            if (propertyName.contains(":")) {
+                "`$propertyName`"
+            } else {
+                propertyName
+            }
 
         return "$nodeLabel.$escapedProperty"
     }
@@ -2024,14 +2342,16 @@ class QLToCypherVisitor(
             // Resolve each key to a Neo4j property
             // Keys are XES attribute names like "concept:name", "org:resource"
             // We need to find the corresponding Neo4j property name (e.g., "activity", "resource")
-            val cypherParts = keys.map { key ->
-                // Try shorthand lookup first (e.g., "name" → "activity"), then XES name → reverse lookup
-                val shorthand = key.substringAfterLast(":")
-                val propertyName = StandardAttributeMapper.getNeo4jPropertyName(shorthand, targetScope)
-                    ?: StandardAttributeMapper.translateToNeo4jProperty(key, targetScope)
-                val escaped = if (propertyName.contains(":")) "`$propertyName`" else propertyName
-                "$nodeLabel.$escaped"
-            }
+            val cypherParts =
+                keys.map { key ->
+                    // Try shorthand lookup first (e.g., "name" → "activity"), then XES name → reverse lookup
+                    val shorthand = key.substringAfterLast(":")
+                    val propertyName =
+                        StandardAttributeMapper.getNeo4jPropertyName(shorthand, targetScope)
+                            ?: StandardAttributeMapper.translateToNeo4jProperty(key, targetScope)
+                    val escaped = if (propertyName.contains(":")) "`$propertyName`" else propertyName
+                    "$nodeLabel.$escaped"
+                }
             return if (cypherParts.size == 1) {
                 cypherParts[0]
             } else {
@@ -2057,24 +2377,28 @@ class QLToCypherVisitor(
      * For regular attributes, use the attribute name sanitized to a valid Cypher identifier.
      * Replaces all non-identifier characters (including spaces, colons) with underscores.
      */
-    private fun groupByAttrAliasSuffix(attr: com.processm.processminterpreter.pql.model.Attribute, effectiveScope: Scope): String {
-        val rawName = if (attr.isClassifier) {
-            val classifierName = attr.name.removePrefix("c:").removePrefix("classifier:")
-            // Try classifiers map first, then standard attribute lookup
-            val keys = classifiers[classifierName]
-            if (keys != null) {
-                keys.joinToString("_") { key ->
-                    val shorthand = key.substringAfterLast(":")
-                    StandardAttributeMapper.getNeo4jPropertyName(shorthand, effectiveScope)
-                        ?: StandardAttributeMapper.translateToNeo4jProperty(key, effectiveScope)
+    private fun groupByAttrAliasSuffix(
+        attr: com.processm.processminterpreter.pql.model.Attribute,
+        effectiveScope: Scope,
+    ): String {
+        val rawName =
+            if (attr.isClassifier) {
+                val classifierName = attr.name.removePrefix("c:").removePrefix("classifier:")
+                // Try classifiers map first, then standard attribute lookup
+                val keys = classifiers[classifierName]
+                if (keys != null) {
+                    keys.joinToString("_") { key ->
+                        val shorthand = key.substringAfterLast(":")
+                        StandardAttributeMapper.getNeo4jPropertyName(shorthand, effectiveScope)
+                            ?: StandardAttributeMapper.translateToNeo4jProperty(key, effectiveScope)
+                    }
+                } else {
+                    StandardAttributeMapper.getNeo4jPropertyName(classifierName.lowercase(), effectiveScope)
+                        ?: attr.name
                 }
             } else {
-                StandardAttributeMapper.getNeo4jPropertyName(classifierName.lowercase(), effectiveScope)
-                    ?: attr.name
+                attr.name
             }
-        } else {
-            attr.name
-        }
         // Replace ALL non-identifier characters (spaces, colons, brackets, etc.) with underscores
         return rawName.replace(ALIAS_SANITIZER, "_")
     }
@@ -2085,27 +2409,33 @@ class QLToCypherVisitor(
         // but the Query model currently stores them by scope.
         // We iterate in scope order (LOG -> TRACE -> EVENT).
         val allExpressions = mutableListOf<com.processm.processminterpreter.pql.model.OrderedExpression>()
-        
+
         com.processm.processminterpreter.pql.model.Scope.values().forEach { scope ->
             query.orderByExpressions[scope]?.let { allExpressions.addAll(it) }
         }
 
         if (allExpressions.isEmpty()) return null
 
-        return allExpressions.map { orderedExpr ->
+        return allExpressions.flatMap { orderedExpr ->
             val cypherExpr = translateExpressionToCypher(orderedExpr.base)
             val direction =
                 when (orderedExpr.direction) {
                     com.processm.processminterpreter.pql.model.OrderDirection.Ascending -> "ASC"
                     com.processm.processminterpreter.pql.model.OrderDirection.Descending -> "DESC"
                 }
-            OrderByItem(cypherExpr, direction)
+            // PQL spec: "null values are considered greater than all other values"
+            // For DESC, NULLs must come first (they're greatest). Neo4j puts NULLs last
+            // by default regardless of direction, so we prepend a null-first sort key.
+            if (direction == "DESC") {
+                listOf(
+                    OrderByItem("CASE WHEN $cypherExpr IS NULL THEN 0 ELSE 1 END", "ASC"),
+                    OrderByItem(cypherExpr, direction),
+                )
+            } else {
+                listOf(OrderByItem(cypherExpr, direction))
+            }
         }
     }
-
-    /**
-     * offset: OFFSET offset_number (',' offset_number)*
-     */
 
     // ========================================
     // CYPHER QUERY BUILDERS
@@ -2115,7 +2445,6 @@ class QLToCypherVisitor(
         val expression: String,
         val direction: String,
     )
-
 
     private fun buildMatchClause(scope: Scope): String {
         // If no scopes were tracked yet, fall back to currentScope
@@ -2136,6 +2465,7 @@ class QLToCypherVisitor(
                     "MATCH (log:Log)-[:CONTAINS]->(trace:Trace) WITH log, trace MATCH (trace)-[:HAS_EVENT]->(event:Event)"
                 }
             }
+
             // LOG and TRACE
             needsLog && needsTrace -> {
                 if (logId != null) {
@@ -2144,6 +2474,7 @@ class QLToCypherVisitor(
                     "MATCH (log:Log)-[:CONTAINS]->(trace:Trace)"
                 }
             }
+
             // LOG and EVENT (unusual, but traverse through trace)
             needsLog && needsEvent -> {
                 if (logId != null) {
@@ -2152,6 +2483,7 @@ class QLToCypherVisitor(
                     "MATCH (log:Log)-[:CONTAINS]->(trace:Trace)-[:HAS_EVENT]->(event:Event)"
                 }
             }
+
             // TRACE and EVENT
             needsTrace && needsEvent -> {
                 if (logId != null) {
@@ -2160,6 +2492,7 @@ class QLToCypherVisitor(
                     "MATCH (trace:Trace)-[:HAS_EVENT]->(event:Event)"
                 }
             }
+
             // Only LOG
             needsLog -> {
                 if (logId != null) {
@@ -2168,6 +2501,7 @@ class QLToCypherVisitor(
                     "MATCH (log:Log)"
                 }
             }
+
             // Only TRACE
             needsTrace -> {
                 if (logId != null) {
@@ -2176,6 +2510,7 @@ class QLToCypherVisitor(
                     "MATCH (trace:Trace)"
                 }
             }
+
             // Only EVENT (most common case)
             needsEvent -> {
                 if (logId != null) {
@@ -2184,8 +2519,11 @@ class QLToCypherVisitor(
                     "MATCH (event:Event)"
                 }
             }
+
             // Fallback
-            else -> "MATCH (event:Event)"
+            else -> {
+                "MATCH (event:Event)"
+            }
         }
     }
 
@@ -2193,32 +2531,28 @@ class QLToCypherVisitor(
     // HELPERS
     // ========================================
 
-    private fun removeQuotes(str: String): String {
-        var result = str
-        // Remove scope prefix if present
-        if (result.contains(":")) {
-            result = result.substringAfter(":")
-        }
-        // Remove quotes
-        return result.trim().removeSurrounding("'").removeSurrounding("\"")
-    }
-
     /**
      * Populate usedScopes set from Query object.
      */
     private fun populateUsedScopes(query: Query) {
-        query.selectStandardAttributes.values.flatten().forEach { usedScopes.add(mapScope(it.effectiveScope ?: com.processm.processminterpreter.pql.model.Scope.Event)) }
-        query.selectOtherAttributes.values.flatten().forEach { usedScopes.add(mapScope(it.effectiveScope ?: com.processm.processminterpreter.pql.model.Scope.Event)) }
-        
-        query.selectExpressions.values.flatten().forEach { collectScopesFromExpression(it) }
-        
+        query.selectStandardAttributes.values.flatten().forEach {
+            usedScopes.add(mapScope(it.effectiveScope ?: com.processm.processminterpreter.pql.model.Scope.Event))
+        }
+        query.selectOtherAttributes.values.flatten().forEach {
+            usedScopes.add(mapScope(it.effectiveScope ?: com.processm.processminterpreter.pql.model.Scope.Event))
+        }
+
+        query.selectExpressions.values
+            .flatten()
+            .forEach { collectScopesFromExpression(it) }
+
         query.selectAll.forEach { (scope, isAll) ->
             if (isAll == true) usedScopes.add(mapScope(scope))
         }
         query.isImplicitSelectAll.forEach { (scope, isImplicit) ->
             if (isImplicit == true) usedScopes.add(mapScope(scope))
         }
-        
+
         // Also check WHERE clause for scopes
         if (query.whereExpression != com.processm.processminterpreter.pql.model.Expression.empty) {
             collectScopesFromExpression(query.whereExpression)
@@ -2255,12 +2589,20 @@ class QLToCypherVisitor(
                 // e.g. max(^e:timestamp) has effectiveScope=Trace but data is on event node.
                 if (expr.hoistingPrefix.isNotEmpty()) usedScopes.add(mapScope(expr.scope))
             }
-            is com.processm.processminterpreter.pql.model.Function -> expr.children.forEach { collectScopesFromExpression(it) }
+
+            is com.processm.processminterpreter.pql.model.Function -> {
+                expr.children.forEach { collectScopesFromExpression(it) }
+            }
+
             is BinaryOperator -> {
                 collectScopesFromExpression(expr.left)
                 collectScopesFromExpression(expr.right)
             }
-            is UnaryOperator -> collectScopesFromExpression(expr.operand)
+
+            is UnaryOperator -> {
+                collectScopesFromExpression(expr.operand)
+            }
+
             // Literals and others don't have scope dependencies
             else -> {}
         }
@@ -2269,16 +2611,22 @@ class QLToCypherVisitor(
     /**
      * Check if an expression tree contains any aggregation function.
      */
-    private fun containsAggregation(expr: com.processm.processminterpreter.pql.model.IExpression): Boolean {
-        return when (expr) {
-            is com.processm.processminterpreter.pql.model.Function ->
-                com.processm.processminterpreter.pql.model.Function.isAggregation(expr.name) ||
+    private fun containsAggregation(expr: com.processm.processminterpreter.pql.model.IExpression): Boolean =
+        when (expr) {
+            is com.processm.processminterpreter.pql.model.Function -> {
+                com.processm.processminterpreter.pql.model.Function
+                    .isAggregation(expr.name) ||
                     expr.children.any { containsAggregation(it) }
-            is com.processm.processminterpreter.pql.model.Expression ->
+            }
+
+            is com.processm.processminterpreter.pql.model.Expression -> {
                 expr.children.any { containsAggregation(it) }
-            else -> false
+            }
+
+            else -> {
+                false
+            }
         }
-    }
 
     /**
      * Find hoisted aggregation sub-expressions in SELECT expressions.
@@ -2297,11 +2645,14 @@ class QLToCypherVisitor(
         fun scan(expr: com.processm.processminterpreter.pql.model.IExpression) {
             when (expr) {
                 is com.processm.processminterpreter.pql.model.Function -> {
-                    if (com.processm.processminterpreter.pql.model.Function.isAggregation(expr.name)) {
-                        val hasHoistedArgs = expr.children.any { arg ->
-                            arg is com.processm.processminterpreter.pql.model.Attribute &&
+                    if (com.processm.processminterpreter.pql.model.Function
+                            .isAggregation(expr.name)
+                    ) {
+                        val hasHoistedArgs =
+                            expr.children.any { arg ->
+                                arg is com.processm.processminterpreter.pql.model.Attribute &&
                                     arg.hoistingPrefix.isNotEmpty()
-                        }
+                            }
                         if (hasHoistedArgs) {
                             val cypherExpr = translateExpressionToCypher(expr)
                             if (result.none { it.first == cypherExpr }) {
@@ -2311,15 +2662,21 @@ class QLToCypherVisitor(
                     }
                     // Don't recurse into aggregation args — we already checked them
                 }
+
                 is BinaryOperator -> {
                     scan(expr.left)
                     scan(expr.right)
                 }
-                is UnaryOperator -> scan(expr.operand)
+
+                is UnaryOperator -> {
+                    scan(expr.operand)
+                }
             }
         }
 
-        query.selectExpressions.values.flatten().forEach { scan(it) }
+        query.selectExpressions.values
+            .flatten()
+            .forEach { scan(it) }
         return result
     }
 
@@ -2337,19 +2694,22 @@ class QLToCypherVisitor(
         return if (sanitized.isNotEmpty() && sanitized[0].isDigit()) "_$sanitized" else sanitized
     }
 
-    private fun expressionToShortString(expr: com.processm.processminterpreter.pql.model.IExpression): String {
-        return when (expr) {
+    private fun expressionToShortString(expr: com.processm.processminterpreter.pql.model.IExpression): String =
+        when (expr) {
             is com.processm.processminterpreter.pql.model.Attribute -> {
                 val scopePrefix = "${expr.scope.shortName}:"
                 val attrName = if (expr.isStandard && expr.standardName.isNotEmpty()) expr.standardName else expr.name
                 "${expr.hoistingPrefix}$scopePrefix$attrName"
             }
+
             is com.processm.processminterpreter.pql.model.Function -> {
                 val scopePrefix = expr.scope?.let { "${it.shortName}:" } ?: ""
                 val argsStr = expr.children.joinToString(", ") { expressionToShortString(it) }
                 "$scopePrefix${expr.name}($argsStr)"
             }
-            else -> expr.toString()
+
+            else -> {
+                expr.toString()
+            }
         }
-    }
 }

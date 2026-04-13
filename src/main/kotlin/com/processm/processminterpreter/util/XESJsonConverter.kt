@@ -22,9 +22,10 @@ object XESJsonConverter {
     // - No fractional seconds when they're zero: 2020-03-13T16:45:50Z
     // - Milliseconds when present: 2020-03-13T16:45:50.123Z
     // - Microseconds when present: 2020-03-13T16:45:50.123456Z
-    private val xesDateFormatterNoMillis = DateTimeFormatter
-        .ofPattern("yyyy-MM-dd'T'HH:mm:ss'Z'")
-        .withZone(ZoneOffset.UTC)
+    private val xesDateFormatterNoMillis =
+        DateTimeFormatter
+            .ofPattern("yyyy-MM-dd'T'HH:mm:ss'Z'")
+            .withZone(ZoneOffset.UTC)
 
     /**
      * Convert a list of Log objects to XES JSON format
@@ -33,7 +34,11 @@ object XESJsonConverter {
      * @param isProjectedQuery Whether this is a projected query (SELECT specific fields vs SELECT *)
      * @return Map representing XES JSON structure
      */
-    fun convertToXESJson(logs: List<Log>, isProjectedQuery: Boolean = false, excludeEventAttrs: List<String> = emptyList(), projectedTraceAttrs: Set<String> = emptySet()): Map<String, Any> {
+    fun convertToXESJson(
+        logs: List<Log>,
+        isProjectedQuery: Boolean = false,
+        projectedTraceAttrs: Set<String> = emptySet(),
+    ): Map<String, Any> {
         logger.debug("Converting ${logs.size} logs to XES JSON format (projected: $isProjectedQuery)")
 
         if (logs.isEmpty()) {
@@ -42,13 +47,17 @@ object XESJsonConverter {
 
         // For now, convert first log (ProcessM typically works with single log)
         val log = logs.first()
-        return mapOf("log" to convertLog(log, isProjectedQuery, excludeEventAttrs, projectedTraceAttrs))
+        return mapOf("log" to convertLog(log, isProjectedQuery, projectedTraceAttrs))
     }
 
     /**
      * Convert a single Log to JSON structure
      */
-    private fun convertLog(log: Log, isProjectedQuery: Boolean = false, excludeEventAttrs: List<String> = emptyList(), projectedTraceAttrs: Set<String> = emptySet()): Map<String, Any> {
+    private fun convertLog(
+        log: Log,
+        isProjectedQuery: Boolean = false,
+        projectedTraceAttrs: Set<String> = emptySet(),
+    ): Map<String, Any> {
         val result = mutableMapOf<String, Any>()
 
         // XES metadata attributes (must be first)
@@ -57,13 +66,14 @@ object XESJsonConverter {
 
         // Extensions
         if (log.extensions.isNotEmpty()) {
-            result["extension"] = log.extensions.values.map { ext ->
-                mapOf(
-                    "@name" to ext.name,
-                    "@prefix" to ext.prefix,
-                    "@uri" to ext.uri
-                )
-            }
+            result["extension"] =
+                log.extensions.values.map { ext ->
+                    mapOf(
+                        "@name" to ext.name,
+                        "@prefix" to ext.prefix,
+                        "@uri" to ext.uri,
+                    )
+                }
         }
 
         // Global attributes (after extensions, before classifiers)
@@ -85,13 +95,14 @@ object XESJsonConverter {
             log.traceGlobals.forEach { addGlobal(it) }
             log.eventGlobals.forEach { addGlobal(it) }
 
-            val globalArray = globalsByScope.map { (scope, attrsByType) ->
-                val obj = mutableMapOf<String, Any>("@scope" to scope)
-                attrsByType.forEach { (type, attrs) ->
-                    obj[type] = toSingleOrArray(attrs)
+            val globalArray =
+                globalsByScope.map { (scope, attrsByType) ->
+                    val obj = mutableMapOf<String, Any>("@scope" to scope)
+                    attrsByType.forEach { (type, attrs) ->
+                        obj[type] = toSingleOrArray(attrs)
+                    }
+                    obj
                 }
-                obj
-            }
 
             if (globalArray.isNotEmpty()) {
                 result["global"] = globalArray
@@ -100,13 +111,14 @@ object XESJsonConverter {
 
         // Classifiers
         if (log.eventClassifiers.isNotEmpty()) {
-            result["classifier"] = log.eventClassifiers.map { classifier ->
-                mapOf(
-                    "@name" to classifier.name,
-                    "@scope" to "event",  // ProcessM adds @scope for event classifiers
-                    "@keys" to classifier.keys.joinToString(" ")
-                )
-            }
+            result["classifier"] =
+                log.eventClassifiers.map { classifier ->
+                    mapOf(
+                        "@name" to classifier.name,
+                        "@scope" to "event", // ProcessM adds @scope for event classifiers
+                        "@keys" to classifier.keys.joinToString(" "),
+                    )
+                }
         }
 
         // Log-level attributes (after classifiers, before trace)
@@ -130,7 +142,8 @@ object XESJsonConverter {
         logger.debug("convertLog - log.attributes keys: {}", log.attributes.keys)
 
         // ProcessM does not export 'description' attribute in JSON API
-        val excludeLogAttrs = setOf("description")
+        // Also exclude internal Neo4j properties that aren't XES log attributes
+        val excludeLogAttrs = setOf("description", "traceGlobals", "eventGlobals", "extensions", "classifiers")
 
         log.attributes.forEach { (key, value) ->
             if (key in excludeLogAttrs) return@forEach
@@ -162,7 +175,7 @@ object XESJsonConverter {
         // Traces (single object if 1 trace, array if >1)
         val traces = log.traces.toList()
         if (traces.isNotEmpty()) {
-            val traceMaps = traces.map { trace -> convertTrace(trace, excludeEventAttrs, isProjectedQuery, projectedTraceAttrs) }
+            val traceMaps = traces.map { trace -> convertTrace(trace, isProjectedQuery, projectedTraceAttrs) }
             result["trace"] = toSingleOrArray(traceMaps)
         }
 
@@ -172,7 +185,11 @@ object XESJsonConverter {
     /**
      * Convert a single Trace to JSON structure
      */
-    private fun convertTrace(trace: Trace, excludeEventAttrs: List<String> = emptyList(), isProjectedQuery: Boolean = false, projectedTraceAttrs: Set<String> = emptySet()): Map<String, Any?> {
+    private fun convertTrace(
+        trace: Trace,
+        isProjectedQuery: Boolean = false,
+        projectedTraceAttrs: Set<String> = emptySet(),
+    ): Map<String, Any?> {
         @Suppress("RemoveExplicitTypeArguments")
         val result = mutableMapOf<String, Any?>()
         val traceAttributes = mutableMapOf<String, MutableList<Map<String, String>>>()
@@ -231,20 +248,20 @@ object XESJsonConverter {
         // ADD EVENTS AFTER attributes to match ProcessM order
         val events = trace.events.toList()
         if (events.isNotEmpty()) {
-            val eventMaps = events.map { event ->
-                val converted = convertEvent(event, excludeEventAttrs)
-                // Empty event maps (no projected attributes) become null (ProcessM behavior)
-                if (converted.isEmpty()) null else converted
-            }
+            val eventMaps =
+                events.map { event ->
+                    val converted = convertEvent(event)
+                    // Empty event maps (no projected attributes) become null (ProcessM behavior)
+                    if (converted.isEmpty()) null else converted
+                }
             result["event"] = toSingleOrArray(eventMaps)
-        } else if (trace.nullEventCount > 1) {
+        } else if (trace.nullEventCount >= 1) {
             // ProcessM outputs null event placeholders for events that exist
             // in the hierarchy but weren't projected by the query.
-            // Output as a list of nulls: [null, null, ...] matching ProcessM format.
-            // Skip count=1: ProcessM's toSingleOrArray unwraps [null] to null,
-            // which JSON serializes as absent/null (effectively 0 events).
+            // count=1: toSingleOrArray([null]) → null (event: null)
+            // count>1: [null, null, ...] array
             val nullList: List<Any?> = (1..trace.nullEventCount).map { null }
-            result["event"] = nullList
+            result["event"] = toSingleOrArray(nullList)
         } else if (trace.nullEventCount == 0 && !isProjectedQuery) {
             // Aggregation queries (implicit GROUP BY) collapse events — no event data in output.
             // ProcessM outputs "event": null for these traces (matches toSingleOrArray(null)).
@@ -257,17 +274,13 @@ object XESJsonConverter {
     /**
      * Convert a single Event to JSON structure
      */
-    private fun convertEvent(event: Event, excludeEventAttrs: List<String> = emptyList()): Map<String, Any> {
+    private fun convertEvent(event: Event): Map<String, Any> {
         val result = mutableMapOf<String, Any>()
         val eventAttributes = mutableMapOf<String, MutableList<Map<String, String>>>()
 
-        val excluded = excludeEventAttrs.toSet()
-
-        // Standard attributes (skip those in exclude list)
-        if ("concept:name" !in excluded) {
-            event.conceptName?.let { name ->
-                addAttribute(eventAttributes, "string", "concept:name", name)
-            }
+        // Standard attributes
+        event.conceptName?.let { name ->
+            addAttribute(eventAttributes, "string", "concept:name", name)
         }
 
         event.conceptInstance?.let { instance ->
@@ -302,25 +315,21 @@ object XESJsonConverter {
             addAttribute(eventAttributes, "date", "time:timestamp", formatTimestamp(timestamp))
         }
 
-        if ("cost:currency" !in excluded) {
-            event.costCurrency?.let { currency ->
-                addAttribute(eventAttributes, "string", "cost:currency", currency)
-            }
+        event.costCurrency?.let { currency ->
+            addAttribute(eventAttributes, "string", "cost:currency", currency)
         }
 
         event.costTotal?.let { cost ->
             addAttribute(eventAttributes, "float", "cost:total", cost.toString())
         }
 
-        // Custom attributes (skip those in exclude list)
+        // Custom attributes
         event.attributes.forEach { (key, value) ->
-            if (key !in excluded) {
-                if (value != null) {
-                    addAttributeByType(eventAttributes, key, value)
-                } else {
-                    // Expression evaluates to null → output with "null" value (ProcessM behavior)
-                    addAttribute(eventAttributes, "string", key, "null")
-                }
+            if (value != null) {
+                addAttributeByType(eventAttributes, key, value)
+            } else {
+                // Expression evaluates to null → output with "null" value (ProcessM behavior)
+                addAttribute(eventAttributes, "string", key, "null")
             }
         }
 
@@ -339,7 +348,7 @@ object XESJsonConverter {
         attributes: MutableMap<String, MutableList<Map<String, String>>>,
         type: String,
         key: String,
-        value: String
+        value: String,
     ) {
         val attrList = attributes.getOrPut(type) { mutableListOf() }
         attrList.add(mapOf("@key" to key, "@value" to value))
@@ -351,13 +360,12 @@ object XESJsonConverter {
      * - 1 element → single object
      * - >1 elements → array
      */
-    private fun <T> toSingleOrArray(list: List<T>): Any {
-        return when (list.size) {
+    private fun <T> toSingleOrArray(list: List<T>): Any =
+        when (list.size) {
             0 -> emptyList<T>()
             1 -> list.first()!!
             else -> list
         }
-    }
 
     /**
      * Add an attribute based on its value type
@@ -365,18 +373,45 @@ object XESJsonConverter {
     private fun addAttributeByType(
         attributes: MutableMap<String, MutableList<Map<String, String>>>,
         key: String,
-        value: Any
+        value: Any,
     ) {
         when (value) {
-            is String -> addAttribute(attributes, "string", key, value)
-            is Int, is Long -> addAttribute(attributes, "int", key, value.toString())
-            is Float, is Double -> addAttribute(attributes, "float", key, value.toString())
-            is Boolean -> addAttribute(attributes, "boolean", key, value.toString())
-            is Instant -> addAttribute(attributes, "date", key, formatTimestamp(value))
-            is java.time.ZonedDateTime -> addAttribute(attributes, "date", key, formatTimestamp(value.toInstant()))
-            is java.time.LocalDateTime -> addAttribute(attributes, "date", key,
-                formatTimestamp(value.toInstant(ZoneOffset.UTC)))
-            else -> addAttribute(attributes, "string", key, value.toString())
+            is String -> {
+                addAttribute(attributes, "string", key, value)
+            }
+
+            is Int, is Long -> {
+                addAttribute(attributes, "int", key, value.toString())
+            }
+
+            is Float, is Double -> {
+                addAttribute(attributes, "float", key, value.toString())
+            }
+
+            is Boolean -> {
+                addAttribute(attributes, "boolean", key, value.toString())
+            }
+
+            is Instant -> {
+                addAttribute(attributes, "date", key, formatTimestamp(value))
+            }
+
+            is java.time.ZonedDateTime -> {
+                addAttribute(attributes, "date", key, formatTimestamp(value.toInstant()))
+            }
+
+            is java.time.LocalDateTime -> {
+                addAttribute(
+                    attributes,
+                    "date",
+                    key,
+                    formatTimestamp(value.toInstant(ZoneOffset.UTC)),
+                )
+            }
+
+            else -> {
+                addAttribute(attributes, "string", key, value.toString())
+            }
         }
     }
 
@@ -394,28 +429,4 @@ object XESJsonConverter {
         }
     }
 
-    /**
-     * Convert a GlobalAttribute to JSON structure
-     * Format: {"@scope": "trace/event", "string": [...], "date": [...], etc.}
-     */
-    private fun convertGlobalAttribute(global: com.processm.processminterpreter.model.hierarchical.GlobalAttribute): Map<String, Any> {
-        val result = mutableMapOf<String, Any>()
-        result["@scope"] = global.scope
-
-        // Group attributes by type
-        val attributesByType = mutableMapOf<String, MutableList<Map<String, String>>>()
-
-        global.attributes.forEach { (key, value) ->
-            if (value != null) {
-                addAttributeByType(attributesByType, key, value)
-            }
-        }
-
-        // Add attribute type groups to result (single object if 1 item, array if >1)
-        attributesByType.forEach { (type, attrs) ->
-            result[type] = toSingleOrArray(attrs)
-        }
-
-        return result
-    }
 }

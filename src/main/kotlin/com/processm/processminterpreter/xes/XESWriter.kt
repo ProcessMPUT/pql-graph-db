@@ -144,13 +144,30 @@ class XESWriter {
         results.groupBy { record ->
             // Try different possible trace ID locations
             when {
-                record.containsKey("traceId") -> record["traceId"]?.toString()
-                record.containsKey("caseId") -> record["caseId"]?.toString()
-                record.containsKey("t_traceId") -> record["t_traceId"]?.toString()
-                record.containsKey("trace_traceId") -> record["trace_traceId"]?.toString()
-                record.containsKey("t_caseId") -> record["t_caseId"]?.toString()
-                record.containsKey("trace_caseId") -> record["trace_caseId"]?.toString()
-                
+                record.containsKey("traceId") -> {
+                    record["traceId"]?.toString()
+                }
+
+                record.containsKey("caseId") -> {
+                    record["caseId"]?.toString()
+                }
+
+                record.containsKey("t_traceId") -> {
+                    record["t_traceId"]?.toString()
+                }
+
+                record.containsKey("trace_traceId") -> {
+                    record["trace_traceId"]?.toString()
+                }
+
+                record.containsKey("t_caseId") -> {
+                    record["t_caseId"]?.toString()
+                }
+
+                record.containsKey("trace_caseId") -> {
+                    record["trace_caseId"]?.toString()
+                }
+
                 record.containsKey("trace") -> {
                     val trace = record["trace"]
                     when (trace) {
@@ -167,7 +184,9 @@ class XESWriter {
                     }
                 }
 
-                else -> null
+                else -> {
+                    null
+                }
             } ?: "unknown-trace-${System.currentTimeMillis()}"
         }
 
@@ -338,7 +357,10 @@ class XESWriter {
     @Suppress("UNCHECKED_CAST")
     private fun toStringMap(value: Any?): Map<String, Any?>? =
         when {
-            value == null -> null
+            value == null -> {
+                null
+            }
+
             value is Map<*, *> -> {
                 // Validate that keys are strings
                 if (value.keys.all { it is String }) {
@@ -348,7 +370,9 @@ class XESWriter {
                 }
             }
 
-            else -> null
+            else -> {
+                null
+            }
         }
 
     /**

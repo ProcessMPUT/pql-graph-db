@@ -43,16 +43,16 @@ class Function(
     override val charPositionInLine: Int = -1,
     vararg args: IExpression,
 ) : Expression(line, charPositionInLine, *args) {
-
     // Regex to parse: [scope:]name
     // Groups: (scope:) (name)
     private val regex = Regex("^(?:(\\w+):)?(\\w+)$")
-    private val match = regex.find(functionName)
-        ?: throw PQLSyntaxException(
-            line,
-            charPositionInLine,
-            "Invalid function name: $functionName",
-        )
+    private val match =
+        regex.find(functionName)
+            ?: throw PQLSyntaxException(
+                line,
+                charPositionInLine,
+                "Invalid function name: $functionName",
+            )
 
     /**
      * The function name (lowercase).
@@ -67,18 +67,20 @@ class Function(
      * - "t:count(e:id)" → TRACE
      * - "l:max(e:timestamp)" → LOG
      */
-    override val scope: Scope? = match.groupValues[1]
-        .takeIf { it.isNotEmpty() }
-        ?.let { Scope.parse(it) }
+    override val scope: Scope? =
+        match.groupValues[1]
+            .takeIf { it.isNotEmpty() }
+            ?.let { Scope.parse(it) }
 
     /**
      * Function type (SCALAR or AGGREGATION).
      */
-    val functionType: FunctionType = when (name) {
-        in SCALAR_FUNCTIONS.keys -> FunctionType.Scalar
-        in AGGREGATION_FUNCTIONS.keys -> FunctionType.Aggregation
-        else -> throw InvalidFunctionException("Unknown function: $name")
-    }
+    val functionType: FunctionType =
+        when (name) {
+            in SCALAR_FUNCTIONS.keys -> FunctionType.Scalar
+            in AGGREGATION_FUNCTIONS.keys -> FunctionType.Aggregation
+            else -> throw InvalidFunctionException("Unknown function: $name")
+        }
 
     /**
      * Whether this function is an aggregation function.
@@ -90,15 +92,17 @@ class Function(
      * Return type of this function.
      */
     override val type: Type
-        get() = when (functionType) {
-            FunctionType.Scalar -> SCALAR_FUNCTIONS[name] ?: Type.UNKNOWN
-            FunctionType.Aggregation -> AGGREGATION_FUNCTIONS[name] ?: Type.ANY
-        }
+        get() =
+            when (functionType) {
+                FunctionType.Scalar -> SCALAR_FUNCTIONS[name] ?: Type.UNKNOWN
+                FunctionType.Aggregation -> AGGREGATION_FUNCTIONS[name] ?: Type.ANY
+            }
 
     init {
         // Validate number of arguments
-        val expectedArgs = FUNCTION_ARGS[name]
-            ?: throw InvalidFunctionException("Unknown function: $name")
+        val expectedArgs =
+            FUNCTION_ARGS[name]
+                ?: throw InvalidFunctionException("Unknown function: $name")
 
         if (children.size != expectedArgs) {
             throw InvalidFunctionException(
@@ -129,7 +133,7 @@ class Function(
     }
 
     override fun toString(): String {
-        val scopePrefix = scope?.let { "${it}:" } ?: ""
+        val scopePrefix = scope?.let { "$it:" } ?: ""
         val argsStr = children.joinToString(", ")
         return "$scopePrefix$name($argsStr)"
     }
@@ -149,30 +153,28 @@ class Function(
          * Numeric functions:
          * - round
          */
-        val SCALAR_FUNCTIONS = mapOf(
-            // Date/time extraction (return NUMBER)
-            "year" to Type.NUMBER,
-            "month" to Type.NUMBER,
-            "day" to Type.NUMBER,
-            "hour" to Type.NUMBER,
-            "minute" to Type.NUMBER,
-            "second" to Type.NUMBER,
-            "millisecond" to Type.NUMBER,
-            "quarter" to Type.NUMBER,
-            "dayofweek" to Type.NUMBER,
-
-            // Date/time construction (return DATETIME)
-            "date" to Type.DATETIME,
-            "time" to Type.DATETIME,
-            "now" to Type.DATETIME,
-
-            // String functions (return STRING)
-            "upper" to Type.STRING,
-            "lower" to Type.STRING,
-
-            // Numeric functions (return NUMBER)
-            "round" to Type.NUMBER,
-        )
+        val SCALAR_FUNCTIONS =
+            mapOf(
+                // Date/time extraction (return NUMBER)
+                "year" to Type.NUMBER,
+                "month" to Type.NUMBER,
+                "day" to Type.NUMBER,
+                "hour" to Type.NUMBER,
+                "minute" to Type.NUMBER,
+                "second" to Type.NUMBER,
+                "millisecond" to Type.NUMBER,
+                "quarter" to Type.NUMBER,
+                "dayofweek" to Type.NUMBER,
+                // Date/time construction (return DATETIME)
+                "date" to Type.DATETIME,
+                "time" to Type.DATETIME,
+                "now" to Type.DATETIME,
+                // String functions (return STRING)
+                "upper" to Type.STRING,
+                "lower" to Type.STRING,
+                // Numeric functions (return NUMBER)
+                "round" to Type.NUMBER,
+            )
 
         /**
          * Aggregation functions: name → return type.
@@ -181,48 +183,46 @@ class Function(
          * - sum, avg → NUMBER (for numeric inputs)
          * - min, max → ANY (depends on input type)
          */
-        val AGGREGATION_FUNCTIONS = mapOf(
-            "count" to Type.NUMBER,
-            "sum" to Type.NUMBER,
-            "avg" to Type.NUMBER,
-            "min" to Type.ANY, // Can return any type depending on input
-            "max" to Type.ANY, // Can return any type depending on input
-        )
+        val AGGREGATION_FUNCTIONS =
+            mapOf(
+                "count" to Type.NUMBER,
+                "sum" to Type.NUMBER,
+                "avg" to Type.NUMBER,
+                "min" to Type.ANY, // Can return any type depending on input
+                "max" to Type.ANY, // Can return any type depending on input
+            )
 
         /**
          * Expected number of arguments for each function.
          */
-        val FUNCTION_ARGS = mapOf(
-            // Date/time extraction (1 argument)
-            "year" to 1,
-            "month" to 1,
-            "day" to 1,
-            "hour" to 1,
-            "minute" to 1,
-            "second" to 1,
-            "millisecond" to 1,
-            "quarter" to 1,
-            "dayofweek" to 1,
-            "date" to 1,
-            "time" to 1,
-
-            // Current time (0 arguments)
-            "now" to 0,
-
-            // String functions (1 argument)
-            "upper" to 1,
-            "lower" to 1,
-
-            // Numeric functions (1 argument)
-            "round" to 1,
-
-            // Aggregation functions (1 argument)
-            "count" to 1,
-            "sum" to 1,
-            "avg" to 1,
-            "min" to 1,
-            "max" to 1,
-        )
+        val FUNCTION_ARGS =
+            mapOf(
+                // Date/time extraction (1 argument)
+                "year" to 1,
+                "month" to 1,
+                "day" to 1,
+                "hour" to 1,
+                "minute" to 1,
+                "second" to 1,
+                "millisecond" to 1,
+                "quarter" to 1,
+                "dayofweek" to 1,
+                "date" to 1,
+                "time" to 1,
+                // Current time (0 arguments)
+                "now" to 0,
+                // String functions (1 argument)
+                "upper" to 1,
+                "lower" to 1,
+                // Numeric functions (1 argument)
+                "round" to 1,
+                // Aggregation functions (1 argument)
+                "count" to 1,
+                "sum" to 1,
+                "avg" to 1,
+                "min" to 1,
+                "max" to 1,
+            )
 
         /**
          * Check if a function name is a scalar function.

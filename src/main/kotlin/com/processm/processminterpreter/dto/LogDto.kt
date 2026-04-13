@@ -3,8 +3,8 @@ package com.processm.processminterpreter.dto
 import com.fasterxml.jackson.annotation.JsonFormat
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.processm.processminterpreter.model.LogNode
-import com.processm.processminterpreter.repository.LogStatistics
-import com.processm.processminterpreter.repository.LogWithStatistics
+import com.processm.processminterpreter.service.LogStatistics
+import com.processm.processminterpreter.service.LogWithStatistics
 import java.time.LocalDateTime
 
 // Validation annotations will be added when Jakarta Validation dependency is included
@@ -32,7 +32,6 @@ data class UpdateLogRequest(
  * DTO for log response
  */
 data class LogResponse(
-    val id: Long?,
     val logId: String,
     val name: String,
     @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss") val createdAt: LocalDateTime,
@@ -42,7 +41,6 @@ data class LogResponse(
     companion object {
         fun from(logNode: LogNode): LogResponse =
             LogResponse(
-                id = logNode.id,
                 logId = logNode.logId,
                 name = logNode.name,
                 createdAt = logNode.createdAt,
@@ -56,7 +54,6 @@ data class LogResponse(
  * DTO for log response with statistics
  */
 data class LogWithStatisticsResponse(
-    val id: Long?,
     val logId: String,
     val name: String,
     @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss") val createdAt: LocalDateTime,
@@ -67,32 +64,30 @@ data class LogWithStatisticsResponse(
     companion object {
         fun from(logWithStats: LogWithStatistics): LogWithStatisticsResponse =
             LogWithStatisticsResponse(
-                id = logWithStats.log.id,
                 logId = logWithStats.log.logId,
                 name = logWithStats.log.name,
                 createdAt = logWithStats.log.createdAt,
                 updatedAt = logWithStats.log.updatedAt,
                 attributes = logWithStats.log.attributes,
                 statistics =
-                LogStatisticsDto(
-                    traceCount = logWithStats.traceCount,
-                    eventCount = logWithStats.eventCount,
-                ),
+                    LogStatisticsDto(
+                        traceCount = logWithStats.traceCount,
+                        eventCount = logWithStats.eventCount,
+                    ),
             )
 
         fun from(logStats: LogStatistics): LogWithStatisticsResponse =
             LogWithStatisticsResponse(
-                id = logStats.log.id,
                 logId = logStats.log.logId,
                 name = logStats.log.name,
                 createdAt = logStats.log.createdAt,
                 updatedAt = logStats.log.updatedAt,
                 attributes = logStats.log.attributes,
                 statistics =
-                LogStatisticsDto(
-                    traceCount = logStats.traceCount,
-                    eventCount = logStats.eventCount,
-                ),
+                    LogStatisticsDto(
+                        traceCount = logStats.traceCount,
+                        eventCount = logStats.eventCount,
+                    ),
             )
     }
 }

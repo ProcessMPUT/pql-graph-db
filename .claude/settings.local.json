@@ -15,7 +15,8 @@
       "Bash(./gradlew:*)",
       "WebFetch(domain:github.com)",
       "WebFetch(domain:api.github.com)",
-      "mcp__ide__getDiagnostics"
+      "mcp__ide__getDiagnostics",
+      "WebFetch(domain:localhost)"
     ]
   },
   "enabledPlugins": {

@@ -10,9 +10,18 @@ import org.springframework.context.annotation.Configuration
 @Configuration
 @ConfigurationProperties(prefix = "processm.compatibility")
 class ProcessMConfig {
-    /** Default trace limit when query has no explicit LIMIT t:N (ProcessM defaults to 30) */
-    var defaultTraceLimit: Int = 30
+    /**
+     * Default trace limit settings.
+     * ProcessM REST API caps traces at 30 via LogsService.applyLimits().
+     * Enable this to match that behavior; disable to return all traces.
+     */
+    var defaultTraceLimit: DefaultTraceLimit = DefaultTraceLimit()
 
-    /** Event attributes to exclude from SELECT * output (ProcessM omits these) */
-    var excludeEventAttrsInSelectStar: List<String> = listOf("concept:name", "cost:currency")
+    class DefaultTraceLimit {
+        /** Whether to apply the default trace limit */
+        var enabled: Boolean = true
+
+        /** Maximum number of traces returned when no explicit LIMIT is set (or explicit LIMIT exceeds this) */
+        var limit: Int = 30
+    }
 }

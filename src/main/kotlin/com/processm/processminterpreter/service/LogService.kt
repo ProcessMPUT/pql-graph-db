@@ -1,234 +1,278 @@
 package com.processm.processminterpreter.service
 
 import com.processm.processminterpreter.model.LogNode
-import com.processm.processminterpreter.repository.LogRepository
-import com.processm.processminterpreter.repository.LogStatistics
-import com.processm.processminterpreter.repository.LogWithStatistics
+import org.neo4j.driver.Driver
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
-import org.springframework.transaction.annotation.Transactional
 import java.time.LocalDateTime
-import java.util.*
+import java.util.UUID
 
-/**
- * Service for managing process logs
- *
- * Provides business logic for CRUD operations on logs,
- * validation, and error handling.
- */
 @Service
-@Transactional
 class LogService(
-    private val logRepository: LogRepository,
+    private val driver: Driver,
 ) {
-
     private val logger = LoggerFactory.getLogger(LogService::class.java)
 
-    /**
-     * Create a new log
-     */
     fun createLog(
         logId: String,
         name: String,
         attributes: Map<String, Any> = emptyMap(),
     ): LogNode {
-        logger.info("Creating new log with logId: $logId, name: $name")
-
-        // Validate input
         require(logId.isNotBlank()) { "Log ID cannot be blank" }
         require(name.isNotBlank()) { "Log name cannot be blank" }
 
-        // Check if log already exists
-        if (logRepository.existsByLogId(logId)) {
+        if (logExists(logId)) {
             throw IllegalArgumentException("Log with ID '$logId' already exists")
         }
 
-        val log = LogNode(
-            logId = logId,
-            name = name,
-            attributes = attributes,
-            createdAt = LocalDateTime.now(),
-            updatedAt = LocalDateTime.now(),
-        )
-
-        val savedLog = logRepository.save(log)
-        logger.info("Successfully created log with ID: ${savedLog.logId}")
-
-        return savedLog
+        val now = LocalDateTime.now()
+        driver.session().use { session ->
+            session.executeWrite { tx ->
+                tx.run(
+                    """
+                    CREATE (log:Log {
+                        logId: ${'$'}logId,
+                        name: ${'$'}name,
+                        createdAt: ${'$'}createdAt,
+                        updatedAt: ${'$'}updatedAt
+                    })
+                    SET log += ${'$'}attributes
+                    """.trimIndent(),
+                    mapOf("logId" to logId, "name" to name, "createdAt" to now, "updatedAt" to now, "attributes" to attributes),
+                )
+            }
+        }
+        logger.info("Created log '$logId'")
+        return LogNode(logId = logId, name = name, createdAt = now, updatedAt = now, attributes = attributes)
     }
 
-    /**
-     * Get log by ID
-     */
-    @Transactional(readOnly = true)
-    fun getLogById(logId: String): LogNode {
-        logger.debug("Retrieving log with ID: $logId")
+    fun getLogById(logId: String): LogNode =
+        driver.session().use { session ->
+            session.executeRead { tx ->
+                val result = tx.run("MATCH (log:Log {logId: \$logId}) RETURN log", mapOf("logId" to logId))
+                if (result.hasNext()) result.single().get("log").asNode().toLogNode()
+                else throw LogNotFoundException("Log with ID '$logId' not found")
+            }
+        }
 
-        return logRepository.findByLogId(logId)
-            ?: throw LogNotFoundException("Log with ID '$logId' not found")
-    }
+    fun getLogWithStatistics(logId: String): LogStatistics =
+        driver.session().use { session ->
+            session.executeRead { tx ->
+                val result =
+                    tx.run(
+                        """
+                        MATCH (log:Log {logId: ${'$'}logId})
+                        OPTIONAL MATCH (log)-[:CONTAINS]->(trace:Trace)
+                        OPTIONAL MATCH (trace)-[:HAS_EVENT]->(event:Event)
+                        RETURN log, count(DISTINCT trace) as traceCount, count(DISTINCT event) as eventCount
+                        """.trimIndent(),
+                        mapOf("logId" to logId),
+                    )
+                if (result.hasNext()) {
+                    val record = result.single()
+                    LogStatistics(
+                        log = record.get("log").asNode().toLogNode(),
+                        traceCount = record.get("traceCount").asLong(),
+                        eventCount = record.get("eventCount").asLong(),
+                    )
+                } else {
+                    throw LogNotFoundException("Log with ID '$logId' not found")
+                }
+            }
+        }
 
-    /**
-     * Get log with statistics
-     */
-    @Transactional(readOnly = true)
-    fun getLogWithStatistics(logId: String): LogStatistics {
-        logger.debug("Retrieving log statistics for ID: $logId")
+    fun getAllLogs(): List<LogNode> =
+        driver.session().use { session ->
+            session.executeRead { tx ->
+                tx
+                    .run("MATCH (log:Log) RETURN log ORDER BY log.createdAt DESC")
+                    .list { it.get("log").asNode().toLogNode() }
+            }
+        }
 
-        return logRepository.getLogStatistics(logId)
-            ?: throw LogNotFoundException("Log with ID '$logId' not found")
-    }
+    fun getAllLogsWithStatistics(): List<LogWithStatistics> =
+        driver.session().use { session ->
+            session.executeRead { tx ->
+                tx
+                    .run(
+                        """
+                        MATCH (log:Log)
+                        OPTIONAL MATCH (log)-[:CONTAINS]->(trace:Trace)
+                        OPTIONAL MATCH (trace)-[:HAS_EVENT]->(event:Event)
+                        RETURN log, count(DISTINCT trace) as traceCount, count(DISTINCT event) as eventCount
+                        ORDER BY log.createdAt DESC
+                        """.trimIndent(),
+                    ).list { record ->
+                        LogWithStatistics(
+                            log = record.get("log").asNode().toLogNode(),
+                            traceCount = record.get("traceCount").asLong(),
+                            eventCount = record.get("eventCount").asLong(),
+                        )
+                    }
+            }
+        }
 
-    /**
-     * Get all logs
-     */
-    @Transactional(readOnly = true)
-    fun getAllLogs(): List<LogNode> {
-        logger.debug("Retrieving all logs")
-        return logRepository.findAll().toList()
-    }
-
-    /**
-     * Get all logs with statistics
-     */
-    @Transactional(readOnly = true)
-    fun getAllLogsWithStatistics(): List<LogWithStatistics> {
-        logger.debug("Retrieving all logs with statistics")
-        return logRepository.findAllWithStatistics()
-    }
-
-    /**
-     * Search logs by name
-     */
-    @Transactional(readOnly = true)
     fun searchLogsByName(name: String): List<LogNode> {
-        logger.debug("Searching logs by name: $name")
         require(name.isNotBlank()) { "Search name cannot be blank" }
-
-        return logRepository.findByNameContainingIgnoreCase(name)
+        return driver.session().use { session ->
+            session.executeRead { tx ->
+                tx
+                    .run(
+                        "MATCH (log:Log) WHERE toLower(log.name) CONTAINS toLower(\$name) RETURN log",
+                        mapOf("name" to name),
+                    ).list { it.get("log").asNode().toLogNode() }
+            }
+        }
     }
 
-    /**
-     * Get logs created after specific date
-     */
-    @Transactional(readOnly = true)
-    fun getLogsCreatedAfter(date: LocalDateTime): List<LogNode> {
-        logger.debug("Retrieving logs created after: $date")
-        return logRepository.findByCreatedAtAfter(date)
-    }
+    fun getLogsCreatedAfter(date: LocalDateTime): List<LogNode> =
+        driver.session().use { session ->
+            session.executeRead { tx ->
+                tx
+                    .run(
+                        "MATCH (log:Log) WHERE log.createdAt > \$date RETURN log ORDER BY log.createdAt DESC",
+                        mapOf("date" to date),
+                    ).list { it.get("log").asNode().toLogNode() }
+            }
+        }
 
-    /**
-     * Get logs created between dates
-     */
-    @Transactional(readOnly = true)
-    fun getLogsCreatedBetween(startDate: LocalDateTime, endDate: LocalDateTime): List<LogNode> {
-        logger.debug("Retrieving logs created between: $startDate and $endDate")
+    fun getLogsCreatedBetween(
+        startDate: LocalDateTime,
+        endDate: LocalDateTime,
+    ): List<LogNode> {
         require(startDate.isBefore(endDate)) { "Start date must be before end date" }
-
-        return logRepository.findByCreatedAtBetween(startDate, endDate)
+        return driver.session().use { session ->
+            session.executeRead { tx ->
+                tx
+                    .run(
+                        "MATCH (log:Log) WHERE log.createdAt >= \$start AND log.createdAt <= \$end RETURN log ORDER BY log.createdAt DESC",
+                        mapOf("start" to startDate, "end" to endDate),
+                    ).list { it.get("log").asNode().toLogNode() }
+            }
+        }
     }
 
-    /**
-     * Update log
-     */
     fun updateLog(
         logId: String,
         name: String? = null,
         attributes: Map<String, Any>? = null,
     ): LogNode {
-        logger.info("Updating log with ID: $logId")
+        val existing = getLogById(logId)
+        val updatedName = name ?: existing.name
+        val updatedAttributes = attributes ?: existing.attributes
+        val updatedAt = LocalDateTime.now()
 
-        val existingLog = getLogById(logId)
-
-        val updatedLog = existingLog.copy(
-            name = name ?: existingLog.name,
-            attributes = attributes ?: existingLog.attributes,
-            updatedAt = LocalDateTime.now(),
-        )
-
-        val savedLog = logRepository.save(updatedLog)
-        logger.info("Successfully updated log with ID: $logId")
-
-        return savedLog
+        driver.session().use { session ->
+            session.executeWrite { tx ->
+                tx.run(
+                    """
+                    MATCH (log:Log {logId: ${'$'}logId})
+                    SET log.name = ${'$'}name, log.updatedAt = ${'$'}updatedAt
+                    SET log += ${'$'}attributes
+                    """.trimIndent(),
+                    mapOf("logId" to logId, "name" to updatedName, "attributes" to updatedAttributes, "updatedAt" to updatedAt),
+                )
+            }
+        }
+        logger.info("Updated log '$logId'")
+        return existing.copy(name = updatedName, attributes = updatedAttributes, updatedAt = updatedAt)
     }
 
-    /**
-     * Delete log by ID
-     */
     fun deleteLog(logId: String): Boolean {
-        logger.info("Deleting log with ID: $logId")
-
-        if (!logRepository.existsByLogId(logId)) {
-            throw LogNotFoundException("Log with ID '$logId' not found")
+        if (!logExists(logId)) throw LogNotFoundException("Log with ID '$logId' not found")
+        driver.session().use { session ->
+            session.executeWrite { tx ->
+                tx.run("MATCH (log:Log {logId: \$logId}) DETACH DELETE log", mapOf("logId" to logId))
+            }
         }
-
-        val deletedCount = logRepository.deleteByLogId(logId)
-        val success = deletedCount > 0
-
-        if (success) {
-            logger.info("Successfully deleted log with ID: $logId")
-        } else {
-            logger.warn("Failed to delete log with ID: $logId")
-        }
-
-        return success
+        logger.info("Deleted log '$logId'")
+        return true
     }
 
-    /**
-     * Delete log with all related data (traces and events)
-     */
     fun deleteLogWithAllData(logId: String): Boolean {
-        logger.info("Deleting log with all data for ID: $logId")
-
-        if (!logRepository.existsByLogId(logId)) {
-            throw LogNotFoundException("Log with ID '$logId' not found")
+        if (!logExists(logId)) throw LogNotFoundException("Log with ID '$logId' not found")
+        driver.session().use { session ->
+            session.executeWrite { tx ->
+                tx.run(
+                    """
+                    MATCH (log:Log {logId: ${'$'}logId})
+                    OPTIONAL MATCH (log)-[:CONTAINS]->(trace:Trace)
+                    OPTIONAL MATCH (trace)-[:HAS_EVENT]->(event:Event)
+                    DETACH DELETE log, trace, event
+                    """.trimIndent(),
+                    mapOf("logId" to logId),
+                )
+            }
         }
-
-        val deletedCount = logRepository.deleteLogWithAllData(logId)
-        val success = deletedCount > 0
-
-        if (success) {
-            logger.info("Successfully deleted log with all data for ID: $logId")
-        } else {
-            logger.warn("Failed to delete log with all data for ID: $logId")
-        }
-
-        return success
+        logger.info("Deleted log '$logId' with all data")
+        return true
     }
 
-    /**
-     * Check if log exists
-     */
-    @Transactional(readOnly = true)
-    fun logExists(logId: String): Boolean {
-        return logRepository.existsByLogId(logId)
-    }
+    fun logExists(logId: String): Boolean =
+        driver.session().use { session ->
+            session.executeRead { tx ->
+                tx
+                    .run(
+                        "MATCH (log:Log {logId: \$logId}) RETURN count(log) > 0 AS exists",
+                        mapOf("logId" to logId),
+                    ).single()
+                    .get("exists")
+                    .asBoolean()
+            }
+        }
 
-    /**
-     * Find logs by attribute
-     */
-    @Transactional(readOnly = true)
-    fun findLogsByAttribute(attributeKey: String, attributeValue: Any): List<LogNode> {
-        logger.debug("Finding logs by attribute: $attributeKey = $attributeValue")
+    fun findLogsByAttribute(
+        attributeKey: String,
+        attributeValue: Any,
+    ): List<LogNode> {
         require(attributeKey.isNotBlank()) { "Attribute key cannot be blank" }
-
-        return logRepository.findByAttribute(attributeKey, attributeValue)
+        return driver.session().use { session ->
+            session.executeRead { tx ->
+                tx
+                    .run(
+                        "MATCH (log:Log) WHERE log[${'$'}attributeKey] = \$attributeValue RETURN log",
+                        mapOf("attributeKey" to attributeKey, "attributeValue" to attributeValue),
+                    ).list { it.get("log").asNode().toLogNode() }
+            }
+        }
     }
 
-    /**
-     * Generate unique log ID
-     */
     fun generateLogId(): String {
         var logId: String
         do {
             logId = "log-${UUID.randomUUID().toString().substring(0, 8)}"
-        } while (logRepository.existsByLogId(logId))
-
+        } while (logExists(logId))
         return logId
+    }
+
+    private fun org.neo4j.driver.types.Node.toLogNode(): LogNode {
+        val structural = setOf("logId", "name", "createdAt", "updatedAt")
+        val attributes =
+            keys()
+                .filter { it !in structural }
+                .associateWith { key -> get(key).asObject() }
+        return LogNode(
+            logId = get("logId").asString(),
+            name = get("name").asString(),
+            createdAt = get("createdAt").asLocalDateTime(),
+            updatedAt = get("updatedAt").asLocalDateTime(),
+            attributes = attributes,
+        )
     }
 }
 
-/**
- * Exception thrown when log is not found
- */
-class LogNotFoundException(message: String) : RuntimeException(message)
+data class LogStatistics(
+    val log: LogNode,
+    val traceCount: Long,
+    val eventCount: Long,
+)
+
+data class LogWithStatistics(
+    val log: LogNode,
+    val traceCount: Long,
+    val eventCount: Long,
+)
+
+class LogNotFoundException(
+    message: String,
+) : RuntimeException(message)

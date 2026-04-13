@@ -1,18 +1,18 @@
 package com.processm.processminterpreter.service
 
-import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.core.type.TypeReference
+import com.fasterxml.jackson.databind.ObjectMapper
+import com.processm.processminterpreter.model.hierarchical.Log
 import com.processm.processminterpreter.pql.CypherQuery
 import com.processm.processminterpreter.pql.PQLTranslator
-import com.processm.processminterpreter.xes.XESWriter
-import com.processm.processminterpreter.model.hierarchical.Log
 import com.processm.processminterpreter.util.HierarchyReconstructor
+import com.processm.processminterpreter.xes.XESWriter
 import org.neo4j.driver.Driver
 import org.neo4j.driver.Record
 import org.neo4j.driver.Result
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
-import org.springframework.transaction.annotation.Transactional
+
 import java.io.ByteArrayOutputStream
 
 /**
@@ -21,7 +21,6 @@ import java.io.ByteArrayOutputStream
  * Translates PQL queries to Cypher and executes them against Neo4j database
  */
 @Service
-@Transactional(readOnly = true)
 class PQLQueryService(
     private val pqlTranslator: PQLTranslator,
     private val neo4jDriver: Driver,
@@ -38,16 +37,21 @@ class PQLQueryService(
         if (logId == null) return emptyMap()
         return try {
             neo4jDriver.session().use { session ->
-                val result = session.run(
-                    "MATCH (log:Log {logId: \$logId}) RETURN log.classifiers AS classifiers",
-                    mapOf("logId" to logId)
-                )
+                val result =
+                    session.run(
+                        "MATCH (log:Log {logId: \$logId}) RETURN log.classifiers AS classifiers",
+                        mapOf("logId" to logId),
+                    )
                 if (result.hasNext()) {
                     val json = result.single().get("classifiers").asString(null)
                     if (json != null) {
                         objectMapper.readValue(json, object : TypeReference<Map<String, List<String>>>() {})
-                    } else emptyMap()
-                } else emptyMap()
+                    } else {
+                        emptyMap()
+                    }
+                } else {
+                    emptyMap()
+                }
             }
         } catch (e: Exception) {
             logger.warn("Failed to fetch classifiers for logId=$logId: ${e.message}")
@@ -75,12 +79,13 @@ class PQLQueryService(
 
             // DELETE queries need a write transaction
             if (cypherQuery.isDelete) {
-                val deletedCount = neo4jDriver.session().use { session ->
-                    session.executeWrite { tx ->
-                        val result = tx.run(cypherQuery.query, cypherQuery.parameters)
-                        result.consume().counters().nodesDeleted()
+                val deletedCount =
+                    neo4jDriver.session().use { session ->
+                        session.executeWrite { tx ->
+                            val result = tx.run(cypherQuery.query, cypherQuery.parameters)
+                            result.consume().counters().nodesDeleted()
+                        }
                     }
-                }
                 logger.info("DELETE query removed $deletedCount nodes")
                 return PQLQueryResult(
                     success = true,
@@ -97,7 +102,14 @@ class PQLQueryService(
             val flatResults = executeCypherQuery(cypherQuery)
 
             // Reconstruct hierarchical structure with limits
-            val hierarchicalLogs = HierarchyReconstructor.reconstruct(flatResults, cypherQuery.hierarchicalLimits, cypherQuery.columnAliases, cypherQuery.isAggregationResult, cypherQuery.hasTraceOrderBy)
+            val hierarchicalLogs =
+                HierarchyReconstructor.reconstruct(
+                    flatResults,
+                    cypherQuery.hierarchicalLimits,
+                    cypherQuery.columnAliases,
+                    cypherQuery.isAggregationResult,
+                    cypherQuery.hasTraceOrderBy,
+                )
 
             PQLQueryResult(
                 success = true,
@@ -172,7 +184,10 @@ class PQLQueryService(
             val value = record.get(key)
             map[key] =
                 when {
-                    value.isNull -> null
+                    value.isNull -> {
+                        null
+                    }
+
                     value.hasType(
                         org.neo4j.driver.types.TypeSystem
                             .getDefault()
@@ -207,7 +222,9 @@ class PQLQueryService(
                         relMap
                     }
 
-                    else -> convertNeo4jValue(value)
+                    else -> {
+                        convertNeo4jValue(value)
+                    }
                 }
         }
 
@@ -219,66 +236,89 @@ class PQLQueryService(
      */
     private fun convertNeo4jValue(value: org.neo4j.driver.Value): Any? =
         when {
-            value.isNull -> null
+            value.isNull -> {
+                null
+            }
+
             value.hasType(
                 org.neo4j.driver.types.TypeSystem
                     .getDefault()
                     .STRING(),
-            ) -> value.asString()
+            ) -> {
+                value.asString()
+            }
 
             value.hasType(
                 org.neo4j.driver.types.TypeSystem
                     .getDefault()
                     .INTEGER(),
-            ) -> value.asLong()
+            ) -> {
+                value.asLong()
+            }
 
             value.hasType(
                 org.neo4j.driver.types.TypeSystem
                     .getDefault()
                     .FLOAT(),
-            ) -> value.asDouble()
+            ) -> {
+                value.asDouble()
+            }
 
             value.hasType(
                 org.neo4j.driver.types.TypeSystem
                     .getDefault()
                     .BOOLEAN(),
-            ) -> value.asBoolean()
+            ) -> {
+                value.asBoolean()
+            }
 
             value.hasType(
                 org.neo4j.driver.types.TypeSystem
                     .getDefault()
                     .DATE_TIME(),
-            ) -> value.asZonedDateTime()
+            ) -> {
+                value.asZonedDateTime()
+            }
 
             value.hasType(
                 org.neo4j.driver.types.TypeSystem
                     .getDefault()
                     .LOCAL_DATE_TIME(),
-            ) -> value.asLocalDateTime()
+            ) -> {
+                value.asLocalDateTime()
+            }
 
             value.hasType(
                 org.neo4j.driver.types.TypeSystem
                     .getDefault()
                     .DATE(),
-            ) -> value.asLocalDate()
+            ) -> {
+                value.asLocalDate()
+            }
 
             value.hasType(
                 org.neo4j.driver.types.TypeSystem
                     .getDefault()
                     .TIME(),
-            ) -> value.asOffsetTime()
+            ) -> {
+                value.asOffsetTime()
+            }
 
             value.hasType(
                 org.neo4j.driver.types.TypeSystem
                     .getDefault()
                     .LOCAL_TIME(),
-            ) -> value.asLocalTime()
+            ) -> {
+                value.asLocalTime()
+            }
 
             value.hasType(
                 org.neo4j.driver.types.TypeSystem
                     .getDefault()
                     .LIST(),
-            ) -> value.asList { convertNeo4jValue(it) }
+            ) -> {
+                value.asList { convertNeo4jValue(it) }
+            }
 
             value.hasType(
                 org.neo4j.driver.types.TypeSystem
@@ -296,7 +336,9 @@ class PQLQueryService(
                 map
             }
 
-            else -> value.asObject()
+            else -> {
+                value.asObject()
+            }
         }
 
     /**

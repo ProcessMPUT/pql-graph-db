@@ -17,35 +17,34 @@ import java.time.format.DateTimeParseException
 import java.util.*
 import javax.xml.parsers.DocumentBuilderFactory
 
-/**
- * Parser for XES (eXtensible Event Stream) files
- *
- * Parses XES XML files and converts them to Neo4j model objects
- */
 @Component
 class XESParser {
-
     private val logger = LoggerFactory.getLogger(XESParser::class.java)
 
     // XES date format patterns
     // Formatters with timezone offset (convert to UTC for ProcessM compatibility)
-    private val offsetFormatters = listOf(
-        DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSSXXX"),
-        DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ssXXX"),
-    )
+    private val offsetFormatters =
+        listOf(
+            DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSSXXX"),
+            DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ssXXX"),
+        )
 
     // Formatters without timezone (stored as-is)
-    private val localFormatters = listOf(
-        DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS"),
-        DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss"),
-        DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"),
-        DateTimeFormatter.ISO_LOCAL_DATE_TIME,
-    )
+    private val localFormatters =
+        listOf(
+            DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS"),
+            DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss"),
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"),
+            DateTimeFormatter.ISO_LOCAL_DATE_TIME,
+        )
 
     /**
      * Parse XES file from InputStream
      */
-    fun parseXES(inputStream: InputStream, logId: String? = null): XESLog {
+    fun parseXES(
+        inputStream: InputStream,
+        logId: String? = null,
+    ): XESLog {
         logger.info("Starting XES parsing for logId: $logId")
 
         try {
@@ -68,23 +67,35 @@ class XESParser {
     /**
      * Parse log element
      */
-    private fun parseLog(logElement: Element, logId: String?): XESLog {
+    private fun parseLog(
+        logElement: Element,
+        logId: String?,
+    ): XESLog {
         val attributes = parseAttributes(logElement).toMutableMap()
         ensureIdentityId(attributes) // Auto-generate identity:id if missing
 
         // Parse classifier elements
         val classifiers = parseClassifiers(logElement)
 
+        // Parse global attributes (default values per scope)
+        val traceGlobals = mutableMapOf<String, Any>()
+        val eventGlobals = mutableMapOf<String, Any>()
+        parseGlobals(logElement, traceGlobals, eventGlobals)
+
+        // Parse extensions
+        val extensions = parseExtensions(logElement)
+
         val finalLogId = logId ?: generateLogId()
         val logName = attributes["concept:name"] as? String ?: "Unnamed Log"
 
-        val logNode = LogNode(
-            logId = finalLogId,
-            name = logName,
-            attributes = attributes,
-            createdAt = LocalDateTime.now(),
-            updatedAt = LocalDateTime.now(),
-        )
+        val logNode =
+            LogNode(
+                logId = finalLogId,
+                name = logName,
+                attributes = attributes,
+                createdAt = LocalDateTime.now(),
+                updatedAt = LocalDateTime.now(),
+            )
 
         val traces = mutableListOf<XESTrace>()
         val traceElements = logElement.getElementsByTagName("trace")
@@ -95,8 +106,9 @@ class XESParser {
             traces.add(trace)
         }
 
-        logger.info("Parsed XES log with ${traces.size} traces, ${classifiers.size} classifiers")
-        return XESLog(logNode, traces, classifiers)
+        logger.info("Parsed XES log with ${traces.size} traces, ${classifiers.size} classifiers, ${extensions.size} extensions")
+        logger.debug("Global trace attrs: $traceGlobals, Global event attrs: $eventGlobals")
+        return XESLog(logNode, traces, classifiers, traceGlobals, eventGlobals, extensions)
     }
 
     /**
@@ -128,21 +140,79 @@ class XESParser {
     }
 
     /**
+     * Parse global attributes from log element.
+     * XES globals define default attribute values per scope:
+     *   <global scope="trace"><string key="concept:name" value="__INVALID__"/></global>
+     *   <global scope="event"><string key="concept:name" value="__INVALID__"/></global>
+     */
+    private fun parseGlobals(
+        logElement: Element,
+        traceGlobals: MutableMap<String, Any>,
+        eventGlobals: MutableMap<String, Any>,
+    ) {
+        val childNodes = logElement.childNodes
+        for (i in 0 until childNodes.length) {
+            val node = childNodes.item(i)
+            if (node.nodeType == Node.ELEMENT_NODE) {
+                val element = node as Element
+                if (element.tagName == "global") {
+                    val scope = element.getAttribute("scope")
+                    val attrs = parseAttributes(element)
+                    when (scope) {
+                        "trace" -> traceGlobals.putAll(attrs)
+                        "event" -> eventGlobals.putAll(attrs)
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Parse extension elements from log element.
+     * XES extensions declare attribute namespaces:
+     *   <extension name="Concept" prefix="concept" uri="http://www.xes-standard.org/concept.xesext"/>
+     */
+    private fun parseExtensions(logElement: Element): List<XESExtension> {
+        val extensions = mutableListOf<XESExtension>()
+        val childNodes = logElement.childNodes
+        for (i in 0 until childNodes.length) {
+            val node = childNodes.item(i)
+            if (node.nodeType == Node.ELEMENT_NODE) {
+                val element = node as Element
+                if (element.tagName == "extension") {
+                    val name = element.getAttribute("name")
+                    val prefix = element.getAttribute("prefix")
+                    val uri = element.getAttribute("uri")
+                    if (name.isNotEmpty()) {
+                        extensions.add(XESExtension(name, prefix, uri))
+                    }
+                }
+            }
+        }
+        return extensions
+    }
+
+    /**
      * Parse trace element
      */
-    private fun parseTrace(traceElement: Element, logId: String, index: Int): XESTrace {
+    private fun parseTrace(
+        traceElement: Element,
+        logId: String,
+        index: Int,
+    ): XESTrace {
         val attributes = parseAttributes(traceElement)
         logger.debug("Parsed trace attributes: {}", attributes)
 
         val caseId = attributes["concept:name"] as? String ?: "Case_$index"
         val traceId = generateTraceId(logId, caseId)
 
-        val traceNode = TraceNode(
-            traceId = traceId,
-            caseId = caseId,
-            attributes = attributes,
-            createdAt = LocalDateTime.now(),
-        )
+        val traceNode =
+            TraceNode(
+                traceId = traceId,
+                caseId = caseId,
+                attributes = attributes,
+                createdAt = LocalDateTime.now(),
+            )
 
         val events = mutableListOf<XESEvent>()
         val eventElements = traceElement.getElementsByTagName("event")
@@ -159,7 +229,11 @@ class XESParser {
     /**
      * Parse event element
      */
-    private fun parseEvent(eventElement: Element, traceId: String, index: Int): XESEvent {
+    private fun parseEvent(
+        eventElement: Element,
+        traceId: String,
+        index: Int,
+    ): XESEvent {
         val attributes = parseAttributes(eventElement)
 
         val activity = attributes["concept:name"] as? String ?: "Unknown Activity"
@@ -171,16 +245,17 @@ class XESParser {
 
         val eventId = generateEventId(traceId, index)
 
-        val eventNode = EventNode(
-            eventId = eventId,
-            activity = activity,
-            timestamp = timestamp,
-            resource = resource,
-            lifecycle = lifecycle,
-            cost = cost,
-            attributes = attributes,
-            createdAt = LocalDateTime.now(),
-        )
+        val eventNode =
+            EventNode(
+                eventId = eventId,
+                activity = activity,
+                timestamp = timestamp,
+                resource = resource,
+                lifecycle = lifecycle,
+                cost = cost,
+                attributes = attributes,
+                createdAt = LocalDateTime.now(),
+            )
 
         return XESEvent(eventNode)
     }
@@ -206,37 +281,51 @@ class XESParser {
                             attributes[key] = value
                         }
                     }
+
                     "date" -> {
                         val key = childElement.getAttribute("key")
                         val value = childElement.getAttribute("value")
                         if (key.isNotEmpty()) {
-                            attributes[key] = value // Store as string, will be parsed when needed
+                            // Convert offset-aware dates to UTC string (ProcessM compatibility)
+                            // e.g. "2006-11-07T10:00:36+01:00" → "2006-11-07T09:00:36Z"
+                            attributes[key] = normalizeDateToUTC(value) ?: value
                         }
                     }
+
                     "int" -> {
                         val key = childElement.getAttribute("key")
                         val value = childElement.getAttribute("value")
                         if (key.isNotEmpty()) {
                             try {
-                                attributes[key] = value.toInt()
+                                // Use toLong() for compatibility with large values (ProcessM uses BIGINT),
+                                // but keep as Int when value fits (most XES files use small ints)
+                                val longVal = value.toLong()
+                                attributes[key] = if (longVal in Int.MIN_VALUE..Int.MAX_VALUE.toLong()) longVal.toInt() else longVal
                             } catch (e: NumberFormatException) {
                                 logger.warn("Failed to parse int value: $value for key: $key")
                                 attributes[key] = value
                             }
                         }
                     }
+
                     "float" -> {
                         val key = childElement.getAttribute("key")
                         val value = childElement.getAttribute("value")
                         if (key.isNotEmpty()) {
                             try {
-                                attributes[key] = value.toDouble()
-                            } catch (e: NumberFormatException) {
+                                // Use locale-independent parsing (ProcessM uses Locale.ROOT)
+                                attributes[key] =
+                                    java.text.NumberFormat
+                                        .getInstance(java.util.Locale.ROOT)
+                                        .parse(value)
+                                        .toDouble()
+                            } catch (e: Exception) {
                                 logger.warn("Failed to parse float value: $value for key: $key")
                                 attributes[key] = value
                             }
                         }
                     }
+
                     "boolean" -> {
                         val key = childElement.getAttribute("key")
                         val value = childElement.getAttribute("value")
@@ -244,6 +333,7 @@ class XESParser {
                             attributes[key] = value.toBoolean()
                         }
                     }
+
                     "id" -> {
                         // XES Identity extension - stores UUID values
                         val key = childElement.getAttribute("key")
@@ -267,6 +357,32 @@ class XESParser {
             attributes["identity:id"] = UUID.randomUUID().toString()
         }
         return attributes
+    }
+
+    /**
+     * Normalize an offset-aware date string to UTC representation.
+     * Preserves milliseconds if present.
+     * Returns null if no offset info (can't determine UTC equivalent).
+     * Example: "2006-11-07T10:00:36.839+01:00" → "2006-11-07T09:00:36.839Z"
+     * Example: "2006-11-07T10:00:36+01:00" → "2006-11-07T09:00:36Z"
+     */
+    private fun normalizeDateToUTC(dateStr: String): String? {
+        if (dateStr.isBlank()) return null
+        for (formatter in offsetFormatters) {
+            try {
+                val odt = OffsetDateTime.parse(dateStr, formatter)
+                val utc = odt.atZoneSameInstant(ZoneOffset.UTC).toLocalDateTime()
+                // Preserve milliseconds only if non-zero
+                return if (utc.nano != 0) {
+                    utc.format(DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"))
+                } else {
+                    utc.format(DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss'Z'"))
+                }
+            } catch (e: DateTimeParseException) {
+                // Try next
+            }
+        }
+        return null
     }
 
     /**
@@ -302,23 +418,23 @@ class XESParser {
     /**
      * Generate unique log ID
      */
-    private fun generateLogId(): String {
-        return "log-${UUID.randomUUID().toString().substring(0, 8)}"
-    }
+    private fun generateLogId(): String = "log-${UUID.randomUUID().toString().substring(0, 8)}"
 
     /**
      * Generate unique trace ID
      */
-    private fun generateTraceId(logId: String, caseId: String): String {
-        return "$logId-trace-${caseId.replace(" ", "_")}"
-    }
+    private fun generateTraceId(
+        logId: String,
+        caseId: String,
+    ): String = "$logId-trace-${caseId.replace(" ", "_")}"
 
     /**
      * Generate unique event ID
      */
-    private fun generateEventId(traceId: String, index: Int): String {
-        return "$traceId-event-${index + 1}"
-    }
+    private fun generateEventId(
+        traceId: String,
+        index: Int,
+    ): String = "$traceId-event-${index + 1}"
 }
 
 /**
@@ -328,6 +444,9 @@ data class XESLog(
     val logNode: LogNode,
     val traces: List<XESTrace>,
     val classifiers: Map<String, List<String>> = emptyMap(),
+    val traceGlobals: Map<String, Any> = emptyMap(),
+    val eventGlobals: Map<String, Any> = emptyMap(),
+    val extensions: List<XESExtension> = emptyList(),
 )
 
 /**
@@ -346,6 +465,18 @@ data class XESEvent(
 )
 
 /**
+ * Data class representing a parsed XES extension
+ */
+data class XESExtension(
+    val name: String,
+    val prefix: String,
+    val uri: String,
+)
+
+/**
  * Exception thrown when XES parsing fails
  */
-class XESParseException(message: String, cause: Throwable? = null) : RuntimeException(message, cause)
+class XESParseException(
+    message: String,
+    cause: Throwable? = null,
+) : RuntimeException(message, cause)

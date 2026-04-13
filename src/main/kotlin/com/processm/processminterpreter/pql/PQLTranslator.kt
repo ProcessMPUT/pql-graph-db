@@ -6,7 +6,6 @@ package com.processm.processminterpreter.pql
  * Implementations translate PQL query strings to Neo4j Cypher queries
  */
 interface PQLTranslator {
-
     /**
      * Translate PQL query to Cypher query
      *
@@ -15,5 +14,10 @@ interface PQLTranslator {
      * @return CypherQuery object containing the Cypher query string and parameters
      * @throws IllegalArgumentException if the PQL query is invalid
      */
-    fun translateToCypher(pqlQuery: String, logId: String? = null, classifiers: Map<String, List<String>> = emptyMap(), defaultTraceLimit: Int? = null): CypherQuery
+    fun translateToCypher(
+        pqlQuery: String,
+        logId: String? = null,
+        classifiers: Map<String, List<String>> = emptyMap(),
+        defaultTraceLimit: Int? = null,
+    ): CypherQuery
 }

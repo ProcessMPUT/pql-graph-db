@@ -55,6 +55,7 @@ class PQLSyntaxException : PQLException {
         this.charPositionInLine = charPositionInLine
         this.args = arrayOf(message)
     }
+
     /**
      * Enumeration of all possible PQL syntax/semantic problems.
      *
@@ -161,8 +162,8 @@ class PQLParserException(
     originalMessage: String?,
     val baseException: RecognitionException? = null,
 ) : PQLException(
-    "Line $line position $charPositionInLine: $originalMessage (offendingToken='$offendingToken' expectedTokens='$expectedTokens' problem=$problem)",
-) {
+        "Line $line position $charPositionInLine: $originalMessage (offendingToken='$offendingToken' expectedTokens='$expectedTokens' problem=$problem)",
+    ) {
     /**
      * Enumeration of all possible ANTLR parser problems.
      *

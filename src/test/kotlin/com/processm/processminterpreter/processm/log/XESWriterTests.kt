@@ -4,7 +4,9 @@ import com.processm.processminterpreter.xes.XESParser
 import com.processm.processminterpreter.xes.XESWriter
 import org.junit.jupiter.api.Test
 import java.io.ByteArrayOutputStream
-import kotlin.test.*
+import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 
 /**
  * XES Writer tests adapted from ProcessM XMLXESOutputStreamTest.kt
@@ -17,7 +19,6 @@ import kotlin.test.*
  * These tests verify that XESWriter produces valid, parseable XES XML.
  */
 class XESWriterTests {
-
     private val writer = XESWriter()
     private val parser = XESParser()
 
@@ -28,17 +29,19 @@ class XESWriterTests {
     @Test
     fun `writer produces valid XES XML header`() {
         // ProcessM: verify output starts with XML declaration and log element
-        val results = listOf(
-            mapOf<String, Any?>(
-                "traceId" to "trace-1",
-                "caseId" to "Case001",
-                "event" to mapOf(
-                    "activity" to "Activity A",
-                    "timestamp" to java.time.LocalDateTime.of(2023, 1, 15, 10, 0),
-                    "lifecycle" to "complete"
-                )
+        val results =
+            listOf(
+                mapOf<String, Any?>(
+                    "traceId" to "trace-1",
+                    "caseId" to "Case001",
+                    "event" to
+                        mapOf(
+                            "activity" to "Activity A",
+                            "timestamp" to java.time.LocalDateTime.of(2023, 1, 15, 10, 0),
+                            "lifecycle" to "complete",
+                        ),
+                ),
             )
-        )
 
         val output = ByteArrayOutputStream()
         writer.writeXES(results, output, logName = "Test Log")
@@ -53,12 +56,13 @@ class XESWriterTests {
     @Test
     fun `writer includes standard extensions`() {
         // ProcessM: XMLXESOutputStream writes standard XES extensions
-        val results = listOf(
-            mapOf<String, Any?>(
-                "traceId" to "trace-1",
-                "event" to mapOf("activity" to "A", "lifecycle" to "complete")
+        val results =
+            listOf(
+                mapOf<String, Any?>(
+                    "traceId" to "trace-1",
+                    "event" to mapOf("activity" to "A", "lifecycle" to "complete"),
+                ),
             )
-        )
 
         val output = ByteArrayOutputStream()
         writer.writeXES(results, output)
@@ -73,28 +77,31 @@ class XESWriterTests {
     @Test
     fun `writer produces trace and event structure`() {
         // ProcessM: verify trace/event hierarchy in output
-        val results = listOf(
-            mapOf<String, Any?>(
-                "traceId" to "trace-001",
-                "caseId" to "Case001",
-                "event" to mapOf(
-                    "activity" to "Register",
-                    "timestamp" to java.time.LocalDateTime.of(2023, 6, 1, 9, 0),
-                    "resource" to "John",
-                    "lifecycle" to "complete"
-                )
-            ),
-            mapOf<String, Any?>(
-                "traceId" to "trace-001",
-                "caseId" to "Case001",
-                "event" to mapOf(
-                    "activity" to "Approve",
-                    "timestamp" to java.time.LocalDateTime.of(2023, 6, 1, 10, 0),
-                    "resource" to "Jane",
-                    "lifecycle" to "complete"
-                )
+        val results =
+            listOf(
+                mapOf<String, Any?>(
+                    "traceId" to "trace-001",
+                    "caseId" to "Case001",
+                    "event" to
+                        mapOf(
+                            "activity" to "Register",
+                            "timestamp" to java.time.LocalDateTime.of(2023, 6, 1, 9, 0),
+                            "resource" to "John",
+                            "lifecycle" to "complete",
+                        ),
+                ),
+                mapOf<String, Any?>(
+                    "traceId" to "trace-001",
+                    "caseId" to "Case001",
+                    "event" to
+                        mapOf(
+                            "activity" to "Approve",
+                            "timestamp" to java.time.LocalDateTime.of(2023, 6, 1, 10, 0),
+                            "resource" to "Jane",
+                            "lifecycle" to "complete",
+                        ),
+                ),
             )
-        )
 
         val output = ByteArrayOutputStream()
         writer.writeXES(results, output, logName = "Trace Test")
@@ -119,39 +126,43 @@ class XESWriterTests {
     fun `writer round-trip produces parseable XES`() {
         // ProcessM: verify that output can be parsed back
         // This is the key "round-trip" test from ProcessM
-        val results = listOf(
-            mapOf<String, Any?>(
-                "traceId" to "trace-rt-1",
-                "caseId" to "RoundTrip-001",
-                "event" to mapOf(
-                    "activity" to "Start Process",
-                    "timestamp" to java.time.LocalDateTime.of(2023, 3, 15, 8, 0),
-                    "resource" to "Alice",
-                    "lifecycle" to "start"
-                )
-            ),
-            mapOf<String, Any?>(
-                "traceId" to "trace-rt-1",
-                "caseId" to "RoundTrip-001",
-                "event" to mapOf(
-                    "activity" to "Start Process",
-                    "timestamp" to java.time.LocalDateTime.of(2023, 3, 15, 8, 30),
-                    "resource" to "Alice",
-                    "lifecycle" to "complete"
-                )
-            ),
-            mapOf<String, Any?>(
-                "traceId" to "trace-rt-2",
-                "caseId" to "RoundTrip-002",
-                "event" to mapOf(
-                    "activity" to "Review",
-                    "timestamp" to java.time.LocalDateTime.of(2023, 3, 15, 9, 0),
-                    "resource" to "Bob",
-                    "lifecycle" to "complete",
-                    "cost" to 25.50
-                )
+        val results =
+            listOf(
+                mapOf<String, Any?>(
+                    "traceId" to "trace-rt-1",
+                    "caseId" to "RoundTrip-001",
+                    "event" to
+                        mapOf(
+                            "activity" to "Start Process",
+                            "timestamp" to java.time.LocalDateTime.of(2023, 3, 15, 8, 0),
+                            "resource" to "Alice",
+                            "lifecycle" to "start",
+                        ),
+                ),
+                mapOf<String, Any?>(
+                    "traceId" to "trace-rt-1",
+                    "caseId" to "RoundTrip-001",
+                    "event" to
+                        mapOf(
+                            "activity" to "Start Process",
+                            "timestamp" to java.time.LocalDateTime.of(2023, 3, 15, 8, 30),
+                            "resource" to "Alice",
+                            "lifecycle" to "complete",
+                        ),
+                ),
+                mapOf<String, Any?>(
+                    "traceId" to "trace-rt-2",
+                    "caseId" to "RoundTrip-002",
+                    "event" to
+                        mapOf(
+                            "activity" to "Review",
+                            "timestamp" to java.time.LocalDateTime.of(2023, 3, 15, 9, 0),
+                            "resource" to "Bob",
+                            "lifecycle" to "complete",
+                            "cost" to 25.50,
+                        ),
+                ),
             )
-        )
 
         // Write
         val output = ByteArrayOutputStream()
@@ -177,15 +188,17 @@ class XESWriterTests {
     @Test
     fun `writer escapes XML special characters`() {
         // ProcessM: XML output should properly escape special characters
-        val results = listOf(
-            mapOf<String, Any?>(
-                "traceId" to "trace-esc",
-                "event" to mapOf(
-                    "activity" to "Check <status> & verify \"result\"",
-                    "lifecycle" to "complete"
-                )
+        val results =
+            listOf(
+                mapOf<String, Any?>(
+                    "traceId" to "trace-esc",
+                    "event" to
+                        mapOf(
+                            "activity" to "Check <status> & verify \"result\"",
+                            "lifecycle" to "complete",
+                        ),
+                ),
             )
-        )
 
         val output = ByteArrayOutputStream()
         writer.writeXES(results, output)
@@ -204,28 +217,29 @@ class XESWriterTests {
     @Test
     fun `writer handles multiple traces from flat results`() {
         // ProcessM: XMLXESOutputStream groups flat records into traces
-        val results = listOf(
-            mapOf<String, Any?>(
-                "traceId" to "t1",
-                "event" to mapOf("activity" to "A1", "lifecycle" to "complete")
-            ),
-            mapOf<String, Any?>(
-                "traceId" to "t2",
-                "event" to mapOf("activity" to "B1", "lifecycle" to "complete")
-            ),
-            mapOf<String, Any?>(
-                "traceId" to "t1",
-                "event" to mapOf("activity" to "A2", "lifecycle" to "complete")
-            ),
-            mapOf<String, Any?>(
-                "traceId" to "t3",
-                "event" to mapOf("activity" to "C1", "lifecycle" to "complete")
-            ),
-            mapOf<String, Any?>(
-                "traceId" to "t2",
-                "event" to mapOf("activity" to "B2", "lifecycle" to "complete")
+        val results =
+            listOf(
+                mapOf<String, Any?>(
+                    "traceId" to "t1",
+                    "event" to mapOf("activity" to "A1", "lifecycle" to "complete"),
+                ),
+                mapOf<String, Any?>(
+                    "traceId" to "t2",
+                    "event" to mapOf("activity" to "B1", "lifecycle" to "complete"),
+                ),
+                mapOf<String, Any?>(
+                    "traceId" to "t1",
+                    "event" to mapOf("activity" to "A2", "lifecycle" to "complete"),
+                ),
+                mapOf<String, Any?>(
+                    "traceId" to "t3",
+                    "event" to mapOf("activity" to "C1", "lifecycle" to "complete"),
+                ),
+                mapOf<String, Any?>(
+                    "traceId" to "t2",
+                    "event" to mapOf("activity" to "B2", "lifecycle" to "complete"),
+                ),
             )
-        )
 
         val output = ByteArrayOutputStream()
         writer.writeXES(results, output, logName = "Multi-Trace")

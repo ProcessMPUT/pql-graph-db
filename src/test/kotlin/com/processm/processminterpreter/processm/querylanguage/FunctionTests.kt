@@ -1,10 +1,12 @@
 package com.processm.processminterpreter.processm.querylanguage
 
-import com.processm.processminterpreter.pql.model.*
-import com.processm.processminterpreter.pql.model.Function as PQLFunction
+import com.processm.processminterpreter.pql.model.Attribute
+import com.processm.processminterpreter.pql.model.DateTimeLiteral
+import com.processm.processminterpreter.pql.model.FunctionType
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import com.processm.processminterpreter.pql.model.Function as PQLFunction
 
 /**
  * Function Tests - 1:1 copy of original ProcessM FunctionTests.kt
@@ -12,7 +14,6 @@ import kotlin.test.assertFailsWith
  * Source: https://github.com/ProcessMPUT/processm/blob/master/processm.core/src/test/kotlin/processm/core/querylanguage/FunctionTests.kt
  */
 class FunctionTests {
-
     @Test
     fun validScalarFunctionTest() {
         val dateTime = DateTimeLiteral.parse("D2020-03-26", 0, 0)

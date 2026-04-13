@@ -18,7 +18,6 @@ class CypherTranslationContext(
     var paramCounter = 0
 
     var currentScope: Scope = Scope.Event
-    val scopeStack = mutableListOf<Scope>()
 
     val usedScopes = mutableSetOf<Scope>()
     val columnAliases = mutableMapOf<String, ColumnAlias>()

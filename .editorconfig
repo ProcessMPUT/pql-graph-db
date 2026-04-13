@@ -1,57 +1,19 @@
-# EditorConfig is awesome: https://EditorConfig.org
-
-# top-most EditorConfig file
 root = true
 
 [*]
 charset = utf-8
 end_of_line = lf
-insert_final_newline = true
-trim_trailing_whitespace = true
 indent_style = space
 indent_size = 4
+insert_final_newline = true
+trim_trailing_whitespace = true
 
 [*.{kt,kts}]
-# Kotlin code style
-indent_size = 4
-continuation_indent_size = 4
 max_line_length = 140
-insert_final_newline = true
 
-# ktlint rules
-ktlint_standard_no-wildcard-imports = disabled
-ktlint_standard_filename = disabled
-ij_kotlin_code_style_defaults = KOTLIN_OFFICIAL
-
-# Import ordering
-ij_kotlin_imports_layout = *,java.**,javax.**,kotlin.**,^
-
-# Blank lines
-ij_kotlin_blank_lines_before_declaration_with_comment_or_annotation_on_separate_line = 1
-ij_kotlin_keep_blank_lines_in_declarations = 1
-ij_kotlin_keep_blank_lines_in_code = 1
-ij_kotlin_keep_blank_lines_before_right_brace = 0
-
-# Wrapping
-ij_kotlin_method_parameters_wrap = off
-ij_kotlin_method_parameters_lparen_on_next_line = false
-ij_kotlin_method_parameters_rparen_on_next_line = false
-
-# Alignment
-ij_kotlin_align_multiline_parameters = false
-
-[*.{yml,yaml}]
+[*.{yml,yaml,json,xml}]
 indent_size = 2
 
-[*.{json}]
-indent_size = 2
-
-[*.{xml}]
-indent_size = 2
-
-[*.{md}]
+[*.md]
 trim_trailing_whitespace = false
 max_line_length = off
-
-[{build.gradle.kts,settings.gradle.kts}]
-indent_size = 4

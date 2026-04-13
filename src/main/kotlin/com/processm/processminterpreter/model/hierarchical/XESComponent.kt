@@ -1,8 +1,6 @@
 package com.processm.processminterpreter.model.hierarchical
 
-import java.time.Instant
-import java.time.ZonedDateTime
-import java.util.*
+import java.util.UUID
 
 /**
  * Base class for all XES components (Log, Trace, Event)
@@ -45,7 +43,7 @@ abstract class XESComponent {
 data class Extension(
     val name: String,
     val prefix: String,
-    val uri: String
+    val uri: String,
 )
 
 /**
@@ -68,7 +66,7 @@ abstract class TraceOrEventBase : XESComponent() {
  */
 data class EventClassifier(
     val name: String,
-    val keys: List<String>
+    val keys: List<String>,
 )
 
 /**
@@ -76,5 +74,5 @@ data class EventClassifier(
  */
 data class GlobalAttribute(
     val scope: String,
-    val attributes: Map<String, Any?>
+    val attributes: Map<String, Any?>,
 )

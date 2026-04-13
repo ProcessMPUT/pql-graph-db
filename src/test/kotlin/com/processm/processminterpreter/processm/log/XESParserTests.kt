@@ -3,7 +3,10 @@ package com.processm.processminterpreter.processm.log
 import com.processm.processminterpreter.xes.XESParseException
 import com.processm.processminterpreter.xes.XESParser
 import org.junit.jupiter.api.Test
-import kotlin.test.*
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 
 /**
  * XES Parser tests adapted from ProcessM XMLXESInputStreamTest.kt
@@ -15,11 +18,12 @@ import kotlin.test.*
  * Our parser returns XESLog with LogNode/TraceNode/EventNode instead of a flat sequence.
  */
 class XESParserTests {
-
     private val parser = XESParser()
 
     // Rich XES content based on ProcessM's test fixture
-    private val content = """<?xml version="1.0" encoding="UTF-8" ?>
+    private val content =
+        """
+        <?xml version="1.0" encoding="UTF-8" ?>
         <log xes.version="1.0" xes.features="nested-attributes" openxes.version="1.0RC7" xmlns="http://www.xes-standard.org/">
             <extension name="Lifecycle" prefix="lifecycle" uri="http://www.xes-standard.org/lifecycle.xesext"/>
             <extension name="Concept" prefix="conceptowy" uri="http://www.xes-standard.org/concept.xesext"/>
@@ -69,7 +73,7 @@ class XESParserTests {
                 </event>
             </trace>
         </log>
-    """.trimIndent()
+        """.trimIndent()
 
     // =====================
     // Log-level parsing (from ProcessM XMLXESInputStreamTest)
@@ -197,11 +201,13 @@ class XESParserTests {
     @Test
     fun `parser throws exception for invalid root element`() {
         // ProcessM: XES parser will throw exception when found invalid XML tag inside log structure
-        val invalidXml = """<?xml version="1.0" encoding="UTF-8" ?>
+        val invalidXml =
+            """
+            <?xml version="1.0" encoding="UTF-8" ?>
             <notaolog>
                 <trace><event/></trace>
             </notaolog>
-        """.trimIndent()
+            """.trimIndent()
 
         assertFailsWith<XESParseException> {
             parser.parseXES(invalidXml.byteInputStream(), "test-log")
@@ -210,11 +216,13 @@ class XESParserTests {
 
     @Test
     fun `parser handles empty log with no traces`() {
-        val emptyLog = """<?xml version="1.0" encoding="UTF-8" ?>
+        val emptyLog =
+            """
+            <?xml version="1.0" encoding="UTF-8" ?>
             <log xes.version="1.0" xmlns="http://www.xes-standard.org/">
                 <string key="concept:name" value="Empty Log"/>
             </log>
-        """.trimIndent()
+            """.trimIndent()
 
         val result = parser.parseXES(emptyLog.byteInputStream(), "test-log")
         assertEquals("Empty Log", result.logNode.name)
@@ -224,7 +232,9 @@ class XESParserTests {
     @Test
     fun `parser handles event with missing concept name`() {
         // ProcessM defaults to handling missing attributes gracefully
-        val xes = """<?xml version="1.0" encoding="UTF-8" ?>
+        val xes =
+            """
+            <?xml version="1.0" encoding="UTF-8" ?>
             <log xes.version="1.0" xmlns="http://www.xes-standard.org/">
                 <string key="concept:name" value="Test Log"/>
                 <trace>
@@ -235,11 +245,15 @@ class XESParserTests {
                     </event>
                 </trace>
             </log>
-        """.trimIndent()
+            """.trimIndent()
 
         val result = parser.parseXES(xes.byteInputStream(), "test-log")
         // Event without concept:name should get default activity
-        assertNotNull(result.traces[0].events[0].eventNode.activity)
+        assertNotNull(
+            result.traces[0]
+                .events[0]
+                .eventNode.activity,
+        )
     }
 
     // =====================
@@ -248,7 +262,9 @@ class XESParserTests {
 
     @Test
     fun `parser handles boolean attributes`() {
-        val xes = """<?xml version="1.0" encoding="UTF-8" ?>
+        val xes =
+            """
+            <?xml version="1.0" encoding="UTF-8" ?>
             <log xes.version="1.0" xmlns="http://www.xes-standard.org/">
                 <string key="concept:name" value="Test Log"/>
                 <boolean key="is_test" value="true"/>
@@ -261,7 +277,7 @@ class XESParserTests {
                     </event>
                 </trace>
             </log>
-        """.trimIndent()
+            """.trimIndent()
 
         val result = parser.parseXES(xes.byteInputStream(), "test-log")
         assertEquals(true, result.logNode.attributes["is_test"])
@@ -270,7 +286,9 @@ class XESParserTests {
 
     @Test
     fun `parser handles multiple traces`() {
-        val xes = """<?xml version="1.0" encoding="UTF-8" ?>
+        val xes =
+            """
+            <?xml version="1.0" encoding="UTF-8" ?>
             <log xes.version="1.0" xmlns="http://www.xes-standard.org/">
                 <string key="concept:name" value="Multi-trace Log"/>
                 <trace>
@@ -295,7 +313,7 @@ class XESParserTests {
                     </event>
                 </trace>
             </log>
-        """.trimIndent()
+            """.trimIndent()
 
         val result = parser.parseXES(xes.byteInputStream(), "test-log")
         assertEquals(3, result.traces.size)
@@ -306,7 +324,9 @@ class XESParserTests {
 
     @Test
     fun `parser generates unique trace and event IDs`() {
-        val xes = """<?xml version="1.0" encoding="UTF-8" ?>
+        val xes =
+            """
+            <?xml version="1.0" encoding="UTF-8" ?>
             <log xes.version="1.0" xmlns="http://www.xes-standard.org/">
                 <string key="concept:name" value="ID Test"/>
                 <trace>
@@ -328,7 +348,7 @@ class XESParserTests {
                     </event>
                 </trace>
             </log>
-        """.trimIndent()
+            """.trimIndent()
 
         val result = parser.parseXES(xes.byteInputStream(), "test-log")
 
@@ -341,7 +361,9 @@ class XESParserTests {
 
     @Test
     fun `parser extracts cost attributes`() {
-        val xes = """<?xml version="1.0" encoding="UTF-8" ?>
+        val xes =
+            """
+            <?xml version="1.0" encoding="UTF-8" ?>
             <log xes.version="1.0" xmlns="http://www.xes-standard.org/">
                 <string key="concept:name" value="Cost Test"/>
                 <trace>
@@ -356,7 +378,7 @@ class XESParserTests {
                     </event>
                 </trace>
             </log>
-        """.trimIndent()
+            """.trimIndent()
 
         val result = parser.parseXES(xes.byteInputStream(), "test-log")
 
@@ -365,12 +387,19 @@ class XESParserTests {
         assertEquals("EUR", result.traces[0].traceNode.attributes["cost:currency"])
 
         // Event cost
-        assertEquals(50.25, result.traces[0].events[0].eventNode.cost)
+        assertEquals(
+            50.25,
+            result.traces[0]
+                .events[0]
+                .eventNode.cost,
+        )
     }
 
     @Test
     fun `parser extracts org resource attribute`() {
-        val xes = """<?xml version="1.0" encoding="UTF-8" ?>
+        val xes =
+            """
+            <?xml version="1.0" encoding="UTF-8" ?>
             <log xes.version="1.0" xmlns="http://www.xes-standard.org/">
                 <string key="concept:name" value="Org Test"/>
                 <trace>
@@ -384,7 +413,7 @@ class XESParserTests {
                     </event>
                 </trace>
             </log>
-        """.trimIndent()
+            """.trimIndent()
 
         val result = parser.parseXES(xes.byteInputStream(), "test-log")
         val event = result.traces[0].events[0].eventNode

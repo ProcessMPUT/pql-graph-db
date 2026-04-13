@@ -47,7 +47,8 @@ class ExpressionTranslator(
      */
     fun translateSelectExpression(expr: IExpression): String {
         if (expr is BinaryOperator && expr.operator == "-" &&
-                isTemporalAggExpression(expr.left) && isTemporalAggExpression(expr.right)) {
+            isTemporalAggExpression(expr.left) && isTemporalAggExpression(expr.right)
+        ) {
             val left = translate(expr.left)
             val right = translate(expr.right)
             return "duration.between($right, $left)"
@@ -71,17 +72,38 @@ class ExpressionTranslator(
         val operator = op.operator.uppercase()
 
         return when (operator) {
-            "=", "<>", ">", ">=", "<", "<=", "AND", "OR" -> "($left $operator $right)"
-            "!=" -> "($left <> $right)"
-            "IN" -> "$left IN $right"
-            "NOT IN" -> "NOT ($left IN $right)"
+            "=", "<>", ">", ">=", "<", "<=", "AND", "OR" -> {
+                "($left $operator $right)"
+            }
+
+            "!=" -> {
+                "($left <> $right)"
+            }
+
+            "IN" -> {
+                "$left IN $right"
+            }
+
+            "NOT IN" -> {
+                "NOT ($left IN $right)"
+            }
+
             "LIKE" -> {
                 convertLikeParamToRegex(right)
                 "$left =~ $right"
             }
-            "MATCHES" -> "$left =~ $right"
-            "+", "-", "*", "/", "%" -> "($left $operator $right)"
-            else -> "($left $operator $right)"
+
+            "MATCHES" -> {
+                "$left =~ $right"
+            }
+
+            "+", "-", "*", "/", "%" -> {
+                "($left $operator $right)"
+            }
+
+            else -> {
+                "($left $operator $right)"
+            }
         }
     }
 
@@ -102,8 +124,14 @@ class ExpressionTranslator(
         val rawValues =
             expr.values.map { value ->
                 when (value) {
-                    is StringLiteral -> value.value
-                    is NumberLiteral -> value.value
+                    is StringLiteral -> {
+                        value.value
+                    }
+
+                    is NumberLiteral -> {
+                        value.value
+                    }
+
                     is DateTimeLiteral -> {
                         if (value.value.hour == 0 && value.value.minute == 0 && value.value.second == 0) {
                             value.value.toLocalDate().toString()
@@ -111,9 +139,18 @@ class ExpressionTranslator(
                             value.value.toString()
                         }
                     }
-                    is BooleanLiteral -> value.value
-                    is NullLiteral -> null
-                    else -> throw IllegalArgumentException("Unsupported value type in IN list: ${value::class.simpleName}")
+
+                    is BooleanLiteral -> {
+                        value.value
+                    }
+
+                    is NullLiteral -> {
+                        null
+                    }
+
+                    else -> {
+                        throw IllegalArgumentException("Unsupported value type in IN list: ${value::class.simpleName}")
+                    }
                 }
             }
 
@@ -149,16 +186,17 @@ class ExpressionTranslator(
         val args = func.children.map { translate(it) }
 
         // Handle date/time extraction functions as property accessors
-        val dateProperty = when (funcName) {
-            "year" -> "year"
-            "month" -> "month"
-            "day" -> "day"
-            "hour" -> "hour"
-            "minute" -> "minute"
-            "second" -> "second"
-            "dayofweek" -> "dayOfWeek"
-            else -> null
-        }
+        val dateProperty =
+            when (funcName) {
+                "year" -> "year"
+                "month" -> "month"
+                "day" -> "day"
+                "hour" -> "hour"
+                "minute" -> "minute"
+                "second" -> "second"
+                "dayofweek" -> "dayOfWeek"
+                else -> null
+            }
 
         if (dateProperty != null && args.size == 1) {
             if (funcName == "dayofweek") {
@@ -174,8 +212,14 @@ class ExpressionTranslator(
                         val child = func.children[0]
                         if (child is Attribute) {
                             when (child.scope) {
-                                com.processm.processminterpreter.pql.model.Scope.Log -> return "count(DISTINCT log)"
-                                com.processm.processminterpreter.pql.model.Scope.Trace -> return "count(DISTINCT trace)"
+                                com.processm.processminterpreter.pql.model.Scope.Log -> {
+                                    return "count(DISTINCT log)"
+                                }
+
+                                com.processm.processminterpreter.pql.model.Scope.Trace -> {
+                                    return "count(DISTINCT trace)"
+                                }
+
                                 else -> {}
                             }
                         }
@@ -188,13 +232,43 @@ class ExpressionTranslator(
                     }
                     "count"
                 }
-                "sum", "avg", "min", "max" -> funcName
-                "now" -> "datetime"
-                "lower", "upper", "trim" -> funcName
-                "substring" -> "substring"
-                "length" -> "size"
-                "abs", "ceil", "floor", "round", "sqrt" -> funcName
-                else -> funcName
+
+                // sum() in Cypher returns 0 when all values are null (unlike SQL which returns null).
+                // Wrap with CASE to match SQL/ProcessM semantics.
+                "sum" -> {
+                    if (args.size == 1) {
+                        return "CASE WHEN count(${args[0]}) = 0 THEN null ELSE sum(${args[0]}) END"
+                    }
+                    "sum"
+                }
+
+                "avg", "min", "max" -> {
+                    funcName
+                }
+
+                "now" -> {
+                    "datetime"
+                }
+
+                "lower", "upper", "trim" -> {
+                    funcName
+                }
+
+                "substring" -> {
+                    "substring"
+                }
+
+                "length" -> {
+                    "size"
+                }
+
+                "abs", "ceil", "floor", "round", "sqrt" -> {
+                    funcName
+                }
+
+                else -> {
+                    funcName
+                }
             }
 
         return if (args.isEmpty()) {
@@ -235,24 +309,26 @@ class ExpressionTranslator(
         val paramName = paramRef.removePrefix("$")
         val value = ctx.parameters[paramName]
         if (value is String) {
-            val escaped = value
-                .replace("\\", "\\\\")
-                .replace(".", "\\.")
-                .replace("^", "\\^")
-                .replace("$", "\\$")
-                .replace("+", "\\+")
-                .replace("?", "\\?")
-                .replace("{", "\\{")
-                .replace("}", "\\}")
-                .replace("|", "\\|")
-                .replace("(", "\\(")
-                .replace(")", "\\)")
-                .replace("[", "\\[")
-                .replace("]", "\\]")
-                .replace("*", "\\*")
-            val regex = escaped
-                .replace("%", ".*")
-                .replace("_", ".")
+            val escaped =
+                value
+                    .replace("\\", "\\\\")
+                    .replace(".", "\\.")
+                    .replace("^", "\\^")
+                    .replace("$", "\\$")
+                    .replace("+", "\\+")
+                    .replace("?", "\\?")
+                    .replace("{", "\\{")
+                    .replace("}", "\\}")
+                    .replace("|", "\\|")
+                    .replace("(", "\\(")
+                    .replace(")", "\\)")
+                    .replace("[", "\\[")
+                    .replace("]", "\\]")
+                    .replace("*", "\\*")
+            val regex =
+                escaped
+                    .replace("%", ".*")
+                    .replace("_", ".")
             ctx.parameters[paramName] = regex
         }
     }

@@ -43,10 +43,6 @@ class XESParserTest {
         assertEquals("John Doe", firstEvent.eventNode.resource)
         assertEquals("complete", firstEvent.eventNode.lifecycle)
         assertEquals(50.0, firstEvent.eventNode.cost)
-
-
-
-
     }
 
     @Test
@@ -66,8 +62,6 @@ class XESParserTest {
         assertNotNull(result)
         assertTrue(result.logNode.logId.startsWith("log-"))
         assertEquals("Sample Process Log", result.logNode.name)
-
-
     }
 
     @Test
@@ -88,8 +82,6 @@ class XESParserTest {
         assertEquals("Case_002", secondTrace.traceNode.caseId)
         assertEquals("Variant_B", secondTrace.traceNode.attributes["case:variant"])
         assertEquals(2, secondTrace.traceNode.attributes["case:priority"])
-
-
     }
 
     @Test
@@ -112,8 +104,6 @@ class XESParserTest {
         assertEquals("Reception", firstEvent.eventNode.attributes["org:group"])
         assertEquals(50.0, firstEvent.eventNode.cost)
         assertNotNull(firstEvent.eventNode.timestamp)
-
-
     }
 
     @Test
@@ -139,7 +129,5 @@ class XESParserTest {
         // Check uniqueness
         assertEquals(allTraceIds.size, allTraceIds.toSet().size, "All trace IDs should be unique")
         assertEquals(allEventIds.size, allEventIds.toSet().size, "All event IDs should be unique")
-
-
     }
 }

@@ -2,7 +2,9 @@ package com.processm.processminterpreter.processm.log
 
 import com.processm.processminterpreter.xes.XESParser
 import org.junit.jupiter.api.Test
-import kotlin.test.*
+import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 
 /**
  * XES Import Certification tests adapted from ProcessM XESImportCertificationFirstLevelTest.kt
@@ -20,7 +22,6 @@ import kotlin.test.*
  * Adapted from ProcessM's streaming XMLXESInputStream to our DOM-based XESParser.
  */
 class XESImportCertificationTest {
-
     private val parser = XESParser()
 
     // =====================
@@ -30,7 +31,9 @@ class XESImportCertificationTest {
     @Test
     fun `A1 - parser handles concept name and identity id`() {
         // ProcessM: Level A1 requires concept:name and identity:id at all levels
-        val xes = """<?xml version="1.0" encoding="UTF-8" ?>
+        val xes =
+            """
+            <?xml version="1.0" encoding="UTF-8" ?>
             <log xes.version="1.0" xmlns="http://www.xes-standard.org/">
                 <extension name="Concept" prefix="concept" uri="http://www.xes-standard.org/concept.xesext"/>
                 <extension name="Identity" prefix="identity" uri="http://www.xes-standard.org/identity.xesext"/>
@@ -49,7 +52,7 @@ class XESImportCertificationTest {
                     </event>
                 </trace>
             </log>
-        """.trimIndent()
+            """.trimIndent()
 
         val result = parser.parseXES(xes.byteInputStream(), "cert-a1")
 
@@ -64,10 +67,30 @@ class XESImportCertificationTest {
 
         // Event level
         assertEquals(2, result.traces[0].events.size)
-        assertEquals("Activity A", result.traces[0].events[0].eventNode.activity)
-        assertEquals("22222222-2222-2222-2222-222222222222", result.traces[0].events[0].eventNode.attributes["identity:id"])
-        assertEquals("Activity B", result.traces[0].events[1].eventNode.activity)
-        assertEquals("33333333-3333-3333-3333-333333333333", result.traces[0].events[1].eventNode.attributes["identity:id"])
+        assertEquals(
+            "Activity A",
+            result.traces[0]
+                .events[0]
+                .eventNode.activity,
+        )
+        assertEquals(
+            "22222222-2222-2222-2222-222222222222",
+            result.traces[0]
+                .events[0]
+                .eventNode.attributes["identity:id"],
+        )
+        assertEquals(
+            "Activity B",
+            result.traces[0]
+                .events[1]
+                .eventNode.activity,
+        )
+        assertEquals(
+            "33333333-3333-3333-3333-333333333333",
+            result.traces[0]
+                .events[1]
+                .eventNode.attributes["identity:id"],
+        )
     }
 
     // =====================
@@ -77,7 +100,9 @@ class XESImportCertificationTest {
     @Test
     fun `B1 - parser handles lifecycle and timestamp`() {
         // ProcessM: Level B1 adds lifecycle:transition and time:timestamp
-        val xes = """<?xml version="1.0" encoding="UTF-8" ?>
+        val xes =
+            """
+            <?xml version="1.0" encoding="UTF-8" ?>
             <log xes.version="1.0" xmlns="http://www.xes-standard.org/">
                 <extension name="Concept" prefix="concept" uri="http://www.xes-standard.org/concept.xesext"/>
                 <extension name="Lifecycle" prefix="lifecycle" uri="http://www.xes-standard.org/lifecycle.xesext"/>
@@ -98,7 +123,7 @@ class XESImportCertificationTest {
                     </event>
                 </trace>
             </log>
-        """.trimIndent()
+            """.trimIndent()
 
         val result = parser.parseXES(xes.byteInputStream(), "cert-b1")
 
@@ -127,7 +152,9 @@ class XESImportCertificationTest {
     @Test
     fun `C1 - parser handles organizational attributes`() {
         // ProcessM: Level C1 adds organizational extension
-        val xes = """<?xml version="1.0" encoding="UTF-8" ?>
+        val xes =
+            """
+            <?xml version="1.0" encoding="UTF-8" ?>
             <log xes.version="1.0" xmlns="http://www.xes-standard.org/">
                 <extension name="Concept" prefix="concept" uri="http://www.xes-standard.org/concept.xesext"/>
                 <extension name="Organizational" prefix="org" uri="http://www.xes-standard.org/org.xesext"/>
@@ -154,7 +181,7 @@ class XESImportCertificationTest {
                     </event>
                 </trace>
             </log>
-        """.trimIndent()
+            """.trimIndent()
 
         val result = parser.parseXES(xes.byteInputStream(), "cert-c1")
 
@@ -176,7 +203,9 @@ class XESImportCertificationTest {
     @Test
     fun `D1 - parser handles cost attributes`() {
         // ProcessM: Level D1 adds cost extension (cost:total, cost:currency)
-        val xes = """<?xml version="1.0" encoding="UTF-8" ?>
+        val xes =
+            """
+            <?xml version="1.0" encoding="UTF-8" ?>
             <log xes.version="1.0" xmlns="http://www.xes-standard.org/">
                 <extension name="Concept" prefix="concept" uri="http://www.xes-standard.org/concept.xesext"/>
                 <extension name="Cost" prefix="cost" uri="http://www.xes-standard.org/cost.xesext"/>
@@ -199,7 +228,7 @@ class XESImportCertificationTest {
                     </event>
                 </trace>
             </log>
-        """.trimIndent()
+            """.trimIndent()
 
         val result = parser.parseXES(xes.byteInputStream(), "cert-d1")
 
@@ -224,7 +253,9 @@ class XESImportCertificationTest {
     @Test
     fun `X1 - parser handles non-standard extensions and custom attributes`() {
         // ProcessM: Level X1 tests non-standard custom attributes
-        val xes = """<?xml version="1.0" encoding="UTF-8" ?>
+        val xes =
+            """
+            <?xml version="1.0" encoding="UTF-8" ?>
             <log xes.version="1.0" xmlns="http://www.xes-standard.org/">
                 <extension name="Concept" prefix="concept" uri="http://www.xes-standard.org/concept.xesext"/>
                 <string key="concept:name" value="X1 Test Log"/>
@@ -246,7 +277,7 @@ class XESImportCertificationTest {
                     </event>
                 </trace>
             </log>
-        """.trimIndent()
+            """.trimIndent()
 
         val result = parser.parseXES(xes.byteInputStream(), "cert-x1")
 
@@ -276,7 +307,9 @@ class XESImportCertificationTest {
     @Test
     fun `full certification - parser handles all standard and custom attributes together`() {
         // Tests all certification levels combined in one XES file
-        val xes = """<?xml version="1.0" encoding="UTF-8" ?>
+        val xes =
+            """
+            <?xml version="1.0" encoding="UTF-8" ?>
             <log xes.version="1.0" xes.features="nested-attributes" xmlns="http://www.xes-standard.org/">
                 <extension name="Concept" prefix="concept" uri="http://www.xes-standard.org/concept.xesext"/>
                 <extension name="Identity" prefix="identity" uri="http://www.xes-standard.org/identity.xesext"/>
@@ -332,7 +365,7 @@ class XESImportCertificationTest {
                     </event>
                 </trace>
             </log>
-        """.trimIndent()
+            """.trimIndent()
 
         val result = parser.parseXES(xes.byteInputStream(), "cert-full")
 
@@ -357,16 +390,16 @@ class XESImportCertificationTest {
 
         // Event 1: all levels
         val event1 = trace.events[0].eventNode
-        assertEquals("Submit Request", event1.activity)                  // A1
-        assertEquals("event-id-001", event1.attributes["identity:id"])   // A1
-        assertEquals("complete", event1.lifecycle)                       // B1
-        assertNotNull(event1.timestamp)                                  // B1
-        assertEquals("Alice", event1.resource)                           // C1
-        assertEquals("Employee", event1.attributes["org:role"])          // C1
-        assertEquals("HR", event1.attributes["org:group"])               // C1
-        assertEquals(10.00, event1.cost)                                 // D1
-        assertEquals("web", event1.attributes["channel"])                // X1
-        assertEquals(0, event1.attributes["retries"])                    // X1
+        assertEquals("Submit Request", event1.activity) // A1
+        assertEquals("event-id-001", event1.attributes["identity:id"]) // A1
+        assertEquals("complete", event1.lifecycle) // B1
+        assertNotNull(event1.timestamp) // B1
+        assertEquals("Alice", event1.resource) // C1
+        assertEquals("Employee", event1.attributes["org:role"]) // C1
+        assertEquals("HR", event1.attributes["org:group"]) // C1
+        assertEquals(10.00, event1.cost) // D1
+        assertEquals("web", event1.attributes["channel"]) // X1
+        assertEquals(0, event1.attributes["retries"]) // X1
 
         // Event 2
         val event2 = trace.events[1].eventNode

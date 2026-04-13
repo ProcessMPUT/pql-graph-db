@@ -7,7 +7,6 @@ import com.processm.processminterpreter.pql.visitor.QLToCypherVisitor
 import org.antlr.v4.runtime.CharStreams
 import org.antlr.v4.runtime.CommonTokenStream
 import org.slf4j.LoggerFactory
-import com.processm.processminterpreter.config.ProcessMConfig
 import org.springframework.stereotype.Component
 
 /**
@@ -17,10 +16,7 @@ import org.springframework.stereotype.Component
  * and translating them to Neo4j Cypher.
  */
 @Component
-class AntlrPQLTranslator(
-    private val processMConfig: ProcessMConfig
-) : PQLTranslator {
-
+class AntlrPQLTranslator : PQLTranslator {
     private val logger = LoggerFactory.getLogger(AntlrPQLTranslator::class.java)
 
     /**
@@ -31,7 +27,12 @@ class AntlrPQLTranslator(
      * @return CypherQuery object containing the Cypher query string and parameters
      * @throws IllegalArgumentException if the PQL query has syntax errors
      */
-    override fun translateToCypher(pqlQuery: String, logId: String?, classifiers: Map<String, List<String>>, defaultTraceLimit: Int?): CypherQuery {
+    override fun translateToCypher(
+        pqlQuery: String,
+        logId: String?,
+        classifiers: Map<String, List<String>>,
+        defaultTraceLimit: Int?,
+    ): CypherQuery {
         logger.debug("Translating PQL query using ANTLR: $pqlQuery")
 
         try {
@@ -59,17 +60,22 @@ class AntlrPQLTranslator(
             errorListener.throwIfErrors()
 
             // Step 8: Visit the AST and generate Cypher query
-            // defaultTraceLimit: null = use config default, -1 = no limit, >0 = explicit limit
-            val effectiveTraceLimit = when (defaultTraceLimit) {
-                null -> processMConfig.defaultTraceLimit
-                -1 -> null  // no default limit (used by tests to match ProcessM test behavior)
-                else -> defaultTraceLimit
-            }
+            // defaultTraceLimit: null = no default limit, -1 = no limit (legacy), >0 = explicit limit
+            val effectiveTraceLimit =
+                when (defaultTraceLimit) {
+                    null -> null
+
+                    // no default limit
+                    -1 -> null
+
+                    // no default limit (used by tests)
+                    else -> defaultTraceLimit
+                }
             val visitor = QLToCypherVisitor(logId, effectiveTraceLimit, classifiers)
             val result = visitor.visit(tree) as CypherQuery
 
             logger.debug("Generated Cypher: ${result.query}")
-            logger.debug("Parameters: ${result.parameters}")
+            logger.debug("Parameters: {}", result.parameters)
 
             return result
         } catch (e: IllegalArgumentException) {

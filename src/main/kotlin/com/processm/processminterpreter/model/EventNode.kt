@@ -1,8 +1,5 @@
 package com.processm.processminterpreter.model
 
-import org.springframework.data.neo4j.core.schema.GeneratedValue
-import org.springframework.data.neo4j.core.schema.Id
-import org.springframework.data.neo4j.core.schema.Node
 import java.time.LocalDateTime
 
 /**
@@ -11,49 +8,38 @@ import java.time.LocalDateTime
  * An event represents a single activity execution within a process trace.
  * Events are the atomic units of process execution.
  */
-@Node("Event")
 data class EventNode(
-    @Id @GeneratedValue
-    val id: Long? = null,
-
     /**
      * Unique identifier for the event
      */
     val eventId: String,
-
     /**
      * Activity name (concept:name from XES event)
      * This is the name of the activity/task being executed
      */
     val activity: String,
-
     /**
      * Timestamp when the event occurred (time:timestamp from XES)
      */
     val timestamp: LocalDateTime,
-
     /**
      * Resource that executed the event (org:resource from XES)
      * Can be a person, system, or organizational unit
      */
     val resource: String? = null,
-
     /**
      * Lifecycle transition (lifecycle:transition from XES)
      * Common values: start, complete, suspend, resume, etc.
      */
     val lifecycle: String? = null,
-
     /**
      * Cost associated with the event (cost:total from XES)
      */
     val cost: Double? = null,
-
     /**
      * Timestamp when the event was created/imported
      */
     val createdAt: LocalDateTime = LocalDateTime.now(),
-
     /**
      * Additional attributes from XES event (stored as JSON-like map)
      * Can contain domain-specific attributes
@@ -63,9 +49,7 @@ data class EventNode(
     /**
      * Get attribute value by key with type casting
      */
-    inline fun <reified T> getAttribute(key: String): T? {
-        return attributes[key] as? T
-    }
+    inline fun <reified T> getAttribute(key: String): T? = attributes[key] as? T
 
     /**
      * Get concept:name attribute (standard XES attribute)

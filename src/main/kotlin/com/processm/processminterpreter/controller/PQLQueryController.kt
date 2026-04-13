@@ -1,10 +1,13 @@
 package com.processm.processminterpreter.controller
 
-import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.JsonNode
+import com.fasterxml.jackson.databind.ObjectMapper
 import com.processm.processminterpreter.dto.ErrorResponse
-import com.processm.processminterpreter.service.PQLQueryService
 import com.processm.processminterpreter.service.PQLQueryResult
+import com.processm.processminterpreter.service.PQLQueryService
+import com.processm.processminterpreter.service.RemoteProcessMService
+import com.processm.processminterpreter.util.XESJsonComparator
+import com.processm.processminterpreter.util.XESJsonConverter
 import org.slf4j.LoggerFactory
 import org.springframework.http.HttpHeaders
 import org.springframework.http.MediaType
@@ -21,11 +24,6 @@ import org.springframework.web.multipart.MultipartFile
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 
-import com.processm.processminterpreter.config.ProcessMConfig
-import com.processm.processminterpreter.service.RemoteProcessMService
-import com.processm.processminterpreter.util.XESJsonComparator
-import com.processm.processminterpreter.util.XESJsonConverter
-
 /**
  * REST Controller for PQL query operations
  *
@@ -38,7 +36,7 @@ class PQLQueryController(
     private val pqlQueryService: PQLQueryService,
     private val remoteProcessMService: RemoteProcessMService,
     private val objectMapper: ObjectMapper,
-    private val processMConfig: ProcessMConfig
+    private val processMConfig: com.processm.processminterpreter.config.ProcessMConfig,
 ) {
     private val logger = LoggerFactory.getLogger(PQLQueryController::class.java)
 
@@ -71,45 +69,49 @@ class PQLQueryController(
             }
 
             // Determine results format based on parameter
-            val results = when (format.lowercase()) {
-                "xes" -> {
-                    // Convert to XES JSON format (matching ProcessM)
-                    logger.debug("Converting ${result.logs.size} logs to XES JSON format")
+            val results =
+                when (format.lowercase()) {
+                    "xes" -> {
+                        // Convert to XES JSON format (matching ProcessM)
+                        logger.debug("Converting ${result.logs.size} logs to XES JSON format")
 
-                    // Detect if this is a projected query (SELECT specific fields vs SELECT *)
-                    // Exclude internally injected tracking columns (t_traceId, l_logId)
-                    val internalKeys = setOf("t_traceId", "l_logId")
-                    val resultKeys = result.results.firstOrNull()?.keys ?: emptySet()
-                    val isProjectedQuery = resultKeys.any { key ->
-                        key !in internalKeys && (
-                            key.startsWith("l_") || key.startsWith("t_") || key.startsWith("e_") ||
-                            key.startsWith("log_") || key.startsWith("trace_") || key.startsWith("event_")
-                        )
-                    } || resultKeys.any { key ->
-                        // Function result aliases (e.g., count_event_concept_name_) are also projected
-                        key !in internalKeys && !key.startsWith("l_") && !key.startsWith("t_") &&
-                            !key.startsWith("e_") && key !in setOf("event", "trace", "log", "e", "t", "l")
+                        // Detect if this is a projected query (SELECT specific fields vs SELECT *)
+                        // Exclude internally injected tracking columns (t_traceId, l_logId)
+                        val internalKeys = setOf("t_traceId", "l_logId")
+                        val resultKeys = result.results.firstOrNull()?.keys ?: emptySet()
+                        val isProjectedQuery =
+                            resultKeys.any { key ->
+                                key !in internalKeys && (
+                                    key.startsWith("l_") || key.startsWith("t_") || key.startsWith("e_") ||
+                                        key.startsWith("log_") || key.startsWith("trace_") || key.startsWith("event_")
+                                )
+                            } ||
+                                resultKeys.any { key ->
+                                    // Function result aliases (e.g., count_event_concept_name_) are also projected
+                                    key !in internalKeys && !key.startsWith("l_") && !key.startsWith("t_") &&
+                                        !key.startsWith("e_") && key !in setOf("event", "trace", "log", "e", "t", "l")
+                                }
+
+                        val projectedTraceAttrs =
+                            result.results
+                                .firstOrNull()
+                                ?.keys
+                                ?.filter { it.startsWith("t_") && it != "t_traceId" }
+                                ?.toSet() ?: emptySet()
+                        val xesJson =
+                            XESJsonConverter.convertToXESJson(
+                                result.logs,
+                                isProjectedQuery,
+                                projectedTraceAttrs = projectedTraceAttrs,
+                            )
+                        listOf(xesJson) // Wrap in list for consistency
                     }
 
-                    // Check if events specifically are projected (e:name, e:timestamp etc.)
-                    // vs event SELECT * or e:* (properties(event) as event)
-                    // e:* should still exclude attrs like concept:name, cost:currency
-                    val isEventProjected = resultKeys.any { key ->
-                        key !in internalKeys && (key.startsWith("e_") || key.startsWith("event_"))
+                    else -> {
+                        // Default: simple hierarchical JSON (flat results for backward compatibility)
+                        result.results
                     }
-
-                    val excludeAttrs = if (!isEventProjected) processMConfig.excludeEventAttrsInSelectStar else emptyList()
-                    val projectedTraceAttrs = result.results.firstOrNull()?.keys
-                        ?.filter { it.startsWith("t_") && it != "t_traceId" }
-                        ?.toSet() ?: emptySet()
-                    val xesJson = XESJsonConverter.convertToXESJson(result.logs, isProjectedQuery, excludeAttrs, projectedTraceAttrs)
-                    listOf(xesJson)  // Wrap in list for consistency
                 }
-                else -> {
-                    // Default: simple hierarchical JSON (flat results for backward compatibility)
-                    result.results
-                }
-            }
 
             val response =
                 PQLQueryResponse(
@@ -166,12 +168,13 @@ class PQLQueryController(
         logger.info("LogName: $logName")
 
         return try {
-            val xesBytes = pqlQueryService.executePQLQueryAsXES(
-                pqlQuery = request.query,
-                logId = request.logId,
-                compress = compress,
-                logName = logName,
-            )
+            val xesBytes =
+                pqlQueryService.executePQLQueryAsXES(
+                    pqlQuery = request.query,
+                    logId = request.logId,
+                    compress = compress,
+                    logName = logName,
+                )
 
             // Generate filename with timestamp
             val timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
@@ -179,23 +182,27 @@ class PQLQueryController(
             val filename = "query_result_$timestamp.$extension"
 
             // Set appropriate Content-Type and headers
-            val contentType = if (compress) {
-                MediaType.parseMediaType("application/gzip")
-            } else {
-                MediaType.parseMediaType("application/xml")
-            }
+            val contentType =
+                if (compress) {
+                    MediaType.parseMediaType("application/gzip")
+                } else {
+                    MediaType.parseMediaType("application/xml")
+                }
 
-            val headers = HttpHeaders().apply {
-                this.contentType = contentType
-                this.contentDisposition = org.springframework.http.ContentDisposition
-                    .attachment()
-                    .filename(filename)
-                    .build()
-                this.contentLength = xesBytes.size.toLong()
-            }
+            val headers =
+                HttpHeaders().apply {
+                    this.contentType = contentType
+                    this.contentDisposition =
+                        org.springframework.http.ContentDisposition
+                            .attachment()
+                            .filename(filename)
+                            .build()
+                    this.contentLength = xesBytes.size.toLong()
+                }
 
             logger.info("XES output generated: ${xesBytes.size} bytes, filename: $filename")
-            ResponseEntity.ok()
+            ResponseEntity
+                .ok()
                 .headers(headers)
                 .body(xesBytes)
         } catch (e: Exception) {
@@ -203,7 +210,8 @@ class PQLQueryController(
 
             // Return error as plain text since we can't return JSON for this endpoint
             val errorMessage = "Error executing query as XES: ${e.message}"
-            ResponseEntity.internalServerError()
+            ResponseEntity
+                .internalServerError()
                 .contentType(MediaType.TEXT_PLAIN)
                 .body(errorMessage.toByteArray())
         }
@@ -278,45 +286,41 @@ class PQLQueryController(
                 supportedOperators = listOf("=", "!=", "<>", "<", ">", "<=", ">=", "LIKE"),
                 supportedEntities = listOf("log", "trace", "event"),
                 supportedFields =
-                mapOf(
-                    "log" to listOf("id", "logId", "name", "createdAt", "updatedAt", "attributes"),
-                    "trace" to listOf("id", "traceId", "caseId", "createdAt", "attributes"),
-                    "event" to
-                        listOf(
-                            "id",
-                            "eventId",
-                            "activity",
-                            "timestamp",
-                            "resource",
-                            "lifecycle",
-                            "cost",
-                            "createdAt",
-                            "attributes",
-                        ),
-                ),
+                    mapOf(
+                        "log" to listOf("id", "logId", "name", "createdAt", "updatedAt", "attributes"),
+                        "trace" to listOf("id", "traceId", "caseId", "createdAt", "attributes"),
+                        "event" to
+                            listOf(
+                                "id",
+                                "eventId",
+                                "activity",
+                                "timestamp",
+                                "resource",
+                                "lifecycle",
+                                "cost",
+                                "createdAt",
+                                "attributes",
+                            ),
+                    ),
                 limitations =
-                listOf(
-                    "Complex joins not yet supported",
-                    "Subqueries not yet supported",
-                ),
+                    listOf(
+                        "Complex joins not yet supported",
+                        "Subqueries not yet supported",
+                    ),
                 examples =
-                listOf(
-                    "SELECT * FROM log",
-                    "SELECT * FROM trace WHERE caseId = 'case-123'",
-                    "SELECT activity, timestamp FROM event WHERE activity = 'Task A'",
-                    "SELECT * FROM event WHERE resource LIKE 'John' AND timestamp > '2023-01-01'",
-                    "SELECT t:caseId, count(e:id) GROUP BY t:caseId",
-                    "SELECT avg(e:cost:total) WHERE e:activity = 'Surgery'",
-                ),
+                    listOf(
+                        "SELECT * FROM log",
+                        "SELECT * FROM trace WHERE caseId = 'case-123'",
+                        "SELECT activity, timestamp FROM event WHERE activity = 'Task A'",
+                        "SELECT * FROM event WHERE resource LIKE 'John' AND timestamp > '2023-01-01'",
+                        "SELECT t:caseId, count(e:id) GROUP BY t:caseId",
+                        "SELECT avg(e:cost:total) WHERE e:activity = 'Surgery'",
+                    ),
             )
 
         return ResponseEntity.ok(features)
     }
 
-    /**
-     * Verify PQL query against ProcessM
-     * POST /api/query/verify
-     */
     /**
      * Upload log to local ProcessM instance
      * POST /api/query/processm/upload
@@ -324,7 +328,7 @@ class PQLQueryController(
     @PostMapping("/processm/upload", consumes = [MediaType.MULTIPART_FORM_DATA_VALUE])
     fun uploadToProcessM(
         @RequestParam("file") file: MultipartFile,
-        @RequestParam("logName") logName: String
+        @RequestParam("logName") logName: String,
     ): ResponseEntity<Map<String, String>> {
         val result = remoteProcessMService.uploadLog(file, logName)
         return if (result.startsWith("Success")) {
@@ -351,109 +355,124 @@ class PQLQueryController(
             // 1. Execute Local
             var localResult: PQLQueryResult
             try {
-                localResult = pqlQueryService.executePQLQuery(request.query, request.logId)
+                // Match ProcessM REST API trace limit for fair comparison
+                val traceLimit = if (processMConfig.defaultTraceLimit.enabled) processMConfig.defaultTraceLimit.limit else null
+                localResult = pqlQueryService.executePQLQuery(request.query, request.logId, defaultTraceLimit = traceLimit)
             } catch (e: Exception) {
                 logger.warn("Local execution failed: ${e.message}")
-                localResult = PQLQueryResult(
-                    success = false,
-                    query = request.query,
-                    error = "Local Syntax/Execution Error: ${e.message}",
-                    resultCount = 0,
-                    results = emptyList()
-                )
+                localResult =
+                    PQLQueryResult(
+                        success = false,
+                        query = request.query,
+                        error = "Local Syntax/Execution Error: ${e.message}",
+                        resultCount = 0,
+                        results = emptyList(),
+                    )
             }
 
             // 2. Execute Remote
-            val remoteResult = remoteProcessMService.executeQuery(
-                request.logName,
-                request.query,
-                request.includeTraces,
-                request.includeEvents
-            )
-
+            val remoteResult =
+                remoteProcessMService.executeQuery(
+                    request.logName,
+                    request.query,
+                    request.includeTraces,
+                    request.includeEvents,
+                )
 
             // Convert RemoteResult (JsonNode) to List<Map>
-            val remoteResultsList: List<Map<String, Any?>> = if (remoteResult.data != null) {
-                try {
-                    if (remoteResult.data.isArray) {
-                        objectMapper.convertValue(
-                            remoteResult.data,
-                            object : com.fasterxml.jackson.core.type.TypeReference<List<Map<String, Any?>>>() {}
-                        )
-                    } else {
-                        // Handle single object response (e.g. select * returning root object)
-                        val map = objectMapper.convertValue(
-                            remoteResult.data,
-                            object : com.fasterxml.jackson.core.type.TypeReference<Map<String, Any?>>() {}
-                        )
-                        listOf(map)
+            val remoteResultsList: List<Map<String, Any?>> =
+                if (remoteResult.data != null) {
+                    try {
+                        if (remoteResult.data.isArray) {
+                            objectMapper.convertValue(
+                                remoteResult.data,
+                                object : com.fasterxml.jackson.core.type.TypeReference<List<Map<String, Any?>>>() {},
+                            )
+                        } else {
+                            // Handle single object response (e.g. select * returning root object)
+                            val map =
+                                objectMapper.convertValue(
+                                    remoteResult.data,
+                                    object : com.fasterxml.jackson.core.type.TypeReference<Map<String, Any?>>() {},
+                                )
+                            listOf(map)
+                        }
+                    } catch (e: Exception) {
+                        logger.warn("Failed to convert remote data to list: ${e.message}")
+                        emptyList()
                     }
-                } catch (e: Exception) {
-                    logger.warn("Failed to convert remote data to list: ${e.message}")
+                } else {
                     emptyList()
                 }
 
-            } else {
-                emptyList()
-            }
-
-
-
             // 3. Convert LOCAL logs to XES JSON format BEFORE comparison
-            val localXESResults = if (localResult.logs.isNotEmpty()) {
-                // Detect if this is a projected query
-                val internalKeys2 = setOf("t_traceId", "l_logId")
-                val resultKeys = localResult.results.firstOrNull()?.keys ?: emptySet()
-                val isProjectedQuery = resultKeys.any { key ->
-                    key !in internalKeys2 && (
-                        key.startsWith("l_") || key.startsWith("t_") || key.startsWith("e_") ||
-                        key.startsWith("log_") || key.startsWith("trace_") || key.startsWith("event_")
-                    )
-                } || resultKeys.any { key ->
-                    // Function result aliases (e.g., count_event_concept_name_) are also projected
-                    key !in internalKeys2 && !key.startsWith("l_") && !key.startsWith("t_") &&
-                        !key.startsWith("e_") && key !in setOf("event", "trace", "log", "e", "t", "l")
-                }
+            val localXESResults =
+                if (localResult.logs.isNotEmpty()) {
+                    // Detect if this is a projected query
+                    val internalKeys2 = setOf("t_traceId", "l_logId")
+                    val resultKeys = localResult.results.firstOrNull()?.keys ?: emptySet()
+                    val isProjectedQuery =
+                        resultKeys.any { key ->
+                            key !in internalKeys2 && (
+                                key.startsWith("l_") || key.startsWith("t_") || key.startsWith("e_") ||
+                                    key.startsWith("log_") || key.startsWith("trace_") || key.startsWith("event_")
+                            )
+                        } ||
+                            resultKeys.any { key ->
+                                // Function result aliases (e.g., count_event_concept_name_) are also projected
+                                key !in internalKeys2 && !key.startsWith("l_") && !key.startsWith("t_") &&
+                                    !key.startsWith("e_") && key !in setOf("event", "trace", "log", "e", "t", "l")
+                            }
 
-                // Check if events specifically are projected (e:name, e:timestamp etc.)
-                val isEventProjected = resultKeys.any { key ->
-                    key !in internalKeys2 && (key.startsWith("e_") || key.startsWith("event_"))
-                }
-
-                val excludeAttrs = if (!isEventProjected) processMConfig.excludeEventAttrsInSelectStar else emptyList()
-                // When properties(trace) is in the result AND the user explicitly selected trace attributes,
-                // mark all standard trace attrs as projected. Without hasExplicitTraceSelect, properties(trace)
-                // is only there for internal grouping (e.g., aggregation queries) and shouldn't be exposed.
-                val hasFullTraceProperties = localResult.hasExplicitTraceSelect &&
-                    (localResult.results.firstOrNull()?.let { r ->
-                        r.containsKey("trace") && r["trace"] is Map<*, *>
-                    } ?: false)
-                val projectedTraceAttrs2 = if (hasFullTraceProperties) {
-                    // properties(trace) includes all trace attrs — mark all as projected
-                    setOf("t_name", "concept:name", "t_id", "t_currency", "t_total")
+                    // When properties(trace) is in the result AND the user explicitly selected trace attributes,
+                    // mark all standard trace attrs as projected. Without hasExplicitTraceSelect, properties(trace)
+                    // is only there for internal grouping (e.g., aggregation queries) and shouldn't be exposed.
+                    val hasFullTraceProperties =
+                        localResult.hasExplicitTraceSelect &&
+                            (
+                                localResult.results.firstOrNull()?.let { r ->
+                                    r.containsKey("trace") && r["trace"] is Map<*, *>
+                                } ?: false
+                            )
+                    val projectedTraceAttrs2 =
+                        if (hasFullTraceProperties) {
+                            // properties(trace) includes all trace attrs — mark all as projected
+                            setOf("t_name", "concept:name", "t_id", "t_currency", "t_total")
+                        } else {
+                            localResult.results
+                                .firstOrNull()
+                                ?.keys
+                                ?.filter { it.startsWith("t_") && it != "t_traceId" }
+                                ?.toSet() ?: emptySet()
+                        }
+                    val xesJson =
+                        XESJsonConverter.convertToXESJson(
+                            localResult.logs,
+                            isProjectedQuery,
+                            projectedTraceAttrs = projectedTraceAttrs2,
+                        )
+                    listOf(xesJson)
                 } else {
-                    localResult.results.firstOrNull()?.keys
-                        ?.filter { it.startsWith("t_") && it != "t_traceId" }
-                        ?.toSet() ?: emptySet()
+                    emptyList()
                 }
-                val xesJson = XESJsonConverter.convertToXESJson(localResult.logs, isProjectedQuery, excludeAttrs, projectedTraceAttrs2)
-                listOf(xesJson)
-            } else {
-                emptyList()
-            }
 
             // 4. Compare using XESJsonComparator (order-independent, ID-agnostic)
             val details = StringBuilder()
-            details.append("Local: ${if (localResult.success) "Success (${localResult.logs.size} logs)" else "Fail: ${localResult.error}"}\n")
-            details.append("Remote: ${if (remoteResult.success) "Success (${remoteResult.resultCount} logs)" else "Fail: ${remoteResult.message}"}\n")
+            details.append(
+                "Local: ${if (localResult.success) "Success (${localResult.logs.size} logs)" else "Fail: ${localResult.error}"}\n",
+            )
+            details.append(
+                "Remote: ${if (remoteResult.success) "Success (${remoteResult.resultCount} logs)" else "Fail: ${remoteResult.message}"}\n",
+            )
 
             val match: Boolean
             if (localResult.success && remoteResult.success) {
                 @Suppress("UNCHECKED_CAST")
-                val comparisonResult = XESJsonComparator.compare(
-                    localXESResults as List<Map<String, Any?>>,
-                    remoteResultsList
-                )
+                val comparisonResult =
+                    XESJsonComparator.compare(
+                        localXESResults as List<Map<String, Any?>>,
+                        remoteResultsList,
+                    )
                 match = comparisonResult.match
                 details.append("Comparison: ${comparisonResult.summary}\n")
                 if (comparisonResult.differences.isNotEmpty()) {
@@ -468,19 +487,20 @@ class PQLQueryController(
             }
 
             val isLight = format.equals("light", ignoreCase = true)
-            val response = PQLVerificationResponse(
-                match = match,
-                localSuccess = localResult.success,
-                remoteSuccess = remoteResult.success,
-                localCount = localResult.logs.size,
-                remoteCount = remoteResult.resultCount,
-                localResults = if (isLight) emptyList() else localXESResults,
-                remoteResults = if (isLight) emptyList() else remoteResultsList,
-                remoteRequestUrl = remoteResult.requestUrl,
-                remoteAdaptedQuery = remoteResult.adaptedQuery,
-                remoteLogId = remoteResult.remoteLogId,
-                details = details.toString()
-            )
+            val response =
+                PQLVerificationResponse(
+                    match = match,
+                    localSuccess = localResult.success,
+                    remoteSuccess = remoteResult.success,
+                    localCount = localResult.logs.size,
+                    remoteCount = remoteResult.resultCount,
+                    localResults = if (isLight) emptyList() else localXESResults,
+                    remoteResults = if (isLight) emptyList() else remoteResultsList,
+                    remoteRequestUrl = remoteResult.requestUrl,
+                    remoteAdaptedQuery = remoteResult.adaptedQuery,
+                    remoteLogId = remoteResult.remoteLogId,
+                    details = details.toString(),
+                )
 
             ResponseEntity.ok(response)
         } catch (e: Exception) {
@@ -490,27 +510,8 @@ class PQLQueryController(
                     match = false,
                     localSuccess = false,
                     remoteSuccess = false,
-                    details = "Internal error: ${e.message}"
-                )
-            )
-        }
-    }
-
-    /**
-     * Convert hierarchical logs to maps for API response
-     */
-    private fun convertLogsToMaps(logs: List<com.processm.processminterpreter.model.hierarchical.Log>): List<Map<String, Any?>> {
-        return logs.map { log ->
-            mapOf(
-                "log" to log.attributes,
-                "traces" to log.traces.map { trace ->
-                    mapOf(
-                        "trace" to trace.attributes,
-                        "events" to trace.events.map { event ->
-                            event.attributes
-                        }.toList()
-                    )
-                }.toList()
+                    details = "Internal error: ${e.message}",
+                ),
             )
         }
     }
@@ -564,7 +565,7 @@ data class PQLVerificationRequest(
     val logId: String? = null,
     val logName: String,
     val includeTraces: Boolean = false,
-    val includeEvents: Boolean = false
+    val includeEvents: Boolean = false,
 )
 
 /**
@@ -581,7 +582,7 @@ data class PQLVerificationResponse(
     val remoteRequestUrl: String? = null,
     val remoteAdaptedQuery: String? = null,
     val remoteLogId: String? = null,
-    val details: String
+    val details: String,
 )
 
 /**

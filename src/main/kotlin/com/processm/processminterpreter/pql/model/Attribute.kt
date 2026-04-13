@@ -26,30 +26,29 @@ class Attribute(
     override val line: Int = -1,
     override val charPositionInLine: Int = -1,
 ) : Expression(line, charPositionInLine) {
-
     // Handle bracket notation: [^trace:name with spaces]
     private val wasBracketed = attributeStr.startsWith("[") && attributeStr.endsWith("]")
-    private val cleanAttributeStr = if (wasBracketed) {
-        attributeStr.substring(1, attributeStr.length - 1)
-    } else {
-        attributeStr
-    }
+    private val cleanAttributeStr =
+        if (wasBracketed) {
+            attributeStr.substring(1, attributeStr.length - 1)
+        } else {
+            attributeStr
+        }
 
     // Regex to parse: [^]* [scope:]name
     // Groups: (hoisting) (scope:) (name)
     // Changed \S+ to .+ to allow spaces and special characters
     private val regex = Regex("^(\\^*)(?:([a-zA-Z]+):)?(.+)$")
-    private val match = if (cleanAttributeStr.isBlank()) {
-        throw PQLSyntaxException(line, charPositionInLine, "Attribute name cannot be empty")
-    } else {
-        regex.find(cleanAttributeStr) ?: throw PQLSyntaxException(
-            line,
-            charPositionInLine,
-            "Invalid attribute syntax: $attributeStr",
-        )
-    }
-    
-
+    private val match =
+        if (cleanAttributeStr.isBlank()) {
+            throw PQLSyntaxException(line, charPositionInLine, "Attribute name cannot be empty")
+        } else {
+            regex.find(cleanAttributeStr) ?: throw PQLSyntaxException(
+                line,
+                charPositionInLine,
+                "Invalid attribute syntax: $attributeStr",
+            )
+        }
 
     /**
      * Hoisting prefix: "", "^", or "^^"
@@ -57,22 +56,23 @@ class Attribute(
      */
     val hoistingPrefix: String = match.groupValues[1]
 
-    private val parsedScopeAndName: Pair<Scope?, String> = run {
-        val scopeStr = match.groupValues[2]
-        val nameStr = match.groupValues[3]
+    private val parsedScopeAndName: Pair<Scope?, String> =
+        run {
+            val scopeStr = match.groupValues[2]
+            val nameStr = match.groupValues[3]
 
-        if (scopeStr.isEmpty()) {
-            Pair(null, nameStr)
-        } else {
-            try {
-                val s = Scope.parse(scopeStr)
-                Pair(s, nameStr)
-            } catch (e: IllegalArgumentException) {
-                // If scope is invalid (e.g. "org" in "org:group"), treat it as part of the name
-                Pair(null, "$scopeStr:$nameStr")
+            if (scopeStr.isEmpty()) {
+                Pair(null, nameStr)
+            } else {
+                try {
+                    val s = Scope.parse(scopeStr)
+                    Pair(s, nameStr)
+                } catch (e: IllegalArgumentException) {
+                    // If scope is invalid (e.g. "org" in "org:group"), treat it as part of the name
+                    Pair(null, "$scopeStr:$nameStr")
+                }
             }
         }
-    }
 
     /**
      * The attribute name (after scope prefix, if any).
@@ -83,42 +83,16 @@ class Attribute(
      * - "customAttr" → "customAttr"
      * - "org:group" → "org:group" (if org is not a scope)
      */
-    val name: String = parsedScopeAndName.second.also {
-        if (!wasBracketed && it.contains(" ")) {
-            throw PQLSyntaxException(line, charPositionInLine, "Attribute name cannot contain spaces unless bracketed: $attributeStr")
+    val name: String =
+        parsedScopeAndName.second.also {
+            if (!wasBracketed && it.contains(" ")) {
+                throw PQLSyntaxException(line, charPositionInLine, "Attribute name cannot contain spaces unless bracketed: $attributeStr")
+            }
         }
-    }
 
-    /**
-     * Base scope (before hoisting is applied).
-     * null if no scope prefix was specified.
-     *
-     * Examples:
-     * - "e:name" → EVENT
-     * - "t:timestamp" → TRACE
-     * - "name" → null (will default to EVENT)
-     */
+    // Base scope before hoisting (null if no scope prefix, defaults to EVENT)
     private val baseScope: Scope? = parsedScopeAndName.first
 
-    /**
-     * Actual scope after applying hoisting.
-     *
-     * Process:
-     * 1. Start with scope (base)
-     * 2. Apply each ^ by moving up the hierarchy
-     * 3. Validate we don't hoist beyond LOG
-     *
-     * Examples:
-     * - "e:name" → EVENT
-     * - "^e:name" → TRACE (EVENT.upper)
-     * - "^^e:name" → LOG (EVENT.upper.upper)
-     */
-    /**
-     * Base scope (before hoisting is applied).
-     * Examples:
-     * - "e:name" → EVENT
-     * - "^e:name" → EVENT (hoisting doesn't change declared scope)
-     */
     override val scope: Scope = baseScope ?: Scope.Event
 
     /**
@@ -134,16 +108,17 @@ class Attribute(
      * - "^e:name" → TRACE (EVENT.upper)
      * - "^^e:name" → LOG (EVENT.upper.upper)
      */
-    override val effectiveScope: Scope? = run {
-        var currentScope = scope
-        for (i in hoistingPrefix.indices) {
-            currentScope = currentScope.upper
-                ?: throw InvalidScopeHoistingException(
-                    "Cannot hoist scope '$scope' beyond LOG (hoisting: '$hoistingPrefix')",
-                )
+    override val effectiveScope: Scope? =
+        run {
+            var currentScope = scope
+            for (i in hoistingPrefix.indices) {
+                currentScope = currentScope.upper
+                    ?: throw InvalidScopeHoistingException(
+                        "Cannot hoist scope '$scope' beyond LOG (hoisting: '$hoistingPrefix')",
+                    )
+            }
+            currentScope
         }
-        currentScope
-    }
 
     /**
      * Is this a standard XES attribute?
@@ -162,32 +137,33 @@ class Attribute(
      * it throws PQLSyntaxException.Problem.NoSuchAttribute.
      * Use brackets [e:customAttr] for non-standard (custom) attributes.
      */
-    val isStandard: Boolean = run {
-        // If attribute was bracketed, treat as non-standard (force custom)
-        if (wasBracketed) return@run false
+    val isStandard: Boolean =
+        run {
+            // If attribute was bracketed, treat as non-standard (force custom)
+            if (wasBracketed) return@run false
 
-        // Use base scope (before hoisting) to check if attribute is standard
-        // For example, ^^e:timestamp should check if "timestamp" is standard for EVENT, not LOG
-        val scopeToCheck = baseScope ?: Scope.Event
+            // Use base scope (before hoisting) to check if attribute is standard
+            // For example, ^^e:timestamp should check if "timestamp" is standard for EVENT, not LOG
+            val scopeToCheck = baseScope ?: Scope.Event
 
-        // First check if it's a shorthand
-        if (StandardAttributes.isStandard(scopeToCheck, name)) {
-            return@run true
+            // First check if it's a shorthand
+            if (StandardAttributes.isStandard(scopeToCheck, name)) {
+                return@run true
+            }
+
+            // Check if it's a full XES standard name (like org:group, cost:total)
+            // These appear in ATTRIBUTE_TYPES map
+            if (StandardAttributes.ATTRIBUTE_TYPES.containsKey(name)) {
+                return@run true
+            }
+
+            // Check if it's a classifier (c:X or classifier:X)
+            if (StandardAttributes.isClassifier(name)) return@run true
+
+            // Not a standard attribute - treat as custom attribute
+            // Custom attributes map directly to Neo4j property names
+            false
         }
-
-        // Check if it's a full XES standard name (like org:group, cost:total)
-        // These appear in ATTRIBUTE_TYPES map
-        if (StandardAttributes.ATTRIBUTE_TYPES.containsKey(name)) {
-            return@run true
-        }
-
-        // Check if it's a classifier (c:X or classifier:X)
-        if (StandardAttributes.isClassifier(name)) return@run true
-
-        // Not a standard attribute - treat as custom attribute
-        // Custom attributes map directly to Neo4j property names
-        false
-    }
 
     // ProcessM Rule: Unbracketed attributes with explicit scope must be standard or classifier.
     // Custom attributes require bracket notation: [e:myCustomAttr]
@@ -197,7 +173,7 @@ class Attribute(
                 PQLSyntaxException.Problem.NoSuchAttribute,
                 line,
                 charPositionInLine,
-                name
+                name,
             )
         }
     }
@@ -226,27 +202,28 @@ class Attribute(
      * - "e:org:group" → "org:group" (already full XES name)
      * - "e:customAttr" → "" (not standard)
      */
-    val standardName: String = run {
-        if (!isStandard) return@run ""
+    val standardName: String =
+        run {
+            if (!isStandard) return@run ""
 
-        // Classifier normalization: c:X → classifier:X, classifier:X stays as-is
-        if (StandardAttributes.isClassifier(name)) {
-            return@run if (name.startsWith("c:")) "classifier:${name.removePrefix("c:")}" else name
+            // Classifier normalization: c:X → classifier:X, classifier:X stays as-is
+            if (StandardAttributes.isClassifier(name)) {
+                return@run if (name.startsWith("c:")) "classifier:${name.removePrefix("c:")}" else name
+            }
+
+            // Use base scope (before hoisting) for mapping
+            val scopeToCheck = baseScope ?: Scope.Event
+
+            // Try to get from shorthand mapping first
+            StandardAttributes.getStandardName(scopeToCheck, name)?.let { return@run it }
+
+            // If not found, check if name itself is already a full XES name
+            if (StandardAttributes.ATTRIBUTE_TYPES.containsKey(name)) {
+                return@run name
+            }
+
+            ""
         }
-
-        // Use base scope (before hoisting) for mapping
-        val scopeToCheck = baseScope ?: Scope.Event
-
-        // Try to get from shorthand mapping first
-        StandardAttributes.getStandardName(scopeToCheck, name)?.let { return@run it }
-
-        // If not found, check if name itself is already a full XES name
-        if (StandardAttributes.ATTRIBUTE_TYPES.containsKey(name)) {
-            return@run name
-        }
-
-        ""
-    }
 
     /**
      * The data type of this attribute.
@@ -255,11 +232,12 @@ class Attribute(
      * - Custom attributes have UNKNOWN type
      */
     override val type: Type
-        get() = if (isStandard && standardName.isNotEmpty()) {
-            StandardAttributes.getType(standardName)
-        } else {
-            Type.UNKNOWN
-        }
+        get() =
+            if (isStandard && standardName.isNotEmpty()) {
+                StandardAttributes.getType(standardName)
+            } else {
+                Type.UNKNOWN
+            }
 
     /**
      * Get the Neo4j property name for this attribute.
@@ -298,11 +276,12 @@ class Attribute(
     override fun toString(): String {
         // Use full scope name for ProcessM compatibility
         val scopePrefix = scope.toString() + ":"
-        val attrName = if (isStandard && standardName.isNotEmpty()) {
-            standardName
-        } else {
-            name
-        }
+        val attrName =
+            if (isStandard && standardName.isNotEmpty()) {
+                standardName
+            } else {
+                name
+            }
         val content = "$hoistingPrefix$scopePrefix$attrName"
         return if (wasBracketed) "[$content]" else content
     }

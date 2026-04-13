@@ -13,7 +13,6 @@ abstract class Expression(
     override val charPositionInLine: Int = -1,
     vararg childExpressions: IExpression,
 ) : IExpression {
-
     override val children: List<IExpression> = childExpressions.toList()
 
     /**
@@ -59,17 +58,25 @@ abstract class Expression(
 
         // Otherwise, compute from children - find the LOWEST scope (highest ordinal)
         // among explicitly scoped children. Unscoped literals are ignored.
-        val childScopes = children.mapNotNull { child ->
-            when (child) {
-                is Literal<*> -> child.scope  // Only include scoped literals (e.g., l:1), ignore unscoped
-                is Expression -> {
-                    // Check if this child only contains unscoped literals (scope-neutral)
-                    val scope = child.effectiveScope
-                    if (scope == Scope.Event && child.hasOnlyUnscopedLiterals()) null else scope
+        val childScopes =
+            children.mapNotNull { child ->
+                when (child) {
+                    is Literal<*> -> {
+                        child.scope
+                    }
+
+                    // Only include scoped literals (e.g., l:1), ignore unscoped
+                    is Expression -> {
+                        // Check if this child only contains unscoped literals (scope-neutral)
+                        val scope = child.effectiveScope
+                        if (scope == Scope.Event && child.hasOnlyUnscopedLiterals()) null else scope
+                    }
+
+                    else -> {
+                        child.effectiveScope ?: child.scope
+                    }
                 }
-                else -> child.effectiveScope ?: child.scope
             }
-        }
 
         // Find lowest scope (highest ordinal) among scoped children
         // If no children have explicit scope, default to EVENT

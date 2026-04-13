@@ -1,7 +1,6 @@
 package com.processm.processminterpreter.xes
 
 import com.fasterxml.jackson.databind.ObjectMapper
-import com.processm.processminterpreter.service.LogService
 import org.neo4j.driver.Driver
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
@@ -16,13 +15,11 @@ import java.time.LocalDateTime
 @Service
 class XESLoader(
     private val xesParser: XESParser,
-    private val logService: LogService,
     private val neo4jDriver: Driver,
 ) {
-
     private val logger = LoggerFactory.getLogger(XESLoader::class.java)
     private val objectMapper = ObjectMapper()
-    private val BATCH_SIZE = 25 // Process 25 traces at a time - balance between memory and performance
+    private val batchSize = 25 // Process 25 traces at a time - balance between memory and performance
 
     init {
         createIndexes()
@@ -54,7 +51,8 @@ class XESLoader(
     private fun sanitizeAttributes(attributes: Map<String, Any>): Map<String, Any> {
         // NOTE: Keep colons in attribute keys to match ProcessM format
         // Only replace dots as they conflict with Neo4j property path notation
-        return attributes.mapKeys { it.key.replace(".", "_") }
+        return attributes
+            .mapKeys { it.key.replace(".", "_") }
             .mapValues { (_, value) ->
                 when (value) {
                     is Map<*, *>, is Collection<*> -> objectMapper.writeValueAsString(value)
@@ -66,7 +64,10 @@ class XESLoader(
     /**
      * Load XES file into Neo4j database
      */
-    fun loadXESFile(inputStream: InputStream, logId: String? = null): XESLoadResult {
+    fun loadXESFile(
+        inputStream: InputStream,
+        logId: String? = null,
+    ): XESLoadResult {
         logger.info("Starting XES file loading for logId: $logId")
 
         return try {
@@ -104,78 +105,104 @@ class XESLoader(
         neo4jDriver.session().use { session ->
             session.executeWrite { tx ->
                 val createLogQuery = """
-                    CREATE (log:Log {
-                        logId: ${'$'}logId,
-                        name: ${'$'}name,
-                        createdAt: ${'$'}createdAt,
-                        updatedAt: ${'$'}updatedAt
-                    })
+                    MERGE (log:Log {logId: ${'$'}logId})
+                    ON CREATE SET log.createdAt = ${'$'}createdAt
+                    SET log.name = ${'$'}name, log.updatedAt = ${'$'}updatedAt
                     SET log += ${'$'}attributes
                     SET log.classifiers = ${'$'}classifiers
+                    SET log.traceGlobals = ${'$'}traceGlobals
+                    SET log.eventGlobals = ${'$'}eventGlobals
+                    SET log.extensions = ${'$'}extensions
                 """
-                val classifiersJson = if (xesLog.classifiers.isNotEmpty()) {
-                    objectMapper.writeValueAsString(xesLog.classifiers)
-                } else {
-                    null
-                }
-                tx.run(
-                    createLogQuery,
-                    mapOf(
-                        "logId" to logId,
-                        "name" to xesLog.logNode.name,
-                        "createdAt" to xesLog.logNode.createdAt,
-                        "updatedAt" to xesLog.logNode.updatedAt,
-                        "attributes" to sanitizeAttributes(xesLog.logNode.attributes),
-                        "classifiers" to classifiersJson,
-                    ),
-                ).consume()
+                val classifiersJson =
+                    if (xesLog.classifiers.isNotEmpty()) {
+                        objectMapper.writeValueAsString(xesLog.classifiers)
+                    } else {
+                        null
+                    }
+                val traceGlobalsJson =
+                    if (xesLog.traceGlobals.isNotEmpty()) {
+                        objectMapper.writeValueAsString(xesLog.traceGlobals)
+                    } else {
+                        null
+                    }
+                val eventGlobalsJson =
+                    if (xesLog.eventGlobals.isNotEmpty()) {
+                        objectMapper.writeValueAsString(xesLog.eventGlobals)
+                    } else {
+                        null
+                    }
+                val extensionsJson =
+                    if (xesLog.extensions.isNotEmpty()) {
+                        objectMapper.writeValueAsString(xesLog.extensions)
+                    } else {
+                        null
+                    }
+                tx
+                    .run(
+                        createLogQuery,
+                        mapOf(
+                            "logId" to logId,
+                            "name" to xesLog.logNode.name,
+                            "createdAt" to xesLog.logNode.createdAt,
+                            "updatedAt" to xesLog.logNode.updatedAt,
+                            "attributes" to sanitizeAttributes(xesLog.logNode.attributes),
+                            "classifiers" to classifiersJson,
+                            "traceGlobals" to traceGlobalsJson,
+                            "eventGlobals" to eventGlobalsJson,
+                            "extensions" to extensionsJson,
+                        ),
+                    ).consume()
             }
         }
 
         // 2. Process traces in batches
         val totalTraces = xesLog.traces.size
-        val totalBatches = (totalTraces + BATCH_SIZE - 1) / BATCH_SIZE
-        xesLog.traces.chunked(BATCH_SIZE).forEachIndexed { index, traceBatch ->
-            val startTrace = index * BATCH_SIZE + 1
-            val endTrace = (index * BATCH_SIZE) + traceBatch.size
+        val totalBatches = (totalTraces + batchSize - 1) / batchSize
+        xesLog.traces.chunked(batchSize).forEachIndexed { index, traceBatch ->
+            val startTrace = index * batchSize + 1
+            val endTrace = (index * batchSize) + traceBatch.size
             logger.info("Processing batch ${index + 1} / $totalBatches. Traces $startTrace to $endTrace")
 
-            val tracesData = traceBatch.mapIndexed { traceIdx, trace ->
-                mapOf(
-                    "traceId" to trace.traceNode.traceId,
-                    "caseId" to trace.traceNode.caseId,
-                    "createdAt" to trace.traceNode.createdAt,
-                    "importOrder" to (index * BATCH_SIZE + traceIdx),
-                    "attributes" to sanitizeAttributes(trace.traceNode.attributes),
-                )
-            }
-
-            val eventsData = traceBatch.flatMap { trace ->
-                trace.events.mapIndexed { eventIdx, event ->
+            val tracesData =
+                traceBatch.mapIndexed { traceIdx, trace ->
                     mapOf(
                         "traceId" to trace.traceNode.traceId,
-                        "eventId" to event.eventNode.eventId,
-                        "activity" to event.eventNode.activity,
-                        "timestamp" to event.eventNode.timestamp,
-                        "resource" to event.eventNode.resource,
-                        "lifecycle" to event.eventNode.lifecycle,
-                        "cost" to event.eventNode.cost,
-                        "createdAt" to event.eventNode.createdAt,
-                        "importOrder" to eventIdx,
-                        "attributes" to sanitizeAttributes(event.eventNode.attributes),
+                        "caseId" to trace.traceNode.caseId,
+                        "createdAt" to trace.traceNode.createdAt,
+                        "importOrder" to (index * batchSize + traceIdx),
+                        "attributes" to sanitizeAttributes(trace.traceNode.attributes),
                     )
                 }
-            }
 
-            val followsData = traceBatch.flatMap { trace ->
-                if (trace.events.size > 1) {
-                    trace.events.sortedBy { it.eventNode.timestamp }.windowed(2).map { (from, to) ->
-                        mapOf("fromEventId" to from.eventNode.eventId, "toEventId" to to.eventNode.eventId)
+            val eventsData =
+                traceBatch.flatMap { trace ->
+                    trace.events.mapIndexed { eventIdx, event ->
+                        mapOf(
+                            "traceId" to trace.traceNode.traceId,
+                            "eventId" to event.eventNode.eventId,
+                            "activity" to event.eventNode.activity,
+                            "timestamp" to event.eventNode.timestamp,
+                            "resource" to event.eventNode.resource,
+                            "lifecycle" to event.eventNode.lifecycle,
+                            "cost" to event.eventNode.cost,
+                            "createdAt" to event.eventNode.createdAt,
+                            "importOrder" to eventIdx,
+                            "attributes" to sanitizeAttributes(event.eventNode.attributes),
+                        )
                     }
-                } else {
-                    emptyList()
                 }
-            }
+
+            val followsData =
+                traceBatch.flatMap { trace ->
+                    if (trace.events.size > 1) {
+                        trace.events.sortedBy { it.eventNode.timestamp }.windowed(2).map { (from, to) ->
+                            mapOf("fromEventId" to from.eventNode.eventId, "toEventId" to to.eventNode.eventId)
+                        }
+                    } else {
+                        emptyList()
+                    }
+                }
 
             neo4jDriver.session().use { session ->
                 session.executeWrite { tx ->
@@ -238,12 +265,16 @@ class XESLoader(
     /**
      * Load XES file from classpath resource
      */
-    fun loadXESFromResource(resourcePath: String, logId: String? = null): XESLoadResult {
+    fun loadXESFromResource(
+        resourcePath: String,
+        logId: String? = null,
+    ): XESLoadResult {
         logger.info("Loading XES from resource: $resourcePath")
 
         return try {
-            val inputStream = this::class.java.classLoader.getResourceAsStream(resourcePath)
-                ?: throw IllegalArgumentException("Resource not found: $resourcePath")
+            val inputStream =
+                this::class.java.classLoader.getResourceAsStream(resourcePath)
+                    ?: throw IllegalArgumentException("Resource not found: $resourcePath")
 
             inputStream.use { stream ->
                 loadXESFile(stream, logId)
@@ -258,19 +289,6 @@ class XESLoader(
         }
     }
 
-    /**
-     * Get loading statistics
-     */
-    fun getLoadingStatistics(): Map<String, Any> {
-        // TODO: Implement loading statistics tracking
-        return mapOf(
-            "totalLoadsAttempted" to 0,
-            "successfulLoads" to 0,
-            "failedLoads" to 0,
-            "totalTracesLoaded" to 0,
-            "totalEventsLoaded" to 0,
-        )
-    }
 }
 
 /**

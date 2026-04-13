@@ -13,7 +13,6 @@ import kotlin.test.assertTrue
  * Source: https://github.com/ProcessMPUT/processm/blob/master/processm.core/src/test/kotlin/processm/core/querylanguage/LiteralTests.kt
  */
 class LiteralTests {
-
     @Test
     fun emptyStringTest() {
         val literal = StringLiteral.parse("\"\"", 0, 0)

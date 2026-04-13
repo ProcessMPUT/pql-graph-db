@@ -10,8 +10,11 @@ import org.neo4j.driver.Driver
 import org.springframework.beans.factory.annotation.Autowired
 import java.time.Instant
 import java.time.ZonedDateTime
-import java.time.temporal.ChronoUnit
-import kotlin.test.*
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 /**
  * Base class for PQL query integration tests
@@ -20,7 +23,6 @@ import kotlin.test.*
  * Provides test data loading and common test utilities
  */
 abstract class HierarchicalTestsBase {
-
     @Autowired
     protected lateinit var pqlQueryService: PQLQueryService
 
@@ -63,18 +65,23 @@ abstract class HierarchicalTestsBase {
         const val TOTAL_EVENTS = 2298L
 
         // Event names from JournalReview-extra.xes
-        val eventNames = setOf(
-            "invite reviewers",
-            "time-out 1", "time-out 2", "time-out 3",
-            "get review 1", "get review 2", "get review 3",
-            "collect reviews",
-            "decide",
-            "invite additional reviewer",
-            "get review X",
-            "time-out X",
-            "reject",
-            "accept"
-        )
+        val eventNames =
+            setOf(
+                "invite reviewers",
+                "time-out 1",
+                "time-out 2",
+                "time-out 3",
+                "get review 1",
+                "get review 2",
+                "get review 3",
+                "collect reviews",
+                "decide",
+                "invite additional reviewer",
+                "get review X",
+                "time-out X",
+                "reject",
+                "accept",
+            )
 
         val lifecycleTransitions = setOf("start", "complete")
         val orgResources = setOf("__INVALID__", "Mike", "Anne", "Wil", "Pete", "John", "Mary", "Carol", "Sara", "Sam", "Pam")
@@ -104,19 +111,25 @@ abstract class HierarchicalTestsBase {
      */
     protected fun standardTraceAssertions(trace: Trace) {
         val currency = trace.costCurrency
-        assertTrue(currency == null || currency == "EUR",
-            "Trace cost:currency should be EUR or null, got: $currency")
+        assertTrue(
+            currency == null || currency == "EUR",
+            "Trace cost:currency should be EUR or null, got: $currency",
+        )
 
         val total = trace.costTotal
-        assertTrue(total == null || total > 0.0,
-            "Trace cost:total should be null or > 0, got: $total")
+        assertTrue(
+            total == null || total > 0.0,
+            "Trace cost:total should be null or > 0, got: $total",
+        )
 
         val name = trace.conceptName
         assertNotNull(name, "Trace conceptName should not be null")
         val parsed = name.toIntOrNull()
         assertNotNull(parsed, "Trace conceptName should be parseable as int, got: $name")
-        assertTrue(parsed in -1..100,
-            "Trace conceptName (as int) should be in -1..100, got: $parsed")
+        assertTrue(
+            parsed in -1..100,
+            "Trace conceptName (as int) should be in -1..100, got: $parsed",
+        )
 
         assertFalse(trace.isEventStream, "Trace isEventStream should be false")
         assertNull(trace.identityId, "Trace identity:id should be null for JournalReview traces")
@@ -130,29 +143,41 @@ abstract class HierarchicalTestsBase {
      * org:resource in orgResources, lifecycle:transition in lifecycleTransitions.
      */
     protected fun standardEventAssertions(event: Event) {
-        assertTrue(event.conceptName in eventNames,
-            "Event conceptName should be in eventNames, got: ${event.conceptName}")
+        assertTrue(
+            event.conceptName in eventNames,
+            "Event conceptName should be in eventNames, got: ${event.conceptName}",
+        )
 
         assertNotNull(event.timeTimestamp, "Event should have timestamp")
-        assertTrue(event.timeTimestamp!!.isAfter(begin),
-            "Event timestamp should be after begin, got: ${event.timeTimestamp}")
-        assertTrue(event.timeTimestamp!!.isBefore(end),
-            "Event timestamp should be before end, got: ${event.timeTimestamp}")
+        assertTrue(
+            event.timeTimestamp!!.isAfter(begin),
+            "Event timestamp should be after begin, got: ${event.timeTimestamp}",
+        )
+        assertTrue(
+            event.timeTimestamp!!.isBefore(end),
+            "Event timestamp should be before end, got: ${event.timeTimestamp}",
+        )
 
         // Note: ProcessM's JournalReview-extra.xes has concept:instance; ours does not.
         // If present, it must be parseable as int:
         if (event.conceptInstance != null) {
-            assertNotNull(event.conceptInstance!!.toIntOrNull(),
-                "Event concept:instance should be parseable as int, got: ${event.conceptInstance}")
+            assertNotNull(
+                event.conceptInstance!!.toIntOrNull(),
+                "Event concept:instance should be parseable as int, got: ${event.conceptInstance}",
+            )
         }
 
-        assertTrue(event.costCurrency in validCurrencies,
-            "Event cost:currency should be EUR or USD, got: ${event.costCurrency}")
+        assertTrue(
+            event.costCurrency in validCurrencies,
+            "Event cost:currency should be EUR or USD, got: ${event.costCurrency}",
+        )
 
         val cost = event.costTotal
         assertNotNull(cost, "Event cost:total should not be null")
-        assertTrue(cost in 1.0..1.08,
-            "Event cost:total should be in 1.0..1.08, got: $cost")
+        assertTrue(
+            cost in 1.0..1.08,
+            "Event cost:total should be in 1.0..1.08, got: $cost",
+        )
 
         assertNull(event.lifecycleState, "Event lifecycle:state should be null")
         assertNull(event.orgGroup, "Event org:group should be null")
@@ -160,12 +185,16 @@ abstract class HierarchicalTestsBase {
         assertNull(event.identityId, "Event identity:id should be null")
 
         assertNotNull(event.orgResource, "Event org:resource should not be null")
-        assertTrue(event.orgResource in orgResources,
-            "Event org:resource should be in orgResources, got: ${event.orgResource}")
+        assertTrue(
+            event.orgResource in orgResources,
+            "Event org:resource should be in orgResources, got: ${event.orgResource}",
+        )
 
         assertNotNull(event.lifecycleTransition, "Event lifecycle:transition should not be null")
-        assertTrue(event.lifecycleTransition in lifecycleTransitions,
-            "Event lifecycle:transition should be in lifecycleTransitions, got: ${event.lifecycleTransition}")
+        assertTrue(
+            event.lifecycleTransition in lifecycleTransitions,
+            "Event lifecycle:transition should be in lifecycleTransitions, got: ${event.lifecycleTransition}",
+        )
     }
 
     /**
@@ -175,10 +204,14 @@ abstract class HierarchicalTestsBase {
      */
     protected fun standardLogAssertionsWithMetadata(log: Log) {
         standardLogAssertions(log)
-        assertTrue(log.attributes["source"].let { it is String && it == "CPN Tools" },
-            "Log source should be 'CPN Tools', got: ${log.attributes["source"]}")
-        assertTrue(log.attributes["description"].let { it is String && it == "Log file created in CPN Tools" },
-            "Log description should be 'Log file created in CPN Tools', got: ${log.attributes["description"]}")
+        assertTrue(
+            log.attributes["source"].let { it is String && it == "CPN Tools" },
+            "Log source should be 'CPN Tools', got: ${log.attributes["source"]}",
+        )
+        assertTrue(
+            log.attributes["description"].let { it is String && it == "Log file created in CPN Tools" },
+            "Log description should be 'Log file created in CPN Tools', got: ${log.attributes["description"]}",
+        )
         assertEquals(3, log.eventClassifiers.size, "Should have 3 event classifiers")
         assertEquals(2, log.eventGlobals.size, "Should have 2 event globals")
         assertEquals(1, log.traceGlobals.size, "Should have 1 trace global")
@@ -189,35 +222,33 @@ abstract class HierarchicalTestsBase {
      * No default trace limit applied — matches ProcessM test behavior
      * (ProcessM tests pass limit=emptyMap() to DBHierarchicalXESInputStream).
      */
-    protected fun q(query: String, logId: String): PQLQueryResult {
-        return pqlQueryService.executePQLQuery(query, logId, defaultTraceLimit = NO_DEFAULT_LIMIT)
-    }
+    protected fun q(
+        query: String,
+        logId: String,
+    ): PQLQueryResult = pqlQueryService.executePQLQuery(query, logId, defaultTraceLimit = NO_DEFAULT_LIMIT)
 
     /**
      * Execute PQL query without log filter
      */
-    protected fun q(query: String): PQLQueryResult {
-        return pqlQueryService.executePQLQuery(query, defaultTraceLimit = NO_DEFAULT_LIMIT)
-    }
+    protected fun q(query: String): PQLQueryResult = pqlQueryService.executePQLQuery(query, defaultTraceLimit = NO_DEFAULT_LIMIT)
 
     /**
      * Parse ISO8601 datetime string
      */
-    protected fun parseISO8601(dateStr: String): Instant {
-        return Instant.parse(dateStr)
-    }
+    protected fun parseISO8601(dateStr: String): Instant = Instant.parse(dateStr)
 
     /**
      * Convert Instant to ZonedDateTime (UTC)
      */
-    protected fun Instant.toDateTime(): ZonedDateTime {
-        return this.atZone(java.time.ZoneOffset.UTC)
-    }
+    protected fun Instant.toDateTime(): ZonedDateTime = this.atZone(java.time.ZoneOffset.UTC)
 
     /**
      * Compare nullable comparable values (nulls last)
      */
-    protected fun <T : Comparable<T>> cmp(a: T?, b: T?): Int {
+    protected fun <T : Comparable<T>> cmp(
+        a: T?,
+        b: T?,
+    ): Int {
         if (a === b) return 0
         if (a == null) return 1
         if (b == null) return -1
@@ -227,7 +258,8 @@ abstract class HierarchicalTestsBase {
     /**
      * Check if instant is within range
      */
-    protected fun Instant.isInRange(start: Instant, end: Instant): Boolean {
-        return !this.isBefore(start) && !this.isAfter(end)
-    }
+    protected fun Instant.isInRange(
+        start: Instant,
+        end: Instant,
+    ): Boolean = !this.isBefore(start) && !this.isAfter(end)
 }

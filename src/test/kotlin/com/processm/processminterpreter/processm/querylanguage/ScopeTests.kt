@@ -11,7 +11,6 @@ import kotlin.test.assertFailsWith
  * Source: https://github.com/ProcessMPUT/processm/blob/master/processm.core/src/test/kotlin/processm/core/querylanguage/ScopeTests.kt
  */
 class ScopeTests {
-
     @Test
     fun parseTest() {
         val scopes = arrayOf(Scope.Log, Scope.Trace, Scope.Event)

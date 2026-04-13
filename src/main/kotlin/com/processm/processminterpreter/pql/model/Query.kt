@@ -6,7 +6,8 @@ import com.processm.processminterpreter.pql.visitor.PQLErrorListener
 import com.processm.processminterpreter.pql.visitor.QueryBuilder
 import org.antlr.v4.runtime.CharStreams
 import org.antlr.v4.runtime.CommonTokenStream
-import java.util.*
+import java.util.Collections
+import java.util.EnumMap
 
 /**
  * Represents a parsed PQL query with all its components.
@@ -35,9 +36,8 @@ class Query private constructor(
      * Whether to parse the query string.
      * Internal parameter to avoid parsing when copying from QueryBuilder.
      */
-    parse: Boolean
+    parse: Boolean,
 ) {
-
     /**
      * Primary constructor - parses the query string.
      */
@@ -45,10 +45,7 @@ class Query private constructor(
 
     // NOTE: init block is at the end of the class to ensure all properties are initialized first
 
-    /**
-     * Internal flag to track if parsing should be done.
-     */
-    private val _shouldParse: Boolean = parse
+    private val shouldParse: Boolean = parse
 
     /**
      * Parse the query string and populate this Query object.
@@ -89,7 +86,7 @@ class Query private constructor(
                     offendingToken = TokenSequence("", -1, -1),
                     expectedTokens = null,
                     originalMessage = "Parser detected $numErrors syntax error(s)",
-                    baseException = null
+                    baseException = null,
                 )
             }
         }
@@ -107,9 +104,7 @@ class Query private constructor(
          * Create an empty Query without parsing.
          * Used internally by QueryBuilder.
          */
-        internal fun empty(queryString: String = ""): Query {
-            return Query(queryString, false)
-        }
+        internal fun empty(queryString: String = ""): Query = Query(queryString, false)
     }
 
     // ========================================
@@ -216,16 +211,11 @@ class Query private constructor(
         }
 
     /**
-     * Tracks whether select attributes were propagated from GROUP BY (not explicit SELECT).
-     * When true, the isImplicitSelectAll getter skips the attribute-based explicit check.
-     */
-    private var _groupByPropagatedToSelect = false
-
-    /**
      * Whether SELECT attributes came from GROUP BY propagation (not an explicit SELECT clause).
      * When true, the apparent select attributes were auto-populated from GROUP BY, not user-specified.
      */
-    val isGroupByPropagatedToSelect: Boolean get() = _groupByPropagatedToSelect
+    var isGroupByPropagatedToSelect: Boolean = false
+        private set
 
     /**
      * Whether to select all attributes for each scope.
@@ -235,9 +225,10 @@ class Query private constructor(
      * - null: Not specified for this scope
      */
     val selectAll: Map<Scope, Boolean?>
-        get() = Scope.values().associateWith { scope ->
-            _selectAll[scope] == true || isImplicitSelectAll[scope] == true
-        }
+        get() =
+            Scope.values().associateWith { scope ->
+                _selectAll[scope] == true || isImplicitSelectAll[scope] == true
+            }
 
     /**
      * Standard attributes to select, organized by scope.
@@ -280,14 +271,17 @@ class Query private constructor(
             // Check if ANY scope has explicit selection (SELECT * or specific attributes)
             // When _groupByPropagatedToSelect is true, attributes were copied from GROUP BY,
             // not from an explicit SELECT clause — skip attribute-based check.
-            val hasAnyExplicitSelect = Scope.values().any { scope ->
-                _selectAll[scope] != null ||  // Explicit SELECT * or specific attributes
-                _selectExpressions[scope]?.isNotEmpty() == true ||
-                (!_groupByPropagatedToSelect && (
-                    _selectStandardAttributes[scope]?.isNotEmpty() == true ||
-                    _selectOtherAttributes[scope]?.isNotEmpty() == true
-                ))
-            }
+            val hasAnyExplicitSelect =
+                Scope.values().any { scope ->
+                    _selectAll[scope] != null || // Explicit SELECT * or specific attributes
+                        _selectExpressions[scope]?.isNotEmpty() == true ||
+                        (
+                            !isGroupByPropagatedToSelect && (
+                                _selectStandardAttributes[scope]?.isNotEmpty() == true ||
+                                    _selectOtherAttributes[scope]?.isNotEmpty() == true
+                            )
+                        )
+                }
 
             // If any explicit selection exists, all scopes have implicit = false
             if (hasAnyExplicitSelect) {
@@ -394,10 +388,11 @@ class Query private constructor(
      * Computed based on presence of GROUP BY attributes for that scope.
      */
     val isGroupBy: Map<Scope, Boolean>
-        get() = Scope.values().associateWith { scope ->
-            (_groupByStandardAttributes[scope]?.isNotEmpty() == true) ||
-                (_groupByOtherAttributes[scope]?.isNotEmpty() == true)
-        }
+        get() =
+            Scope.values().associateWith { scope ->
+                (_groupByStandardAttributes[scope]?.isNotEmpty() == true) ||
+                    (_groupByOtherAttributes[scope]?.isNotEmpty() == true)
+            }
 
     /**
      * Whether GROUP BY is implicit for each scope.
@@ -406,24 +401,37 @@ class Query private constructor(
      * without an explicit GROUP BY clause.
      */
     val isImplicitGroupBy: Map<Scope, Boolean>
-        get() = Scope.values().associateWith { scope ->
-            // If explicit GROUP BY is present, it's not implicit
-            if (isGroupBy[scope] == true) return@associateWith false
+        get() =
+            Scope.values().associateWith { scope ->
+                // If explicit GROUP BY is present, it's not implicit
+                if (isGroupBy[scope] == true) return@associateWith false
 
-            val explicit = _isImplicitGroupBy[scope] == true
-            
-            // Check for aggregations in SELECT
-            val hasAggSelect = selectExpressions[scope]?.any { expr ->
-                (expr as? Expression)?.filter { it is com.processm.processminterpreter.pql.model.Function && it.functionType == FunctionType.Aggregation }?.isNotEmpty() == true
-            } == true
+                val explicit = _isImplicitGroupBy[scope] == true
 
-            // Check for aggregations in ORDER BY
-            val hasAggOrder = _orderByExpressions[scope]?.any { orderedExpr ->
-                (orderedExpr.base as? Expression)?.filter { it is com.processm.processminterpreter.pql.model.Function && it.functionType == FunctionType.Aggregation }?.isNotEmpty() == true
-            } == true
+                // Check for aggregations in SELECT
+                val hasAggSelect =
+                    selectExpressions[scope]?.any { expr ->
+                        (expr as? Expression)
+                            ?.filter {
+                                it is com.processm.processminterpreter.pql.model.Function &&
+                                    it.functionType == FunctionType.Aggregation
+                            }?.isNotEmpty() ==
+                            true
+                    } == true
 
-            explicit || hasAggSelect || hasAggOrder
-        }
+                // Check for aggregations in ORDER BY
+                val hasAggOrder =
+                    _orderByExpressions[scope]?.any { orderedExpr ->
+                        (orderedExpr.base as? Expression)
+                            ?.filter {
+                                it is com.processm.processminterpreter.pql.model.Function &&
+                                    it.functionType == FunctionType.Aggregation
+                            }?.isNotEmpty() ==
+                            true
+                    } == true
+
+                explicit || hasAggSelect || hasAggOrder
+            }
 
     /**
      * All attributes in GROUP BY clause (standard + other), flattened.
@@ -524,7 +532,10 @@ class Query private constructor(
      * @param expr the expression to add
      * @param scope the scope for this expression
      */
-    internal fun addSelectExpression(expr: IExpression, scope: Scope) {
+    internal fun addSelectExpression(
+        expr: IExpression,
+        scope: Scope,
+    ) {
         _selectExpressions.getOrPut(scope) { ArrayList() }.add(expr)
         // If specific expression is selected, selectAll is false
         if (_selectAll[scope] != true) {
@@ -538,7 +549,10 @@ class Query private constructor(
      * @param scope the scope
      * @param value true for explicit SELECT *, false for specific attributes
      */
-    internal fun setSelectAll(scope: Scope, value: Boolean) {
+    internal fun setSelectAll(
+        scope: Scope,
+        value: Boolean,
+    ) {
         _selectAll[scope] = value
     }
 
@@ -548,7 +562,10 @@ class Query private constructor(
      * @param scope the scope
      * @param value true if SELECT ALL is implicit
      */
-    internal fun setImplicitSelectAll(scope: Scope, value: Boolean) {
+    internal fun setImplicitSelectAll(
+        scope: Scope,
+        value: Boolean,
+    ) {
         _isImplicitSelectAll[scope] = value
     }
 
@@ -573,7 +590,10 @@ class Query private constructor(
      * @param scope the scope
      * @param value true if GROUP BY is implicit
      */
-    internal fun setImplicitGroupBy(scope: Scope, value: Boolean) {
+    internal fun setImplicitGroupBy(
+        scope: Scope,
+        value: Boolean,
+    ) {
         _isImplicitGroupBy[scope] = value
     }
 
@@ -584,7 +604,11 @@ class Query private constructor(
      * @param direction the sort direction
      * @param scope the scope for this ordering
      */
-    internal fun addOrderByExpression(expr: IExpression, direction: OrderDirection, scope: Scope) {
+    internal fun addOrderByExpression(
+        expr: IExpression,
+        direction: OrderDirection,
+        scope: Scope,
+    ) {
         _orderByExpressions.getOrPut(scope) { ArrayList() }.add(OrderedExpression(expr, direction))
     }
 
@@ -594,7 +618,10 @@ class Query private constructor(
      * @param scope the scope
      * @param value the limit value
      */
-    internal fun setLimit(scope: Scope, value: Long) {
+    internal fun setLimit(
+        scope: Scope,
+        value: Long,
+    ) {
         _limit[scope] = value
     }
 
@@ -604,7 +631,10 @@ class Query private constructor(
      * @param scope the scope
      * @param value the offset value
      */
-    internal fun setOffset(scope: Scope, value: Long) {
+    internal fun setOffset(
+        scope: Scope,
+        value: Long,
+    ) {
         _offset[scope] = value
     }
 
@@ -635,18 +665,22 @@ class Query private constructor(
 
                 if (hasSpecificAttributes) {
                     // Check if there are aggregation functions - this is an error, not a warning
-                    val hasAggregation = _selectExpressions[scope]?.any { expr ->
-                        (expr as? Expression)?.filter {
-                            it is com.processm.processminterpreter.pql.model.Function &&
-                                it.functionType == FunctionType.Aggregation
-                        }?.isNotEmpty() == true
-                    } == true
+                    val hasAggregation =
+                        _selectExpressions[scope]?.any { expr ->
+                            (expr as? Expression)
+                                ?.filter {
+                                    it is com.processm.processminterpreter.pql.model.Function &&
+                                        it.functionType == FunctionType.Aggregation
+                                }?.isNotEmpty() == true
+                        } == true
 
                     if (hasAggregation) {
                         // SELECT * with aggregation is not allowed
                         throw PQLSyntaxException(
                             PQLSyntaxException.Problem.ExplicitSelectAllWithImplicitGroupBy,
-                            -1, -1, scope.toString()
+                            -1,
+                            -1,
+                            scope.toString(),
                         )
                     }
 
@@ -654,7 +688,9 @@ class Query private constructor(
                     emitWarning(
                         PQLSyntaxException(
                             PQLSyntaxException.Problem.SelectAllConflictsWithReferencingByName,
-                            -1, -1, scope.toString()
+                            -1,
+                            -1,
+                            scope.toString(),
                         ),
                     )
 
@@ -666,8 +702,6 @@ class Query private constructor(
             }
         }
     }
-
-
 
     /**
      * Validate that classifiers are used correctly.
@@ -692,17 +726,19 @@ class Query private constructor(
                     PQLSyntaxException.Problem.ClassifierInWhere,
                     attr.line,
                     attr.charPositionInLine,
-                    attr.name
+                    attr.name,
                 )
             }
         }
 
         // Check for classifiers at LOG scope - not allowed
-        val logClassifiers = (selectStandardAttributes[Scope.Log].orEmpty() +
-            selectOtherAttributes[Scope.Log].orEmpty() +
-            groupByStandardAttributes[Scope.Log].orEmpty() +
-            groupByOtherAttributes[Scope.Log].orEmpty())
-            .filter { it.isClassifier }
+        val logClassifiers =
+            (
+                selectStandardAttributes[Scope.Log].orEmpty() +
+                    selectOtherAttributes[Scope.Log].orEmpty() +
+                    groupByStandardAttributes[Scope.Log].orEmpty() +
+                    groupByOtherAttributes[Scope.Log].orEmpty()
+            ).filter { it.isClassifier }
 
         if (logClassifiers.isNotEmpty()) {
             val attr = logClassifiers.first()
@@ -710,7 +746,7 @@ class Query private constructor(
                 PQLSyntaxException.Problem.ClassifierOnLog,
                 attr.line,
                 attr.charPositionInLine,
-                attr.name
+                attr.name,
             )
         }
     }
@@ -763,10 +799,11 @@ class Query private constructor(
     fun validateWhereClause() {
         if (whereExpression != Expression.empty) {
             // Check for aggregation functions in WHERE clause
-            val aggFunctions = whereExpression.filter {
-                it is com.processm.processminterpreter.pql.model.Function &&
-                    it.functionType == FunctionType.Aggregation
-            }
+            val aggFunctions =
+                whereExpression.filter {
+                    it is com.processm.processminterpreter.pql.model.Function &&
+                        it.functionType == FunctionType.Aggregation
+                }
 
             if (aggFunctions.isNotEmpty()) {
                 val func = aggFunctions.first() as com.processm.processminterpreter.pql.model.Function
@@ -774,7 +811,7 @@ class Query private constructor(
                     PQLSyntaxException.Problem.AggregationFunctionInWhere,
                     func.line,
                     func.charPositionInLine,
-                    func.name
+                    func.name,
                 )
             }
         }
@@ -866,17 +903,18 @@ class Query private constructor(
         (selectStandardAttributes.values.flatten() + selectOtherAttributes.values.flatten()).forEach { attr ->
             if (attr.hoistingPrefix.isNotEmpty()) {
                 // Allow hoisting if the same hoisted attribute is in GROUP BY
-                val inGroupBy = groupByAttrs.any { gb ->
-                    gb.hoistingPrefix == attr.hoistingPrefix &&
-                        gb.name == attr.name &&
-                        gb.scope == attr.scope
-                }
+                val inGroupBy =
+                    groupByAttrs.any { gb ->
+                        gb.hoistingPrefix == attr.hoistingPrefix &&
+                            gb.name == attr.name &&
+                            gb.scope == attr.scope
+                    }
                 if (!inGroupBy) {
                     throw PQLSyntaxException(
                         PQLSyntaxException.Problem.ScopeHoistingInSelectOrOrderBy,
                         attr.line,
                         attr.charPositionInLine,
-                        attr.toString()
+                        attr.toString(),
                     )
                 }
             }
@@ -900,7 +938,10 @@ class Query private constructor(
      * @param expr the expression to validate
      * @param clauseName the clause name for error messages
      */
-    private fun validateExpressionHoisting(expr: IExpression, clauseName: String) {
+    private fun validateExpressionHoisting(
+        expr: IExpression,
+        clauseName: String,
+    ) {
         when (expr) {
             is Function -> {
                 // If it's an aggregation function, hoisting inside is allowed - skip validation
@@ -912,16 +953,18 @@ class Query private constructor(
                     validateExpressionHoisting(child, clauseName)
                 }
             }
+
             is Attribute -> {
                 if (expr.hoistingPrefix.isNotEmpty()) {
                     throw PQLSyntaxException(
                         PQLSyntaxException.Problem.ScopeHoistingInSelectOrOrderBy,
                         expr.line,
                         expr.charPositionInLine,
-                        expr.toString()
+                        expr.toString(),
                     )
                 }
             }
+
             is Expression -> {
                 expr.children.forEach { child ->
                     validateExpressionHoisting(child, clauseName)
@@ -937,7 +980,10 @@ class Query private constructor(
      * @param expr the expression to validate
      * @param clauseName the clause name for error messages
      */
-    private fun validateExpressionHoistingStrict(expr: IExpression, clauseName: String) {
+    private fun validateExpressionHoistingStrict(
+        expr: IExpression,
+        clauseName: String,
+    ) {
         when (expr) {
             is Attribute -> {
                 if (expr.hoistingPrefix.isNotEmpty()) {
@@ -945,10 +991,11 @@ class Query private constructor(
                         PQLSyntaxException.Problem.ScopeHoistingInSelectOrOrderBy,
                         expr.line,
                         expr.charPositionInLine,
-                        expr.toString()
+                        expr.toString(),
                     )
                 }
             }
+
             is Expression -> {
                 expr.children.forEach { child ->
                     validateExpressionHoistingStrict(child, clauseName)
@@ -966,12 +1013,13 @@ class Query private constructor(
      */
     private fun propagateGroupByToSelect() {
         // Only propagate if there's no explicit SELECT clause
-        val hasExplicitSelect = Scope.values().any { scope ->
-            _selectAll[scope] != null ||
-                _selectStandardAttributes[scope]?.isNotEmpty() == true ||
-                _selectOtherAttributes[scope]?.isNotEmpty() == true ||
-                _selectExpressions[scope]?.isNotEmpty() == true
-        }
+        val hasExplicitSelect =
+            Scope.values().any { scope ->
+                _selectAll[scope] != null ||
+                    _selectStandardAttributes[scope]?.isNotEmpty() == true ||
+                    _selectOtherAttributes[scope]?.isNotEmpty() == true ||
+                    _selectExpressions[scope]?.isNotEmpty() == true
+            }
         if (hasExplicitSelect) return
 
         // Only propagate if there's at least one GROUP BY scope
@@ -990,7 +1038,7 @@ class Query private constructor(
             }
         }
 
-        _groupByPropagatedToSelect = true
+        isGroupByPropagatedToSelect = true
     }
 
     /**
@@ -1010,7 +1058,10 @@ class Query private constructor(
                 if (isGroupBy[checkScope] == true) {
                     throw PQLSyntaxException(
                         PQLSyntaxException.Problem.MixedScopes,
-                        -1, -1, selectAllScope.toString(), checkScope.toString()
+                        -1,
+                        -1,
+                        selectAllScope.toString(),
+                        checkScope.toString(),
                     )
                 }
                 checkScope = checkScope.upper
@@ -1043,10 +1094,11 @@ class Query private constructor(
             if (orderExprs.isEmpty()) return@forEach
 
             // Check if ALL order by expressions are aggregations
-            val allAggregation = orderExprs.all { ordered ->
-                ordered.base is com.processm.processminterpreter.pql.model.Function &&
-                    (ordered.base as com.processm.processminterpreter.pql.model.Function).functionType == FunctionType.Aggregation
-            }
+            val allAggregation =
+                orderExprs.all { ordered ->
+                    ordered.base is com.processm.processminterpreter.pql.model.Function &&
+                        (ordered.base as com.processm.processminterpreter.pql.model.Function).functionType == FunctionType.Aggregation
+                }
 
             if (allAggregation) {
                 // All ORDER BY expressions are aggregations → implicit GROUP BY at this scope
@@ -1057,8 +1109,9 @@ class Query private constructor(
                 emitWarning(
                     PQLSyntaxException(
                         PQLSyntaxException.Problem.OrderByClauseRemoved,
-                        -1, -1
-                    )
+                        -1,
+                        -1,
+                    ),
                 )
             }
         }
@@ -1075,20 +1128,34 @@ class Query private constructor(
      */
     fun validateGroupBy() {
         // Check if there is any aggregation in the query (global check)
-        val hasAnyAggregation = selectExpressions.values.flatten().any { expr ->
-            (expr as? Expression)?.filter { it is com.processm.processminterpreter.pql.model.Function && it.functionType == FunctionType.Aggregation }?.isNotEmpty() == true
-        } || _orderByExpressions.values.flatten().any { ordered ->
-            (ordered.base as? Expression)?.filter { it is com.processm.processminterpreter.pql.model.Function && it.functionType == FunctionType.Aggregation }?.isNotEmpty() == true
-        }
+        val hasAnyAggregation =
+            selectExpressions.values.flatten().any { expr ->
+                (expr as? Expression)
+                    ?.filter {
+                        it is com.processm.processminterpreter.pql.model.Function &&
+                            it.functionType == FunctionType.Aggregation
+                    }?.isNotEmpty() ==
+                    true
+            } ||
+                _orderByExpressions.values.flatten().any { ordered ->
+                    (ordered.base as? Expression)
+                        ?.filter {
+                            it is com.processm.processminterpreter.pql.model.Function &&
+                                it.functionType == FunctionType.Aggregation
+                        }?.isNotEmpty() ==
+                        true
+                }
 
         // Check: SELECT * with aggregation is not allowed at aggregation scope
         // ProcessM allows l:*, t:* with event aggregation (upper scopes are constant per group)
         // Only reject SELECT ALL at the same or lower scope as the aggregation
         if (hasAnyAggregation) {
             // Find the lowest scope that has aggregation functions
-            val aggScopes = _selectExpressions.filter { (_, exprs) ->
-                exprs.any { it is Function && Function.isAggregation(it.name) }
-            }.keys
+            val aggScopes =
+                _selectExpressions
+                    .filter { (_, exprs) ->
+                        exprs.any { it is Function && Function.isAggregation(it.name) }
+                    }.keys
             val lowestAggScope = aggScopes.maxByOrNull { it.ordinal }
 
             if (lowestAggScope != null) {
@@ -1096,7 +1163,9 @@ class Query private constructor(
                     if (_selectAll[scope] == true && scope.ordinal >= lowestAggScope.ordinal) {
                         throw PQLSyntaxException(
                             PQLSyntaxException.Problem.ExplicitSelectAllWithImplicitGroupBy,
-                            -1, -1, scope.toString()
+                            -1,
+                            -1,
+                            scope.toString(),
                         )
                     }
                 }
@@ -1114,7 +1183,7 @@ class Query private constructor(
                 // If we have aggregation, all non-aggregated attributes must be grouped
                 // OR belong to a scope that is implicitly grouped.
                 // For now, we enforce strict grouping: if aggregation exists, everything else must be grouped or aggregated.
-                
+
                 // Check standard attributes in SELECT
                 selectStandardAttributes[scope]?.forEach { attr ->
                     validateAttributeInGroupBy(attr)
@@ -1124,15 +1193,15 @@ class Query private constructor(
                 selectOtherAttributes[scope]?.forEach { attr ->
                     validateAttributeInGroupBy(attr)
                 }
-                
+
                 // Check expressions in SELECT
                 selectExpressions[scope]?.forEach { expr ->
-                     validateExpressionInGroupBy(expr)
+                    validateExpressionInGroupBy(expr)
                 }
             } else if (isGrouped) {
                 // If no aggregation but we have GROUP BY, then selected attributes must be in GROUP BY
 
-                 // Check standard attributes in SELECT
+                // Check standard attributes in SELECT
                 selectStandardAttributes[scope]?.forEach { attr ->
                     validateAttributeInGroupBy(attr)
                 }
@@ -1144,7 +1213,7 @@ class Query private constructor(
 
                 // Check expressions in SELECT
                 selectExpressions[scope]?.forEach { expr ->
-                     validateExpressionInGroupBy(expr)
+                    validateExpressionInGroupBy(expr)
                 }
 
                 // Check ORDER BY expressions
@@ -1168,17 +1237,18 @@ class Query private constructor(
         // Attribute is valid if:
         // 1. It is present in GROUP BY for its scope
         // 2. OR any LOWER scope is grouped (implicit grouping of upper scopes)
-        
+
         val scope = attr.effectiveScope ?: attr.scope
-        
+
         // Check 1: Present in GROUP BY
-        val groupAttributes = groupByStandardAttributes[scope].orEmpty() +
-            groupByOtherAttributes[scope].orEmpty()
-            
+        val groupAttributes =
+            groupByStandardAttributes[scope].orEmpty() +
+                groupByOtherAttributes[scope].orEmpty()
+
         if (groupAttributes.contains(attr)) {
             return
         }
-        
+
         // Check 2: Lower scope is grouped
         // ProcessM allows upper-scope attributes when a lower scope has GROUP BY.
         // e.g., "select t:name, sum(e:total) group by e:name" is valid because
@@ -1209,8 +1279,9 @@ class Query private constructor(
             currentScope = currentScope.upper!!
 
             val hoistedAttr = Attribute(currentAttrStr)
-            val hoistedGroupAttributes = groupByStandardAttributes[currentScope].orEmpty() +
-                groupByOtherAttributes[currentScope].orEmpty()
+            val hoistedGroupAttributes =
+                groupByStandardAttributes[currentScope].orEmpty() +
+                    groupByOtherAttributes[currentScope].orEmpty()
 
             if (hoistedGroupAttributes.contains(hoistedAttr)) {
                 return
@@ -1226,16 +1297,17 @@ class Query private constructor(
         for (gbAttr in allGroupByAttrs) {
             if (gbAttr.hoistingPrefix == "^" &&
                 gbAttr.scope == attr.scope &&
-                gbAttr.name == attr.name) {
+                gbAttr.name == attr.name
+            ) {
                 return
             }
         }
-        
+
         val shortName = "${attr.scope.shortName}:${attr.name}"
         throw PQLSyntaxException(
             attr.line,
             attr.charPositionInLine,
-            "$shortName must be present in GROUP BY clause"
+            "$shortName must be present in GROUP BY clause",
         )
     }
 
@@ -1282,7 +1354,11 @@ class Query private constructor(
      * @param trace limit for TRACE scope (or null to skip)
      * @param event limit for EVENT scope (or null to skip)
      */
-    fun applyLimits(log: Long?, trace: Long?, event: Long?) {
+    fun applyLimits(
+        log: Long?,
+        trace: Long?,
+        event: Long?,
+    ) {
         log?.let {
             val currentLimit = _limit[Scope.Log]
             if (currentLimit == null || currentLimit > it) {
@@ -1308,14 +1384,12 @@ class Query private constructor(
     // ========================================
 
     init {
-        if (_shouldParse) {
+        if (shouldParse) {
             parseAndBuild(query)
         }
     }
 
-    override fun toString(): String {
-        return query.ifEmpty { "Query()" }
-    }
+    override fun toString(): String = query.ifEmpty { "Query()" }
 }
 
 /**

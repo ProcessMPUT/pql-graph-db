@@ -1,9 +1,9 @@
 plugins {
-    kotlin("jvm") version "2.0.21"
-    kotlin("plugin.spring") version "2.0.21"
+    kotlin("jvm") version "2.2.0"
+    kotlin("plugin.spring") version "2.2.0"
     id("org.springframework.boot") version "3.5.3"
     id("io.spring.dependency-management") version "1.1.7"
-    id("com.diffplug.spotless") version "6.19.0"
+    id("com.diffplug.spotless") version "8.4.0"
     id("antlr")
 }
 
@@ -16,40 +16,24 @@ java {
     }
 }
 
-configurations {
-    compileOnly {
-        extendsFrom(configurations.annotationProcessor.get())
-    }
-}
-
 repositories {
     mavenCentral()
 }
 
 dependencies {
-    implementation("org.springframework.boot:spring-boot-starter-data-neo4j")
     implementation("org.springframework.boot:spring-boot-starter-web")
+    implementation("org.neo4j.driver:neo4j-java-driver:5.24.0")
     implementation("com.fasterxml.jackson.module:jackson-module-kotlin")
     implementation("org.jetbrains.kotlin:kotlin-reflect")
     implementation("org.springframework.boot:spring-boot-starter-actuator")
 
-    // XES processing dependencies
-    implementation("org.apache.commons:commons-compress:1.26.0")
-    implementation("javax.xml.bind:jaxb-api:2.3.1")
-    implementation("org.glassfish.jaxb:jaxb-runtime:2.3.9")
-
-    // XML processing
-    implementation("com.fasterxml.jackson.dataformat:jackson-dataformat-xml:2.16.1")
-    implementation("com.fasterxml.jackson.datatype:jackson-datatype-jsr310:2.16.1")
-
     // PQL parsing dependencies - ANTLR4
-    antlr("org.antlr:antlr4:4.13.1")
-    implementation("org.antlr:antlr4-runtime:4.13.1")
+    val antlrVersion = "4.13.2"
+    antlr("org.antlr:antlr4:$antlrVersion")
+    implementation("org.antlr:antlr4-runtime:$antlrVersion")
 
-    compileOnly("org.projectlombok:lombok")
     developmentOnly("org.springframework.boot:spring-boot-devtools")
     annotationProcessor("org.springframework.boot:spring-boot-configuration-processor")
-    annotationProcessor("org.projectlombok:lombok")
 
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testImplementation("org.springframework.boot:spring-boot-testcontainers")
@@ -67,14 +51,11 @@ kotlin {
 
 spotless {
     kotlin {
-        target("**/*.kt")
-        targetExclude("**/build/**/*.kt")
-        ktlint()
+        target("src/**/*.kt")
     }
 
     kotlinGradle {
         target("*.gradle.kts")
-        ktlint()
     }
 }
 
@@ -93,10 +74,6 @@ sourceSets {
 // Ensure ANTLR generates parser before Kotlin compilation
 tasks.named("compileKotlin") {
     dependsOn("generateGrammarSource")
-}
-
-tasks.named("compileTestKotlin") {
-    dependsOn("generateTestGrammarSource")
 }
 
 tasks.withType<Test> {

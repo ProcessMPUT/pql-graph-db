@@ -36,7 +36,5 @@ class Trace : TraceOrEventBase() {
         return result
     }
 
-    override fun toString(): String {
-        return "Trace(name=$conceptName, events=${events.count()})"
-    }
+    override fun toString(): String = "Trace(name=$conceptName, events=${events.count()})"
 }

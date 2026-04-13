@@ -10,17 +10,19 @@ package com.processm.processminterpreter.pql.model
 enum class Scope {
     Log,
     Trace,
-    Event;
+    Event,
+    ;
 
     /**
      * The short name for this scope ("l", "t", "e").
      */
     val shortName: String
-        get() = when (this) {
-            Log -> "l"
-            Trace -> "t"
-            Event -> "e"
-        }
+        get() =
+            when (this) {
+                Log -> "l"
+                Trace -> "t"
+                Event -> "e"
+            }
 
     /**
      * Returns the parent scope in the hierarchy.
@@ -29,11 +31,12 @@ enum class Scope {
      * - Event.upper = Trace
      */
     val upper: Scope?
-        get() = when (this) {
-            Log -> null
-            Trace -> Log
-            Event -> Trace
-        }
+        get() =
+            when (this) {
+                Log -> null
+                Trace -> Log
+                Event -> Trace
+            }
 
     /**
      * Returns the child scope in the hierarchy.
@@ -42,11 +45,12 @@ enum class Scope {
      * - Event.lower = null (no child)
      */
     val lower: Scope?
-        get() = when (this) {
-            Log -> Trace
-            Trace -> Event
-            Event -> null
-        }
+        get() =
+            when (this) {
+                Log -> Trace
+                Trace -> Event
+                Event -> null
+            }
 
     override fun toString(): String = name.lowercase()
 
@@ -60,14 +64,16 @@ enum class Scope {
          * @return the parsed Scope
          * @throws IllegalArgumentException if string is invalid and no default provided
          */
-        fun parse(s: String, default: Scope? = null): Scope {
-            return when (s.lowercase()) {
+        fun parse(
+            s: String,
+            default: Scope? = null,
+        ): Scope =
+            when (s.lowercase()) {
                 "log", "l" -> Log
                 "trace", "t" -> Trace
                 "event", "e" -> Event
                 else -> default ?: throw IllegalArgumentException("Invalid scope: $s")
             }
-        }
     }
 }
 
@@ -80,4 +86,4 @@ enum class Scope {
  * - null.prefix = ""
  */
 val Scope?.prefix: String
-    get() = this?.let { "${it}:" } ?: ""
+    get() = this?.let { "$it:" } ?: ""

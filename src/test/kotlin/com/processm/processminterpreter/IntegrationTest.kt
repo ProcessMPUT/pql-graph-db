@@ -1,9 +1,7 @@
 package com.processm.processminterpreter
 
-import com.processm.processminterpreter.config.ProcessMConfig
 import com.processm.processminterpreter.pql.AntlrPQLTranslator
 import com.processm.processminterpreter.pql.interpreter.BaseInterpreterTest
-import com.processm.processminterpreter.service.LogService
 import com.processm.processminterpreter.service.PQLQueryService
 import com.processm.processminterpreter.xes.XESLoader
 import com.processm.processminterpreter.xes.XESParser
@@ -13,21 +11,18 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
-import org.mockito.Mockito
+
 import java.io.ByteArrayInputStream
 
 @Tag("Integration")
 class IntegrationTest : BaseInterpreterTest() {
-
     private lateinit var xesLoader: XESLoader
-    private lateinit var logService: LogService
     private lateinit var queryService: PQLQueryService
 
     @BeforeEach
     fun initServices() {
-        logService = Mockito.mock(LogService::class.java)
-        xesLoader = XESLoader(XESParser(), logService, driver)
-        queryService = PQLQueryService(AntlrPQLTranslator(ProcessMConfig()), driver, XESWriter())
+        xesLoader = XESLoader(XESParser(), driver)
+        queryService = PQLQueryService(AntlrPQLTranslator(), driver, XESWriter())
     }
 
     @Test
@@ -46,7 +41,7 @@ class IntegrationTest : BaseInterpreterTest() {
         // Count total events
         val countQuery = "select count(e:name)"
         val countResult = queryService.executePQLQuery(countQuery, defaultTraceLimit = -1)
-        
+
         if (!countResult.success) {
             println("Count query failed: ${countResult.error}")
         }
@@ -60,19 +55,19 @@ class IntegrationTest : BaseInterpreterTest() {
         // Count events per trace
         val groupQuery = "select t:name, count(e:name) group by t:name order by t:name"
         val groupResult = queryService.executePQLQuery(groupQuery, defaultTraceLimit = -1)
-        
+
         if (!groupResult.success) {
             println("Group query failed: ${groupResult.error}")
         }
         assertTrue(groupResult.success, "Group query should succeed")
         assertEquals(traceCount, groupResult.results.size, "Should have one result per trace")
-        
+
         val firstTrace = groupResult.results[0]
         // Depending on map key naming (e.g. t_caseId or trace.caseId), check values
         // The current implementation returns map keys based on alias or property name
         // Let's just check that we have results and they look reasonable
         assertTrue(firstTrace.values.any { it == "Case 1" }, "Should contain Case 1")
-        
+
         val countValue = firstTrace.values.find { it is Number }
         if (countValue == null) {
             println("First trace values: ${firstTrace.values}")

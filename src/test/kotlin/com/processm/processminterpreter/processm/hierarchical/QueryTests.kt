@@ -5,8 +5,12 @@ import org.junit.jupiter.api.Disabled
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
 import org.springframework.boot.test.context.SpringBootTest
-import kotlin.test.*
 import java.time.Instant
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 /**
  * Main PQL query tests ported from ProcessM
@@ -23,7 +27,6 @@ import java.time.Instant
 @SpringBootTest
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class QueryTests : HierarchicalTestsBase() {
-
     private var journalLogId: String = ""
 
     @BeforeAll
@@ -39,10 +42,11 @@ class QueryTests : HierarchicalTestsBase() {
     @Test
     fun limitSingleTest() {
         // ProcessM: where l:name='JournalReview' limit l:1
-        val result = q(
-            "where l:logId='$journalLogId' limit l:1",
-            journalLogId
-        )
+        val result =
+            q(
+                "where l:logId='$journalLogId' limit l:1",
+                journalLogId,
+            )
 
         assertTrue(result.success, "Query should succeed: ${result.error}")
         assertEquals(1, result.count(), "Should have exactly 1 log")
@@ -64,10 +68,11 @@ class QueryTests : HierarchicalTestsBase() {
     @Test
     fun limitAllTest() {
         // ProcessM: limit e:3, t:2, l:1
-        val result = q(
-            "limit e:3, t:2, l:1",
-            journalLogId
-        )
+        val result =
+            q(
+                "limit e:3, t:2, l:1",
+                journalLogId,
+            )
 
         assertTrue(result.success, "Query should succeed: ${result.error}")
         assertEquals(1, result.count(), "Should have exactly 1 log")
@@ -109,8 +114,11 @@ class QueryTests : HierarchicalTestsBase() {
         val traceCount1 = result1.first().traces.count()
         val traceCount3 = result3.first().traces.count()
 
-        assertEquals(traceCount1, traceCount3,
-            "Trace count should be consistent between q1 and q3: q1=$traceCount1, q3=$traceCount3")
+        assertEquals(
+            traceCount1,
+            traceCount3,
+            "Trace count should be consistent between q1 and q3: q1=$traceCount1, q3=$traceCount3",
+        )
     }
 
     // =====================
@@ -120,10 +128,11 @@ class QueryTests : HierarchicalTestsBase() {
     @Test
     fun offsetSingleTest() {
         // ProcessM: where l:id=$journal offset l:1
-        val result = q(
-            "where l:logId='$journalLogId' offset l:1",
-            journalLogId
-        )
+        val result =
+            q(
+                "where l:logId='$journalLogId' offset l:1",
+                journalLogId,
+            )
 
         assertTrue(result.success, "Query should succeed: ${result.error}")
         assertEquals(0, result.count(), "Should have 0 logs with offset 1")
@@ -132,10 +141,11 @@ class QueryTests : HierarchicalTestsBase() {
     @Test
     fun offsetAllTest() {
         // ProcessM: where l:id=$journal offset e:3, t:2, l:1
-        val result = q(
-            "where l:logId='$journalLogId' offset e:3, t:2, l:1",
-            journalLogId
-        )
+        val result =
+            q(
+                "where l:logId='$journalLogId' offset e:3, t:2, l:1",
+                journalLogId,
+            )
 
         assertTrue(result.success, "Query should succeed: ${result.error}")
         assertEquals(0, result.count(), "Should have 0 logs with log offset 1")
@@ -148,10 +158,11 @@ class QueryTests : HierarchicalTestsBase() {
     @Test
     fun orderBySimpleTest() {
         // ProcessM: where l:name='JournalReview' order by e:timestamp limit l:3
-        val result = q(
-            "where l:logId='$journalLogId' order by e:timestamp limit l:1, t:5, e:10",
-            journalLogId
-        )
+        val result =
+            q(
+                "where l:logId='$journalLogId' order by e:timestamp limit l:1, t:5, e:10",
+                journalLogId,
+            )
 
         assertTrue(result.success, "Query should succeed: ${result.error}")
         assertTrue(result.logs.isNotEmpty(), "Should have logs")
@@ -169,7 +180,7 @@ class QueryTests : HierarchicalTestsBase() {
                     standardEventAssertions(event)
                     assertTrue(
                         !event.timeTimestamp!!.isBefore(lastTimestamp),
-                        "Events should be ordered by timestamp ascending"
+                        "Events should be ordered by timestamp ascending",
                     )
                     lastTimestamp = event.timeTimestamp!!
                 }
@@ -180,10 +191,11 @@ class QueryTests : HierarchicalTestsBase() {
     @Test
     fun orderByWithModifierAndScopesTest() {
         // ProcessM: where l:name='JournalReview' order by t:total desc, e:timestamp limit l:3
-        val result = q(
-            "where l:logId='$journalLogId' order by t:total desc, e:timestamp limit t:200",
-            journalLogId
-        )
+        val result =
+            q(
+                "where l:logId='$journalLogId' order by t:total desc, e:timestamp limit t:200",
+                journalLogId,
+            )
 
         assertTrue(result.success, "Query should succeed: ${result.error}")
         assertTrue(result.logs.isNotEmpty(), "Should have logs")
@@ -192,21 +204,27 @@ class QueryTests : HierarchicalTestsBase() {
         standardLogAssertions(log)
         assertTrue(log.traces.count() == 101, "Should have all 101 traces")
         val traces = log.traces.toList()
-        for (trace in traces) { standardTraceAssertions(trace) }
+        for (trace in traces) {
+            standardTraceAssertions(trace)
+        }
 
         // Traces ordered by cost:total DESC (nulls first — cmp treats null as max)
         var lastTotal: Double? = null // nulls first
         for (trace in traces) {
-            assertTrue(cmp(trace.costTotal, lastTotal) <= 0,
-                "Traces should be ordered by cost:total DESC (nulls first)")
+            assertTrue(
+                cmp(trace.costTotal, lastTotal) <= 0,
+                "Traces should be ordered by cost:total DESC (nulls first)",
+            )
             lastTotal = trace.costTotal
 
             assertTrue(trace.events.count() <= 55, "Events per trace should be <= 55")
             var lastTimestamp = begin
             for (event in trace.events) {
                 standardEventAssertions(event)
-                assertFalse(event.timeTimestamp!!.isBefore(lastTimestamp),
-                    "Events within trace should be ordered by timestamp ASC")
+                assertFalse(
+                    event.timeTimestamp!!.isBefore(lastTimestamp),
+                    "Events within trace should be ordered by timestamp ASC",
+                )
                 lastTimestamp = event.timeTimestamp!!
             }
         }
@@ -216,10 +234,11 @@ class QueryTests : HierarchicalTestsBase() {
     fun orderByWithModifierAndScopes2Test() {
         // ProcessM: order by e:timestamp, t:total desc limit l:3
         // Same ordering as orderByWithModifierAndScopesTest but with reversed ORDER BY arguments
-        val result = q(
-            "where l:logId='$journalLogId' order by e:timestamp, t:total desc limit l:1, t:200",
-            journalLogId
-        )
+        val result =
+            q(
+                "where l:logId='$journalLogId' order by e:timestamp, t:total desc limit l:1, t:200",
+                journalLogId,
+            )
 
         assertTrue(result.success, "Query should succeed: ${result.error}")
         assertTrue(result.logs.isNotEmpty(), "Should have logs")
@@ -229,16 +248,20 @@ class QueryTests : HierarchicalTestsBase() {
 
             var lastTotal: Double? = null // nulls first (cmp treats null as max)
             for (trace in log.traces) {
-                assertTrue(cmp(trace.costTotal, lastTotal) <= 0,
-                    "Traces should be ordered by cost:total DESC (nulls first)")
+                assertTrue(
+                    cmp(trace.costTotal, lastTotal) <= 0,
+                    "Traces should be ordered by cost:total DESC (nulls first)",
+                )
                 lastTotal = trace.costTotal
 
                 assertTrue(trace.events.count() <= 55, "Events per trace should be <= 55")
                 var lastTimestamp = begin
                 for (event in trace.events) {
                     standardEventAssertions(event)
-                    assertFalse(event.timeTimestamp!!.isBefore(lastTimestamp),
-                        "Events within trace should be ordered by timestamp ASC")
+                    assertFalse(
+                        event.timeTimestamp!!.isBefore(lastTimestamp),
+                        "Events within trace should be ordered by timestamp ASC",
+                    )
                     lastTimestamp = event.timeTimestamp!!
                 }
             }
@@ -265,10 +288,11 @@ class QueryTests : HierarchicalTestsBase() {
     @Test
     fun groupEventByStandardAttributeTest() {
         // ProcessM: select t:name, e:name, sum(e:total) where l:id=$journal group by e:name
-        val result = q(
-            "select t:name, e:name, sum(e:total) where l:logId='$journalLogId' group by e:name",
-            journalLogId
-        )
+        val result =
+            q(
+                "select t:name, e:name, sum(e:total) where l:logId='$journalLogId' group by e:name",
+                journalLogId,
+            )
 
         assertTrue(result.success, "Query should succeed: ${result.error}")
         assertEquals(1, result.count())
@@ -286,12 +310,17 @@ class QueryTests : HierarchicalTestsBase() {
 
             // All events within a trace should have distinct names (each event is a group)
             val distinctConceptNames = trace.events.distinctBy { it.conceptName }.count()
-            assertEquals(distinctConceptNames, trace.events.count(),
-                "Each event should have a unique name within the trace (grouped)")
+            assertEquals(
+                distinctConceptNames,
+                trace.events.count(),
+                "Each event should have a unique name within the trace (grouped)",
+            )
 
             for (event in trace.events) {
-                assertTrue(event.conceptName in eventNames,
-                    "Event name should be in eventNames: ${event.conceptName}")
+                assertTrue(
+                    event.conceptName in eventNames,
+                    "Event name should be in eventNames: ${event.conceptName}",
+                )
                 assertNull(event.costCurrency)
                 assertNull(event.costTotal)
 
@@ -308,10 +337,11 @@ class QueryTests : HierarchicalTestsBase() {
         // ^^e:name hoists to log scope — log-scope GROUP BY is a no-op for single-log queries.
         // Implicit event GROUP BY means "aggregate all events per trace" → one trace per trace,
         // each with sum(e:total) across all its events. ProcessM returns 30 traces (default limit).
-        val result = q(
-            "select sum(e:total) where l:logId='$journalLogId' group by ^^e:name",
-            journalLogId
-        )
+        val result =
+            q(
+                "select sum(e:total) where l:logId='$journalLogId' group by ^^e:name",
+                journalLogId,
+            )
 
         assertTrue(result.success, "Query should succeed: ${result.error}")
         assertEquals(1, result.count())
@@ -332,10 +362,11 @@ class QueryTests : HierarchicalTestsBase() {
     @Test
     fun groupLogByEventStdAndGroupEventByStdAttrTest() {
         // ProcessM: select e:name, sum(e:total) where l:name='JournalReview' group by ^^e:name, e:name
-        val result = q(
-            "select e:name, sum(e:total) where l:logId='$journalLogId' group by ^^e:name, e:name",
-            journalLogId
-        )
+        val result =
+            q(
+                "select e:name, sum(e:total) where l:logId='$journalLogId' group by ^^e:name, e:name",
+                journalLogId,
+            )
 
         assertTrue(result.success, "Query should succeed: ${result.error}")
         assertEquals(1, result.count())
@@ -358,10 +389,11 @@ class QueryTests : HierarchicalTestsBase() {
     @Test
     fun groupByImplicitScopeTest() {
         // ProcessM: where l:id=$journal group by c:Resource
-        val result = q(
-            "where l:logId='$journalLogId' group by c:Resource",
-            journalLogId
-        )
+        val result =
+            q(
+                "where l:logId='$journalLogId' group by c:Resource",
+                journalLogId,
+            )
 
         assertTrue(result.success, "Query should succeed: ${result.error}")
         assertTrue(result.logs.isNotEmpty(), "Should have results")
@@ -387,10 +419,11 @@ class QueryTests : HierarchicalTestsBase() {
     @Test
     fun groupByOuterScopeTest() {
         // ProcessM: select t:min(l:name) where l:name='JournalReview' limit l:3
-        val result = q(
-            "select t:min(l:name) where l:logId='$journalLogId' limit l:3",
-            journalLogId
-        )
+        val result =
+            q(
+                "select t:min(l:name) where l:logId='$journalLogId' limit l:3",
+                journalLogId,
+            )
 
         assertTrue(result.success, "Query should succeed: ${result.error}")
         assertTrue(result.count() in 1..3)
@@ -399,18 +432,22 @@ class QueryTests : HierarchicalTestsBase() {
             assertEquals(1, log.traces.count(), "Each log should have 1 trace (grouped)")
             val trace = log.traces.first()
             assertEquals(1, trace.attributes.size, "Trace should have 1 attribute")
-            assertEquals("JournalReview", trace.attributes["trace:min(log:concept:name)"],
-                "trace:min(l:name) should be JournalReview")
+            assertEquals(
+                "JournalReview",
+                trace.attributes["trace:min(log:concept:name)"],
+                "trace:min(l:name) should be JournalReview",
+            )
         }
     }
 
     @Test
     fun groupByImplicitFromSelectTest() {
         // ProcessM: select l:*, t:*, avg(e:total), min(e:timestamp), max(e:timestamp) where l:name matches '...' limit l:1
-        val result = q(
-            "select l:*, t:*, avg(e:total), min(e:timestamp), max(e:timestamp) where l:logId='$journalLogId' limit l:1",
-            journalLogId
-        )
+        val result =
+            q(
+                "select l:*, t:*, avg(e:total), min(e:timestamp), max(e:timestamp) where l:logId='$journalLogId' limit l:1",
+                journalLogId,
+            )
 
         assertTrue(result.success, "Query should succeed: ${result.error}")
         assertEquals(1, result.count())
@@ -424,8 +461,10 @@ class QueryTests : HierarchicalTestsBase() {
             assertTrue(conceptName >= -1, "Trace conceptName >= -1, got $conceptName")
             assertTrue(conceptName <= 100, "Trace conceptName <= 100, got $conceptName")
             assertEquals("EUR", trace.costCurrency, "Trace cost:currency should be EUR")
-            assertTrue(trace.costTotal === null || trace.costTotal!!.toInt() in 1..50,
-                "Trace cost:total should be null or in 1..50")
+            assertTrue(
+                trace.costTotal === null || trace.costTotal!!.toInt() in 1..50,
+                "Trace cost:total should be null or in 1..50",
+            )
             assertNull(trace.identityId, "Trace identity:id should be null")
             assertFalse(trace.isEventStream, "Trace isEventStream should be false")
 
@@ -446,22 +485,29 @@ class QueryTests : HierarchicalTestsBase() {
             assertNotNull(avgAttr, "avg(event:cost:total) should be present")
             assertNotNull(minAttr, "min(event:time:timestamp) should be present")
             assertNotNull(maxAttr, "max(event:time:timestamp) should be present")
-            assertTrue((avgAttr as Number).toDouble() in 1.0..1.08,
-                "avg(e:total) should be in 1.0..1.08, got: $avgAttr")
-            assertTrue((minAttr as Instant).isAfter(begin),
-                "min(e:timestamp) should be after begin")
-            assertTrue((maxAttr as Instant).isBefore(end),
-                "max(e:timestamp) should be before end")
+            assertTrue(
+                (avgAttr as Number).toDouble() in 1.0..1.08,
+                "avg(e:total) should be in 1.0..1.08, got: $avgAttr",
+            )
+            assertTrue(
+                (minAttr as Instant).isAfter(begin),
+                "min(e:timestamp) should be after begin",
+            )
+            assertTrue(
+                (maxAttr as Instant).isBefore(end),
+                "max(e:timestamp) should be before end",
+            )
         }
     }
 
     @Test
     fun groupByImplicitFromOrderByTest() {
         // ProcessM: where l:id=$journal order by avg(e:total), min(e:timestamp), max(e:timestamp)
-        val result = q(
-            "where l:logId='$journalLogId' order by avg(e:total), min(e:timestamp), max(e:timestamp)",
-            journalLogId
-        )
+        val result =
+            q(
+                "where l:logId='$journalLogId' order by avg(e:total), min(e:timestamp), max(e:timestamp)",
+                journalLogId,
+            )
 
         assertTrue(result.success, "Query should succeed: ${result.error}")
         assertEquals(1, result.count())
@@ -475,8 +521,10 @@ class QueryTests : HierarchicalTestsBase() {
             assertTrue(conceptName >= -1, "Trace conceptName >= -1, got $conceptName")
             assertTrue(conceptName <= 100, "Trace conceptName <= 100, got $conceptName")
             assertEquals("EUR", trace.costCurrency, "Trace cost:currency should be EUR")
-            assertTrue(trace.costTotal === null || trace.costTotal!!.toInt() in 1..50,
-                "Trace cost:total should be null or in 1..50")
+            assertTrue(
+                trace.costTotal === null || trace.costTotal!!.toInt() in 1..50,
+                "Trace cost:total should be null or in 1..50",
+            )
             assertNull(trace.identityId, "Trace identity:id should be null")
             assertFalse(trace.isEventStream, "Trace isEventStream should be false")
 
@@ -489,10 +537,11 @@ class QueryTests : HierarchicalTestsBase() {
     @Test
     fun groupByImplicitWithHoistingTest() {
         // ProcessM: select avg(^^e:total), min(^^e:timestamp), max(^^e:timestamp) where l:id=$journal
-        val result = q(
-            "select avg(^^e:total), min(^^e:timestamp), max(^^e:timestamp) where l:logId='$journalLogId'",
-            journalLogId
-        )
+        val result =
+            q(
+                "select avg(^^e:total), min(^^e:timestamp), max(^^e:timestamp) where l:logId='$journalLogId'",
+                journalLogId,
+            )
 
         assertTrue(result.success, "Query should succeed: ${result.error}")
         assertEquals(1, result.count())
@@ -508,12 +557,18 @@ class QueryTests : HierarchicalTestsBase() {
         assertNotNull(avgAttr, "avg(^^event:cost:total) should be in log.attributes")
         assertNotNull(minAttr, "min(^^event:time:timestamp) should be in log.attributes")
         assertNotNull(maxAttr, "max(^^event:time:timestamp) should be in log.attributes")
-        assertTrue((avgAttr as Number).toDouble() in 1.0..1.08,
-            "avg(^^e:total) should be in 1.0..1.08, got: $avgAttr")
-        assertTrue((minAttr as Instant).isAfter(begin),
-            "min(^^e:timestamp) should be after begin, got: $minAttr")
-        assertTrue((maxAttr as Instant).isBefore(end),
-            "max(^^e:timestamp) should be before end, got: $maxAttr")
+        assertTrue(
+            (avgAttr as Number).toDouble() in 1.0..1.08,
+            "avg(^^e:total) should be in 1.0..1.08, got: $avgAttr",
+        )
+        assertTrue(
+            (minAttr as Instant).isAfter(begin),
+            "min(^^e:timestamp) should be after begin, got: $minAttr",
+        )
+        assertTrue(
+            (maxAttr as Instant).isBefore(end),
+            "max(^^e:timestamp) should be before end, got: $maxAttr",
+        )
 
         assertEquals(101, log.traces.count(), "Should have 101 traces")
         for (trace in log.traces) {
@@ -542,10 +597,11 @@ class QueryTests : HierarchicalTestsBase() {
     fun groupByWithHoistingAndOrderByWithinGroupTest() {
         // ProcessM: where l:id=$journal group by ^e:name order by name
         // 78 trace-variants (order-insensitive grouping, events sorted by name within group)
-        val result = q(
-            "where l:logId='$journalLogId' group by ^e:name order by name limit t:200",
-            journalLogId
-        )
+        val result =
+            q(
+                "where l:logId='$journalLogId' group by ^e:name order by name limit t:200",
+                journalLogId,
+            )
 
         assertTrue(result.success, "Query should succeed: ${result.error}")
         assertTrue(result.logs.isNotEmpty(), "Should have results")
@@ -556,49 +612,57 @@ class QueryTests : HierarchicalTestsBase() {
 
         // Helper: check that variants with the given count value include each expected sequence
         // (trace.attributes["count(trace:concept:name)"] replaces trace.count from ProcessM)
-        fun validate(validTraces: List<List<String>>, count: Int) {
+        fun validate(
+            validTraces: List<List<String>>,
+            count: Int,
+        ) {
             for (validTrace in validTraces) {
                 assertTrue(
-                    variants.filter {
-                        ((it.attributes["count(trace:concept:name)"] as? Number)?.toInt() ?: 1) == count
-                    }.any {
-                        it.events.map { e -> e.conceptName!! }
-                            .zip(validTrace.asSequence())
-                            .all { (act, exp) -> act == exp }
-                    },
-                    "Expected variant with count=$count and events $validTrace not found"
+                    variants
+                        .filter {
+                            ((it.attributes["count(trace:concept:name)"] as? Number)?.toInt() ?: 1) == count
+                        }.any {
+                            it.events
+                                .map { e -> e.conceptName!! }
+                                .zip(validTrace.asSequence())
+                                .all { (act, exp) -> act == exp }
+                        },
+                    "Expected variant with count=$count and events $validTrace not found",
                 )
             }
         }
 
         // Variants with count=4 (sorted alphabetically within group)
-        val fourTraces = listOf(
-            "accept,accept,collect reviews,collect reviews,decide,decide,get review 1,get review 2,get review 3,invite reviewers,invite reviewers"
-        ).map { it.split(',') }
+        val fourTraces =
+            listOf(
+                "accept,accept,collect reviews,collect reviews,decide,decide,get review 1,get review 2,get review 3,invite reviewers,invite reviewers",
+            ).map { it.split(',') }
 
         // Variants with count=3
-        val threeTraces = listOf(
-            "collect reviews,collect reviews,decide,decide,get review 1,get review 3,invite reviewers,invite reviewers,reject,reject,time-out 2",
-            "accept,accept,collect reviews,collect reviews,decide,decide,get review 1,get review 2,get review X,get review X,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite reviewers,invite reviewers,time-out 3",
-            "collect reviews,collect reviews,decide,decide,get review 1,get review 2,get review 3,get review X,invite additional reviewer,invite additional reviewer,invite reviewers,invite reviewers,reject,reject"
-        ).map { it.split(',') }
+        val threeTraces =
+            listOf(
+                "collect reviews,collect reviews,decide,decide,get review 1,get review 3,invite reviewers,invite reviewers,reject,reject,time-out 2",
+                "accept,accept,collect reviews,collect reviews,decide,decide,get review 1,get review 2,get review X,get review X,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite reviewers,invite reviewers,time-out 3",
+                "collect reviews,collect reviews,decide,decide,get review 1,get review 2,get review 3,get review X,invite additional reviewer,invite additional reviewer,invite reviewers,invite reviewers,reject,reject",
+            ).map { it.split(',') }
 
-        val twoTraces = listOf(
-            "collect reviews,collect reviews,decide,decide,get review 2,get review 3,get review X,invite additional reviewer,invite additional reviewer,invite reviewers,invite reviewers,reject,reject,time-out 1",
-            "accept,accept,collect reviews,collect reviews,decide,decide,get review 2,get review 3,get review X,get review X,get review X,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite reviewers,invite reviewers,time-out 1",
-            "accept,accept,collect reviews,collect reviews,decide,decide,get review 3,get review X,get review X,get review X,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite reviewers,invite reviewers,time-out 1,time-out 2",
-            "collect reviews,collect reviews,decide,decide,get review 2,get review 3,get review X,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite reviewers,invite reviewers,reject,reject,time-out 1,time-out X",
-            "collect reviews,collect reviews,decide,decide,get review 1,get review 2,get review X,get review X,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite reviewers,invite reviewers,reject,reject,time-out 3",
-            "collect reviews,collect reviews,decide,decide,get review 3,get review X,invite additional reviewer,invite additional reviewer,invite reviewers,invite reviewers,reject,reject,time-out 1,time-out 2",
-            "collect reviews,collect reviews,decide,decide,get review 1,get review 2,get review X,get review X,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite reviewers,invite reviewers,reject,reject,time-out 3,time-out X,time-out X,time-out X",
-            "accept,accept,collect reviews,collect reviews,decide,decide,get review 3,get review X,invite additional reviewer,invite additional reviewer,invite reviewers,invite reviewers,time-out 1,time-out 2",
-            "accept,accept,collect reviews,collect reviews,decide,decide,get review 1,get review 2,get review X,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite reviewers,invite reviewers,time-out 3,time-out X,time-out X",
-            "collect reviews,collect reviews,decide,decide,get review 1,get review 2,get review X,get review X,get review X,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite reviewers,invite reviewers,reject,reject,time-out 3,time-out X,time-out X,time-out X,time-out X",
-            "collect reviews,collect reviews,decide,decide,get review X,get review X,get review X,get review X,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite reviewers,invite reviewers,reject,reject,time-out 1,time-out 2,time-out 3,time-out X,time-out X,time-out X,time-out X",
-            "accept,accept,collect reviews,collect reviews,decide,decide,get review 1,get review 3,invite reviewers,invite reviewers,time-out 2",
-            "collect reviews,collect reviews,decide,decide,get review 3,get review X,get review X,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite reviewers,invite reviewers,reject,reject,time-out 1,time-out 2,time-out X,time-out X",
-            "accept,accept,collect reviews,collect reviews,decide,decide,get review 1,get review 2,get review 3,get review X,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite reviewers,invite reviewers,time-out X,time-out X"
-        ).map { it.split(',') }
+        val twoTraces =
+            listOf(
+                "collect reviews,collect reviews,decide,decide,get review 2,get review 3,get review X,invite additional reviewer,invite additional reviewer,invite reviewers,invite reviewers,reject,reject,time-out 1",
+                "accept,accept,collect reviews,collect reviews,decide,decide,get review 2,get review 3,get review X,get review X,get review X,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite reviewers,invite reviewers,time-out 1",
+                "accept,accept,collect reviews,collect reviews,decide,decide,get review 3,get review X,get review X,get review X,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite reviewers,invite reviewers,time-out 1,time-out 2",
+                "collect reviews,collect reviews,decide,decide,get review 2,get review 3,get review X,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite reviewers,invite reviewers,reject,reject,time-out 1,time-out X",
+                "collect reviews,collect reviews,decide,decide,get review 1,get review 2,get review X,get review X,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite reviewers,invite reviewers,reject,reject,time-out 3",
+                "collect reviews,collect reviews,decide,decide,get review 3,get review X,invite additional reviewer,invite additional reviewer,invite reviewers,invite reviewers,reject,reject,time-out 1,time-out 2",
+                "collect reviews,collect reviews,decide,decide,get review 1,get review 2,get review X,get review X,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite reviewers,invite reviewers,reject,reject,time-out 3,time-out X,time-out X,time-out X",
+                "accept,accept,collect reviews,collect reviews,decide,decide,get review 3,get review X,invite additional reviewer,invite additional reviewer,invite reviewers,invite reviewers,time-out 1,time-out 2",
+                "accept,accept,collect reviews,collect reviews,decide,decide,get review 1,get review 2,get review X,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite reviewers,invite reviewers,time-out 3,time-out X,time-out X",
+                "collect reviews,collect reviews,decide,decide,get review 1,get review 2,get review X,get review X,get review X,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite reviewers,invite reviewers,reject,reject,time-out 3,time-out X,time-out X,time-out X,time-out X",
+                "collect reviews,collect reviews,decide,decide,get review X,get review X,get review X,get review X,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite reviewers,invite reviewers,reject,reject,time-out 1,time-out 2,time-out 3,time-out X,time-out X,time-out X,time-out X",
+                "accept,accept,collect reviews,collect reviews,decide,decide,get review 1,get review 3,invite reviewers,invite reviewers,time-out 2",
+                "collect reviews,collect reviews,decide,decide,get review 3,get review X,get review X,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite reviewers,invite reviewers,reject,reject,time-out 1,time-out 2,time-out X,time-out X",
+                "accept,accept,collect reviews,collect reviews,decide,decide,get review 1,get review 2,get review 3,get review X,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite additional reviewer,invite reviewers,invite reviewers,time-out X,time-out X",
+            ).map { it.split(',') }
 
         validate(fourTraces, 4)
         validate(threeTraces, 3)
@@ -610,10 +674,11 @@ class QueryTests : HierarchicalTestsBase() {
         // ProcessM: select l:name, count(t:name), e:name where l:id=$journal group by ^e:name order by count(t:name) desc limit l:1
         // ProcessM: 97 trace-variants, count(trace:concept:name) attribute per trace-group
         // Sum of all count(t:name) across groups = 101 (each trace belongs to exactly one variant)
-        val result = q(
-            "select l:name, count(t:name), e:name where l:logId='$journalLogId' group by ^e:name order by count(t:name) desc limit l:1",
-            journalLogId
-        )
+        val result =
+            q(
+                "select l:name, count(t:name), e:name where l:logId='$journalLogId' group by ^e:name order by count(t:name) desc limit l:1",
+                journalLogId,
+            )
 
         assertTrue(result.success, "Query should succeed: ${result.error}")
         assertTrue(result.logs.isNotEmpty(), "Should have results")
@@ -623,36 +688,43 @@ class QueryTests : HierarchicalTestsBase() {
 
         // Sum of all count(t:name) values = 101 (all traces distributed across variants)
         // count(t:name) is trace-scoped → stored in trace.attributes["count(trace:concept:name)"]
-        val totalCount = log.traces.sumOf { trace ->
-            (trace.attributes["count(trace:concept:name)"] as? Number)?.toLong() ?: 0L
-        }
+        val totalCount =
+            log.traces.sumOf { trace ->
+                (trace.attributes["count(trace:concept:name)"] as? Number)?.toLong() ?: 0L
+            }
         assertEquals(101L, totalCount, "Total trace count should be 101 (all traces distributed)")
 
         // Most common variant (first in DESC order) should have count=3
         val firstTrace = log.traces.first()
-        assertEquals(3L,
+        assertEquals(
+            3L,
             (firstTrace.attributes["count(trace:concept:name)"] as? Number)?.toLong() ?: 0L,
-            "Most common variant should have count=3")
+            "Most common variant should have count=3",
+        )
 
         // Traces after index 3 (0-indexed) should all have count=1
         for (trace in log.traces.drop(3)) {
-            assertEquals(1L,
+            assertEquals(
+                1L,
                 (trace.attributes["count(trace:concept:name)"] as? Number)?.toLong() ?: 0L,
-                "Remaining variants should have count=1")
+                "Remaining variants should have count=1",
+            )
         }
     }
 
     @Test
     fun aggregationFunctionIndependence() {
         // ProcessM: Two queries - with and without count(^e:name) - should produce identical trace counts
-        val result1 = q(
-            "select count(t:name) where l:logId='$journalLogId' group by ^e:name order by count(t:name) desc limit l:1",
-            journalLogId
-        )
-        val result2 = q(
-            "select count(t:name), count(^e:name) where l:logId='$journalLogId' group by ^e:name order by count(t:name) desc limit l:1",
-            journalLogId
-        )
+        val result1 =
+            q(
+                "select count(t:name) where l:logId='$journalLogId' group by ^e:name order by count(t:name) desc limit l:1",
+                journalLogId,
+            )
+        val result2 =
+            q(
+                "select count(t:name), count(^e:name) where l:logId='$journalLogId' group by ^e:name order by count(t:name) desc limit l:1",
+                journalLogId,
+            )
 
         assertTrue(result1.success, "Query 1 should succeed")
         assertTrue(result2.success, "Query 2 should succeed")
@@ -661,16 +733,22 @@ class QueryTests : HierarchicalTestsBase() {
         if (result1.logs.isNotEmpty() && result2.logs.isNotEmpty()) {
             val traceCount1 = result1.first().traces.count()
             val traceCount2 = result2.first().traces.count()
-            assertEquals(traceCount1, traceCount2,
-                "Adding count(^e:name) should not change trace count")
+            assertEquals(
+                traceCount1,
+                traceCount2,
+                "Adding count(^e:name) should not change trace count",
+            )
             // Individual trace attributes should match between q1 and q2
             val traces1 = result1.first().traces.toList()
             val traces2 = result2.first().traces.toList()
             for (i in traces1.indices) {
                 val countInTrace1 = (traces1[i].attributes["count(trace:concept:name)"] as? Number)?.toLong()
                 val countInTrace2 = (traces2[i].attributes["count(trace:concept:name)"] as? Number)?.toLong()
-                assertEquals(countInTrace1, countInTrace2,
-                    "count(trace:concept:name) should be equal for trace $i: q1=$countInTrace1, q2=$countInTrace2")
+                assertEquals(
+                    countInTrace1,
+                    countInTrace2,
+                    "count(trace:concept:name) should be equal for trace $i: q1=$countInTrace1, q2=$countInTrace2",
+                )
             }
         }
     }
@@ -679,10 +757,11 @@ class QueryTests : HierarchicalTestsBase() {
     fun groupByWithAndWithoutHoistingAndOrderByCountTest() {
         // ProcessM: group by t:name, ^e:name → 101 trace groups (each trace name is unique)
         // count(t:name)=1 for every group since each trace name appears exactly once
-        val result = q(
-            "select l:name, count(t:name), e:name where l:logId='$journalLogId' group by t:name, ^e:name order by count(t:name) desc limit l:1",
-            journalLogId
-        )
+        val result =
+            q(
+                "select l:name, count(t:name), e:name where l:logId='$journalLogId' group by t:name, ^e:name order by count(t:name) desc limit l:1",
+                journalLogId,
+            )
 
         assertTrue(result.success, "Query should succeed: ${result.error}")
         assertTrue(result.logs.isNotEmpty(), "Should have results")
@@ -692,9 +771,11 @@ class QueryTests : HierarchicalTestsBase() {
 
         // Each trace group has count=1 since t:name is unique per trace
         for (trace in log.traces) {
-            assertEquals(1L,
+            assertEquals(
+                1L,
                 (trace.attributes["count(trace:concept:name)"] as? Number)?.toLong() ?: 0L,
-                "Each trace group should have count=1")
+                "Each trace group should have count=1",
+            )
         }
     }
 
@@ -708,9 +789,10 @@ class QueryTests : HierarchicalTestsBase() {
             return
         }
 
-        val result = q(
-            "select l:name, count(t:name), e:name where l:logId in ('$journalLogId', '$bpiLogId') group by ^e:name order by count(t:name) desc",
-        )
+        val result =
+            q(
+                "select l:name, count(t:name), e:name where l:logId in ('$journalLogId', '$bpiLogId') group by ^e:name order by count(t:name) desc",
+            )
 
         assertTrue(result.success, "Query should succeed: ${result.error}")
         assertEquals(2, result.count(), "Should have 2 logs (JournalReview + BPI)")
@@ -720,8 +802,10 @@ class QueryTests : HierarchicalTestsBase() {
         for (log in logs) {
             for (trace in log.traces) {
                 for (event in trace.events) {
-                    assertTrue(event.conceptName in allEventNames,
-                        "Event should be in eventNames or bpiEventNames, got: ${event.conceptName}")
+                    assertTrue(
+                        event.conceptName in allEventNames,
+                        "Event should be in eventNames or bpiEventNames, got: ${event.conceptName}",
+                    )
                 }
             }
         }
@@ -730,10 +814,11 @@ class QueryTests : HierarchicalTestsBase() {
     @Test
     fun multiScopeGroupBy() {
         // ProcessM: select l:name, t:name, max(^e:timestamp)-min(^e:timestamp), e:name, count(e:name) group by t:name, e:name
-        val result = q(
-            "select l:name, t:name, max(^e:timestamp)-min(^e:timestamp), e:name, count(e:name) where l:logId='$journalLogId' group by t:name, e:name",
-            journalLogId
-        )
+        val result =
+            q(
+                "select l:name, t:name, max(^e:timestamp)-min(^e:timestamp), e:name, count(e:name) where l:logId='$journalLogId' group by t:name, e:name",
+                journalLogId,
+            )
 
         assertTrue(result.success, "Query should succeed: ${result.error}")
         assertEquals(1, result.count())
@@ -745,8 +830,11 @@ class QueryTests : HierarchicalTestsBase() {
             // Events are grouped by (t:name, e:name) — so each conceptName appears exactly once per trace
             val eventsByName = trace.events.toList().groupBy { it.conceptName }
             for ((name, group) in eventsByName) {
-                assertEquals(1, group.size,
-                    "Events grouped by conceptName should appear exactly once per trace, but '$name' has ${group.size}")
+                assertEquals(
+                    1,
+                    group.size,
+                    "Events grouped by conceptName should appear exactly once per trace, but '$name' has ${group.size}",
+                )
                 assertEquals(name, group.first().conceptName)
             }
         }
@@ -759,10 +847,11 @@ class QueryTests : HierarchicalTestsBase() {
         //           stream.first().attributes["count(^trace:concept:name)"] == 101
         //           stream.first().attributes["count(^^event:concept:name)"] == 2298
         // In ProcessM, stream.first() is the Log component itself — so check log.attributes
-        val result = q(
-            "select count(l:name), count(^t:name), count(^^e:name) where l:logId='$journalLogId'",
-            journalLogId
-        )
+        val result =
+            q(
+                "select count(l:name), count(^t:name), count(^^e:name) where l:logId='$journalLogId'",
+                journalLogId,
+            )
 
         assertTrue(result.success, "Query should succeed: ${result.error}")
         assertTrue(result.logs.isNotEmpty(), "Should have results")
@@ -783,10 +872,11 @@ class QueryTests : HierarchicalTestsBase() {
     @Test
     fun orderByExpressionTest() {
         // ProcessM: select min(timestamp) where l:id=$journal group by ^e:name order by min(^e:timestamp)
-        val result = q(
-            "select min(timestamp) where l:logId='$journalLogId' group by ^e:name order by min(^e:timestamp)",
-            journalLogId
-        )
+        val result =
+            q(
+                "select min(timestamp) where l:logId='$journalLogId' group by ^e:name order by min(^e:timestamp)",
+                journalLogId,
+            )
 
         assertTrue(result.success, "Query should succeed: ${result.error}")
         assertEquals(1, result.count())
@@ -798,8 +888,10 @@ class QueryTests : HierarchicalTestsBase() {
         for (trace in log.traces) {
             val minTimestamp = trace.events.mapNotNull { it.attributes["min(event:time:timestamp)"] as? Instant }.minOrNull()
             assertNotNull(minTimestamp, "Each trace should have min(event:time:timestamp)")
-            assertFalse(lastTimestamp.isAfter(minTimestamp),
-                "Traces should be ordered by min(^e:timestamp) ASC: $lastTimestamp > $minTimestamp")
+            assertFalse(
+                lastTimestamp.isAfter(minTimestamp),
+                "Traces should be ordered by min(^e:timestamp) ASC: $lastTimestamp > $minTimestamp",
+            )
             lastTimestamp = minTimestamp
         }
     }
@@ -814,10 +906,11 @@ class QueryTests : HierarchicalTestsBase() {
             return
         }
 
-        val result = q(
-            "select l:name, t:name, min(^e:timestamp), max(^e:timestamp), max(^e:timestamp)-min(^e:timestamp) where l:logId='$hospitalLogId' group by t:name limit l:1, t:10",
-            hospitalLogId
-        )
+        val result =
+            q(
+                "select l:name, t:name, min(^e:timestamp), max(^e:timestamp), max(^e:timestamp)-min(^e:timestamp) where l:logId='$hospitalLogId' group by t:name limit l:1, t:10",
+                hospitalLogId,
+            )
 
         assertTrue(result.success, "Query should succeed: ${result.error}")
         assertEquals(1, result.count())
@@ -827,12 +920,18 @@ class QueryTests : HierarchicalTestsBase() {
 
         for (trace in log.traces) {
             assertNotNull(trace.conceptName, "Trace should have conceptName (t:name selected)")
-            assertNotNull(trace.attributes["min(^event:time:timestamp)"],
-                "min(^event:time:timestamp) should be present")
-            assertNotNull(trace.attributes["max(^event:time:timestamp)"],
-                "max(^event:time:timestamp) should be present")
-            assertNotNull(trace.attributes["max(^event:time:timestamp) - min(^event:time:timestamp)"],
-                "max - min duration expression should be present")
+            assertNotNull(
+                trace.attributes["min(^event:time:timestamp)"],
+                "min(^event:time:timestamp) should be present",
+            )
+            assertNotNull(
+                trace.attributes["max(^event:time:timestamp)"],
+                "max(^event:time:timestamp) should be present",
+            )
+            assertNotNull(
+                trace.attributes["max(^event:time:timestamp) - min(^event:time:timestamp)"],
+                "max - min duration expression should be present",
+            )
         }
     }
 
@@ -846,10 +945,11 @@ class QueryTests : HierarchicalTestsBase() {
             return
         }
 
-        val result = q(
-            "select max(^e:timestamp)-min(^e:timestamp) where l:logId='$hospitalLogId' group by t:name order by max(^e:timestamp)-min(^e:timestamp) desc",
-            hospitalLogId
-        )
+        val result =
+            q(
+                "select max(^e:timestamp)-min(^e:timestamp) where l:logId='$hospitalLogId' group by t:name order by max(^e:timestamp)-min(^e:timestamp) desc",
+                hospitalLogId,
+            )
 
         assertTrue(result.success, "Query should succeed: ${result.error}")
         assertEquals(1, result.count())
@@ -862,13 +962,16 @@ class QueryTests : HierarchicalTestsBase() {
             val durationAttr = trace.attributes["max(^event:time:timestamp) - min(^event:time:timestamp)"]
             assertNotNull(durationAttr, "Duration attribute should be present")
             // Neo4j returns IsoDuration; ProcessM returns Double (days). Convert to comparable seconds.
-            val durationSeconds = when (durationAttr) {
-                is Number -> durationAttr.toDouble()
-                is org.neo4j.driver.types.IsoDuration -> durationAttr.seconds().toDouble() + durationAttr.nanoseconds() / 1e9
-                else -> throw IllegalStateException("Unexpected duration type: ${durationAttr::class}")
-            }
-            assertTrue(durationSeconds <= lastDurationSeconds,
-                "Traces should be ordered by duration DESC: $durationSeconds > $lastDurationSeconds")
+            val durationSeconds =
+                when (durationAttr) {
+                    is Number -> durationAttr.toDouble()
+                    is org.neo4j.driver.types.IsoDuration -> durationAttr.seconds().toDouble() + durationAttr.nanoseconds() / 1e9
+                    else -> throw IllegalStateException("Unexpected duration type: ${durationAttr::class}")
+                }
+            assertTrue(
+                durationSeconds <= lastDurationSeconds,
+                "Traces should be ordered by duration DESC: $durationSeconds > $lastDurationSeconds",
+            )
             lastDurationSeconds = durationSeconds
         }
     }
@@ -882,10 +985,11 @@ class QueryTests : HierarchicalTestsBase() {
         // ProcessM: select [e:classifier:concept:name+lifecycle:transition] where l:id=$journal
         //           group by [^e:classifier:concept:name+lifecycle:transition]
         // Original expects: 97 traces, specific variant counts (1×count=3, 2×count=2, 94×count=1)
-        val result = q(
-            "select [e:classifier:concept:name+lifecycle:transition] where l:logId='$journalLogId' group by [^e:classifier:concept:name+lifecycle:transition]",
-            journalLogId
-        )
+        val result =
+            q(
+                "select [e:classifier:concept:name+lifecycle:transition] where l:logId='$journalLogId' group by [^e:classifier:concept:name+lifecycle:transition]",
+                journalLogId,
+            )
 
         assertTrue(result.success, "Query should succeed: ${result.error}")
         assertEquals(1, result.count())
@@ -909,26 +1013,32 @@ class QueryTests : HierarchicalTestsBase() {
         // At minimum: neither query should crash the system
         // Full assertion: both should fail (classifier not found)
         // ProcessM: assertFailsWith<IllegalArgumentException> { ... }.message contains "not found" and "classifier"
-        assertTrue(!result1.success || result1.logs.isEmpty() || result1.first().traces.count() == 0,
-            "Query with nonexistent classifier 'c:nonexistent' should produce empty/error result")
-        assertTrue(!result2.success || result2.logs.isEmpty() || result2.first().traces.count() == 0,
-            "Query with nonexistent classifier 'c:nonstandard nonexisting' should produce empty/error result")
+        assertTrue(
+            !result1.success || result1.logs.isEmpty() || result1.first().traces.count() == 0,
+            "Query with nonexistent classifier 'c:nonexistent' should produce empty/error result",
+        )
+        assertTrue(
+            !result2.success || result2.logs.isEmpty() || result2.first().traces.count() == 0,
+            "Query with nonexistent classifier 'c:nonstandard nonexisting' should produce empty/error result",
+        )
     }
 
     @Test
     fun invalidUseOfClassifiers() {
         // ProcessM: ClassifierInWhere — using classifier in WHERE clause should fail
-        val invalidResult = q(
-            "where [e:classifier:concept:name+lifecycle:transition] in ('acceptcomplete', 'rejectcomplete') and l:logId='$journalLogId'",
-            journalLogId
-        )
+        val invalidResult =
+            q(
+                "where [e:classifier:concept:name+lifecycle:transition] in ('acceptcomplete', 'rejectcomplete') and l:logId='$journalLogId'",
+                journalLogId,
+            )
         assertFalse(invalidResult.success, "Classifier in WHERE should fail (ClassifierInWhere)")
 
         // ProcessM: valid use of classifier in SELECT
-        val validResult = q(
-            "select [e:c:Event Name] where l:logId='$journalLogId'",
-            journalLogId
-        )
+        val validResult =
+            q(
+                "select [e:c:Event Name] where l:logId='$journalLogId'",
+                journalLogId,
+            )
         assertTrue(validResult.success, "Valid classifier SELECT should succeed: ${validResult.error}")
         assertEquals(1, validResult.count())
 
@@ -939,8 +1049,11 @@ class QueryTests : HierarchicalTestsBase() {
             for (event in trace.events) {
                 // Classifier [e:c:Event Name] resolves to concept:name → event.activity in Cypher.
                 // Aliased as e_c_Event_Name → key "c_Event_Name" in attributes after split.
-                val name = event.conceptName ?: event.attributes["c_Event_Name"]?.toString()
-                    ?: event.attributes.values.firstOrNull()?.toString()
+                val name =
+                    event.conceptName ?: event.attributes["c_Event_Name"]?.toString()
+                        ?: event.attributes.values
+                            .firstOrNull()
+                            ?.toString()
                 assertNotNull(name, "Event should have concept:name via classifier")
                 assertTrue(name in eventNames, "Event name should be in eventNames, got: $name")
             }
@@ -951,10 +1064,11 @@ class QueryTests : HierarchicalTestsBase() {
     fun duplicateAttributes() {
         // ProcessM: select e:name, [e:c:Event Name] where l:id=$journal
         // Both select the same underlying attribute (concept:name via classifier)
-        val result = q(
-            "select e:name, [e:c:Event Name] where l:logId='$journalLogId'",
-            journalLogId
-        )
+        val result =
+            q(
+                "select e:name, [e:c:Event Name] where l:logId='$journalLogId'",
+                journalLogId,
+            )
 
         assertTrue(result.success, "Query should succeed: ${result.error}")
         assertEquals(1, result.count())
@@ -964,8 +1078,10 @@ class QueryTests : HierarchicalTestsBase() {
         for (trace in log.traces) {
             assertTrue(trace.events.count() >= 1, "Trace should have events")
             for (event in trace.events) {
-                assertTrue(event.conceptName in eventNames,
-                    "Event name should be in eventNames, got: ${event.conceptName}")
+                assertTrue(
+                    event.conceptName in eventNames,
+                    "Event name should be in eventNames, got: ${event.conceptName}",
+                )
             }
         }
     }
@@ -977,9 +1093,11 @@ class QueryTests : HierarchicalTestsBase() {
     @Test
     @Disabled("Nested XES attribute hierarchies not supported — original checks meta_concept:named_events_total with children")
     fun readNestedAttributes() {
-        val hospitalLogId = testDataLoader.loadHospitalLog() ?: run {
-            println("Hospital dataset not available, skipping"); return
-        }
+        val hospitalLogId =
+            testDataLoader.loadHospitalLog() ?: run {
+                println("Hospital dataset not available, skipping")
+                return
+            }
         val result = q("where l:logId='$hospitalLogId' limit l:1, t:1, e:1", hospitalLogId)
         assertTrue(result.success, "Query should succeed: ${result.error}")
         assertTrue(result.logs.isNotEmpty(), "Should have results")
@@ -988,9 +1106,11 @@ class QueryTests : HierarchicalTestsBase() {
     @Test
     @Disabled("Nested attribute skip flag not applicable — original uses nestedAttributes=false constructor param")
     fun skipNestedAttributes() {
-        val hospitalLogId = testDataLoader.loadHospitalLog() ?: run {
-            println("Hospital dataset not available, skipping"); return
-        }
+        val hospitalLogId =
+            testDataLoader.loadHospitalLog() ?: run {
+                println("Hospital dataset not available, skipping")
+                return
+            }
         val result = q("where l:logId='$hospitalLogId' limit l:1, t:1, e:1", hospitalLogId)
         assertTrue(result.success, "Query should succeed: ${result.error}")
         assertTrue(result.logs.isNotEmpty(), "Should have results")
@@ -999,12 +1119,13 @@ class QueryTests : HierarchicalTestsBase() {
     @Test
     @Disabled("Nested attribute path filtering not supported — original uses SEPARATOR+STRING_MARKER for deep paths")
     fun whereOnANestedAttribute() {
-        val hospitalLogId = testDataLoader.loadHospitalLog() ?: run {
-            println("Hospital dataset not available, skipping"); return
-        }
+        val hospitalLogId =
+            testDataLoader.loadHospitalLog() ?: run {
+                println("Hospital dataset not available, skipping")
+                return
+            }
         val result = q("where l:logId='$hospitalLogId' limit l:1, t:1, e:1", hospitalLogId)
         assertTrue(result.success, "Query should succeed: ${result.error}")
         assertTrue(result.logs.isNotEmpty(), "Should have results")
     }
-
 }

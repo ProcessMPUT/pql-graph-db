@@ -26,16 +26,16 @@ sealed class Literal<T>(
     line: Int = -1,
     charPositionInLine: Int = -1,
 ) : Expression(line, charPositionInLine) {
-
     override val type: Type
-        get() = when (this) {
-            is StringLiteral -> Type.STRING
-            is NumberLiteral -> Type.NUMBER
-            is BooleanLiteral -> Type.BOOLEAN
-            is DateTimeLiteral -> Type.DATETIME
-            is UUIDLiteral -> Type.UUID
-            is NullLiteral -> Type.UNKNOWN
-        }
+        get() =
+            when (this) {
+                is StringLiteral -> Type.STRING
+                is NumberLiteral -> Type.NUMBER
+                is BooleanLiteral -> Type.BOOLEAN
+                is DateTimeLiteral -> Type.DATETIME
+                is UUIDLiteral -> Type.UUID
+                is NullLiteral -> Type.UNKNOWN
+            }
 
     /**
      * String representation of the literal.
@@ -44,7 +44,7 @@ sealed class Literal<T>(
      * Format: {scope:}value
      */
     override fun toString(): String {
-        val prefix = scope?.let { "${it}:" } ?: ""
+        val prefix = scope?.let { "$it:" } ?: ""
         return "$prefix${valueToString()}"
     }
 
@@ -73,7 +73,6 @@ class StringLiteral(
     line: Int = -1,
     charPositionInLine: Int = -1,
 ) : Literal<String>(value, scope, line, charPositionInLine) {
-
     companion object {
         /**
          * Parse a string literal from PQL.
@@ -84,7 +83,11 @@ class StringLiteral(
          * @param charPos character position for error reporting
          * @return parsed StringLiteral
          */
-        fun parse(s: String, line: Int = -1, charPos: Int = -1): StringLiteral {
+        fun parse(
+            s: String,
+            line: Int = -1,
+            charPos: Int = -1,
+        ): StringLiteral {
             // Strip scope prefix if present (e.g. l:'abc')
             val colonIndex = s.indexOf(':')
             var scope: Scope? = null
@@ -140,7 +143,10 @@ class StringLiteral(
          * @param quoteChar the quote character being used (" or ')
          * @return index of closing quote, or s.length if no unescaped closing quote found
          */
-        private fun findClosingQuote(s: String, quoteChar: Char): Int {
+        private fun findClosingQuote(
+            s: String,
+            quoteChar: Char,
+        ): Int {
             var i = 1 // Start after opening quote
             var escaped = false
 
@@ -177,18 +183,22 @@ class StringLiteral(
          * @param removeTrailingEscape If true, removes trailing escape sequence (ProcessM behavior
          *                             for malformed strings without closing quote)
          */
-        private fun unescapeJava(s: String, removeTrailingEscape: Boolean = false): String {
+        private fun unescapeJava(
+            s: String,
+            removeTrailingEscape: Boolean = false,
+        ): String {
             // Remove trailing escape sequence if requested (ProcessM behavior for malformed strings)
             // This handles cases like "abc jr\" where the closing quote is escaped but there's no real closing quote
-            val cleaned = if (removeTrailingEscape && s.length >= 2 && s[s.length - 2] == '\\') {
-                // Remove last 2 chars (backslash + escaped char)
-                s.dropLast(2)
-            } else if (removeTrailingEscape && s.endsWith("\\")) {
-                // Remove trailing backslash
-                s.dropLast(1)
-            } else {
-                s
-            }
+            val cleaned =
+                if (removeTrailingEscape && s.length >= 2 && s[s.length - 2] == '\\') {
+                    // Remove last 2 chars (backslash + escaped char)
+                    s.dropLast(2)
+                } else if (removeTrailingEscape && s.endsWith("\\")) {
+                    // Remove trailing backslash
+                    s.dropLast(1)
+                } else {
+                    s
+                }
             return cleaned
                 .replace("\\\\", "\u0000") // Temp placeholder for backslash
                 .replace("\\\"", "\"")
@@ -218,7 +228,6 @@ class NumberLiteral(
     line: Int = -1,
     charPositionInLine: Int = -1,
 ) : Literal<Double>(value, scope, line, charPositionInLine) {
-
     companion object {
         /**
          * Parse a number literal from PQL.
@@ -228,7 +237,11 @@ class NumberLiteral(
          * @param charPos character position for error reporting
          * @return parsed NumberLiteral
          */
-        fun parse(s: String, line: Int = -1, charPos: Int = -1): NumberLiteral {
+        fun parse(
+            s: String,
+            line: Int = -1,
+            charPos: Int = -1,
+        ): NumberLiteral {
             val colonIndex = s.indexOf(':')
             var scope: Scope? = null
             var content = s
@@ -260,7 +273,6 @@ class BooleanLiteral(
     line: Int = -1,
     charPositionInLine: Int = -1,
 ) : Literal<Boolean>(value, scope, line, charPositionInLine) {
-
     companion object {
         /**
          * Parse a boolean literal from PQL.
@@ -270,7 +282,11 @@ class BooleanLiteral(
          * @param charPos character position for error reporting
          * @return parsed BooleanLiteral
          */
-        fun parse(s: String, line: Int = -1, charPos: Int = -1): BooleanLiteral {
+        fun parse(
+            s: String,
+            line: Int = -1,
+            charPos: Int = -1,
+        ): BooleanLiteral {
             val colonIndex = s.indexOf(':')
             var scope: Scope? = null
             var content = s
@@ -309,26 +325,27 @@ class DateTimeLiteral(
     line: Int = -1,
     charPositionInLine: Int = -1,
 ) : Literal<LocalDateTime>(value, scope, line, charPositionInLine) {
-
     companion object {
-        private val dateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm[:ss][.SSS][XXX][XX][X]")
         private val dateFormatter = DateTimeFormatter.ISO_DATE
 
-        private val formatters = listOf(
-            // Standard ISO with separators
-            DateTimeFormatter.ISO_DATE_TIME,
-            DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm[:ss][.SSS][XXX][XX][X]"),
+        private val formatters =
+            listOf(
+                // Standard ISO with separators
+                DateTimeFormatter.ISO_DATE_TIME,
+                DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm[:ss][.SSS][XXX][XX][X]"),
+                // Basic ISO (compact)
+                DateTimeFormatter.BASIC_ISO_DATE,
+                DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmm[ss][.SSS][XXX][XX][X]"),
+                // Compact without T
+                DateTimeFormatter.ofPattern("yyyyMMddHHmmss[.SSS][XXX][XX][X]"),
+                DateTimeFormatter.ofPattern("yyyyMMddHHmm[XXX][XX][X]"),
+            )
 
-            // Basic ISO (compact)
-            DateTimeFormatter.BASIC_ISO_DATE,
-            DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmm[ss][.SSS][XXX][XX][X]"),
-
-            // Compact without T
-            DateTimeFormatter.ofPattern("yyyyMMddHHmmss[.SSS][XXX][XX][X]"),
-            DateTimeFormatter.ofPattern("yyyyMMddHHmm[XXX][XX][X]")
-        )
-
-        fun parse(s: String, line: Int = -1, charPos: Int = -1): DateTimeLiteral {
+        fun parse(
+            s: String,
+            line: Int = -1,
+            charPos: Int = -1,
+        ): DateTimeLiteral {
             // Strip scope prefix if present
             val colonIndex = s.indexOf(':')
             var scope: Scope? = null
@@ -345,26 +362,33 @@ class DateTimeLiteral(
             }
 
             // Remove 'D' or 'd' prefix if present
-            val cleaned = content.removePrefix("D").removePrefix("d").removePrefix("'").removeSuffix("'")
+            val cleaned =
+                content
+                    .removePrefix("D")
+                    .removePrefix("d")
+                    .removePrefix("'")
+                    .removeSuffix("'")
 
             var lastException: Exception? = null
 
             // Try all formatters
             for (formatter in formatters) {
                 try {
-                    val dateTime = if (formatter == DateTimeFormatter.BASIC_ISO_DATE || formatter == dateFormatter) {
-                         LocalDate.parse(cleaned, formatter).atStartOfDay()
-                    } else {
-                        // Try OffsetDateTime first to properly handle timezone offsets
-                        try {
-                            OffsetDateTime.parse(cleaned, formatter)
-                                .atZoneSameInstant(ZoneOffset.UTC)
-                                .toLocalDateTime()
-                        } catch (e: Exception) {
-                            // Fall back to LocalDateTime (no offset info)
-                            LocalDateTime.parse(cleaned, formatter)
+                    val dateTime =
+                        if (formatter == DateTimeFormatter.BASIC_ISO_DATE || formatter == dateFormatter) {
+                            LocalDate.parse(cleaned, formatter).atStartOfDay()
+                        } else {
+                            // Try OffsetDateTime first to properly handle timezone offsets
+                            try {
+                                OffsetDateTime
+                                    .parse(cleaned, formatter)
+                                    .atZoneSameInstant(ZoneOffset.UTC)
+                                    .toLocalDateTime()
+                            } catch (e: Exception) {
+                                // Fall back to LocalDateTime (no offset info)
+                                LocalDateTime.parse(cleaned, formatter)
+                            }
                         }
-                    }
                     return DateTimeLiteral(dateTime, scope, line, charPos)
                 } catch (e: Exception) {
                     lastException = e
@@ -412,7 +436,6 @@ class UUIDLiteral(
     line: Int = -1,
     charPositionInLine: Int = -1,
 ) : Literal<UUID>(value, scope, line, charPositionInLine) {
-
     companion object {
         /**
          * Parse a UUID literal from PQL.
@@ -422,7 +445,11 @@ class UUIDLiteral(
          * @param charPos character position for error reporting
          * @return parsed UUIDLiteral
          */
-        fun parse(s: String, line: Int = -1, charPos: Int = -1): UUIDLiteral {
+        fun parse(
+            s: String,
+            line: Int = -1,
+            charPos: Int = -1,
+        ): UUIDLiteral {
             val colonIndex = s.indexOf(':')
             var scope: Scope? = null
             var content = s
@@ -458,14 +485,17 @@ class NullLiteral(
     line: Int = -1,
     charPositionInLine: Int = -1,
 ) : Literal<Nothing?>(null, scope, line, charPositionInLine) {
-
     /**
      * String representation - just "null" (scope handled by base class).
      */
     override fun valueToString(): String = "null"
 
     companion object {
-        fun parse(s: String, line: Int = -1, charPos: Int = -1): NullLiteral {
+        fun parse(
+            s: String,
+            line: Int = -1,
+            charPos: Int = -1,
+        ): NullLiteral {
             val colonIndex = s.indexOf(':')
             var scope: Scope? = null
             if (colonIndex >= 0) {

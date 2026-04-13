@@ -11,7 +11,7 @@ enum class OrderDirection {
     },
     Descending {
         override fun toString() = "desc"
-    };
+    }, ;
 
     companion object {
         /**
@@ -23,7 +23,10 @@ enum class OrderDirection {
          * @return the parsed OrderDirection
          * @throws IllegalArgumentException if string is invalid and no default provided
          */
-        fun parse(s: String?, default: OrderDirection = Ascending): OrderDirection {
+        fun parse(
+            s: String?,
+            default: OrderDirection = Ascending,
+        ): OrderDirection {
             if (s == null) return default
 
             return when (s.lowercase()) {

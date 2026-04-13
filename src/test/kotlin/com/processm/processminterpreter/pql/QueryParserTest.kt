@@ -1,14 +1,18 @@
 package com.processm.processminterpreter.pql
 
+import QLLexer
+import QLParser
 import com.processm.processminterpreter.pql.model.OrderDirection
 import com.processm.processminterpreter.pql.model.Scope
 import com.processm.processminterpreter.pql.visitor.QueryBuilder
 import org.antlr.v4.runtime.CharStreams
 import org.antlr.v4.runtime.CommonTokenStream
 import org.junit.jupiter.api.Test
-import QLLexer
-import QLParser
-import kotlin.test.*
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 /**
  * Query Parser Tests - Ported from ProcessM QueryTests.kt
@@ -19,7 +23,6 @@ import kotlin.test.*
  * Source: https://github.com/ProcessMPUT/processm/blob/master/processm.core/src/test/kotlin/processm/core/querylanguage/QueryTests.kt
  */
 class QueryParserTest {
-
     /**
      * Helper function to parse PQL query string into Query object
      */
