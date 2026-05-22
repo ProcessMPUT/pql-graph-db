@@ -1,11 +1,10 @@
 package com.processm.processminterpreter
 
-import com.processm.processminterpreter.pql.AntlrPQLTranslator
-import com.processm.processminterpreter.pql.interpreter.BaseInterpreterTest
-import com.processm.processminterpreter.service.PQLQueryService
-import com.processm.processminterpreter.xes.XESLoader
-import com.processm.processminterpreter.xes.XESParser
-import com.processm.processminterpreter.xes.XESWriter
+import com.processm.processminterpreter.domain.pql.interpreter.BaseInterpreterTest
+import com.processm.processminterpreter.infrastructure.persistence.neo4j.xes.Neo4jXesLogWriter
+import com.processm.processminterpreter.infrastructure.xes.XESLoader
+import com.processm.processminterpreter.infrastructure.xes.XESParser
+import com.processm.processminterpreter.infrastructure.xes.OpenXesReader
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
@@ -17,12 +16,10 @@ import java.io.ByteArrayInputStream
 @Tag("Integration")
 class IntegrationTest : BaseInterpreterTest() {
     private lateinit var xesLoader: XESLoader
-    private lateinit var queryService: PQLQueryService
 
     @BeforeEach
     fun initServices() {
-        xesLoader = XESLoader(XESParser(), driver)
-        queryService = PQLQueryService(AntlrPQLTranslator(), driver, XESWriter())
+        xesLoader = XESLoader(OpenXesReader(XESParser()), Neo4jXesLogWriter(driver))
     }
 
     @Test
@@ -36,11 +33,12 @@ class IntegrationTest : BaseInterpreterTest() {
         // 2. Import Log
         val importResult = xesLoader.loadXESFile(inputStream, "integration-log")
         assertTrue(importResult.success, "Log import should succeed")
+        attachLogToInterpreterDataStore(importResult.logId ?: "integration-log")
 
         // 3. Execute PQL Query
         // Count total events
         val countQuery = "select count(e:name)"
-        val countResult = queryService.executePQLQuery(countQuery, defaultTraceLimit = -1)
+        val countResult = executeDataStoreQuery(countQuery, defaultTraceLimit = -1)
 
         if (!countResult.success) {
             println("Count query failed: ${countResult.error}")
@@ -48,13 +46,20 @@ class IntegrationTest : BaseInterpreterTest() {
         assertTrue(countResult.success, "Count query should succeed")
         // ProcessM groups event-level aggregation per trace implicitly
         assertEquals(traceCount, countResult.results.size, "Should have one result per trace")
-        val totalEvents = countResult.results.sumOf { (it.values.first { v -> v is Number } as Number).toInt() }
-        assertEquals(traceCount * eventsPerTrace, totalEvents, "Sum of per-trace counts should equal total events")
+        val totalEvents = countResult.results.sumOf { row ->
+            val countValue = row.entries.first { (key, _) -> key.startsWith("count") }.value as Number
+            countValue.toInt()
+        }
+        assertEquals(
+            traceCount * eventsPerTrace,
+            totalEvents,
+            "Sum of per-trace counts should equal total events",
+        )
 
         // 4. Verify Grouping and Aggregation
         // Count events per trace
         val groupQuery = "select t:name, count(e:name) group by t:name order by t:name"
-        val groupResult = queryService.executePQLQuery(groupQuery, defaultTraceLimit = -1)
+        val groupResult = executeDataStoreQuery(groupQuery, defaultTraceLimit = -1)
 
         if (!groupResult.success) {
             println("Group query failed: ${groupResult.error}")

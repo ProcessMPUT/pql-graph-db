@@ -1,11 +1,13 @@
 package com.processm.processminterpreter.processm
 
-import com.processm.processminterpreter.xes.XESLoader
-import com.processm.processminterpreter.xes.XESParser
+import com.processm.processminterpreter.application.ports.DataStoreRepository
+import com.processm.processminterpreter.domain.datastore.DataStore
+import com.processm.processminterpreter.infrastructure.xes.XESLoader
 import org.neo4j.driver.Driver
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.stereotype.Component
+import java.time.LocalDateTime
 
 /**
  * Loads test data from XES files into Neo4j for ProcessM compatibility tests
@@ -15,16 +17,20 @@ class TestDataLoader {
     private val logger = LoggerFactory.getLogger(TestDataLoader::class.java)
 
     @Autowired
-    private lateinit var xesParser: XESParser
-
-    @Autowired
     private lateinit var xesLoader: XESLoader
 
     @Autowired
     private lateinit var neo4jDriver: Driver
 
+    @Autowired
+    private lateinit var dataStores: DataStoreRepository
+
     // Track loaded logs to avoid re-loading
     private val loadedLogs = mutableMapOf<String, String>()
+
+    companion object {
+        const val PROCESSM_COMPAT_DATA_STORE_ID = "processm-compat-tests"
+    }
 
     /**
      * Load JournalReview-extra.xes test log
@@ -34,10 +40,12 @@ class TestDataLoader {
      */
     fun loadJournalReviewLog(customLogId: String = "JournalReview-test"): String {
         return loadedLogs.getOrPut(customLogId) {
+            ensureCompatibilityDataStore()
             // Check if log already exists in Neo4j (from previous test run)
             val existingLogId = checkLogExists(customLogId)
             if (existingLogId != null) {
                 logger.info("Log already exists in Neo4j: $customLogId")
+                dataStores.attachLog(PROCESSM_COMPAT_DATA_STORE_ID, existingLogId)
                 return@getOrPut existingLogId
             }
 
@@ -56,6 +64,7 @@ class TestDataLoader {
                     }
                     logger.info("Loaded JournalReview-extra.xes into Neo4j: ${result.tracesCount} traces, logId: ${result.logId}")
 
+                    dataStores.attachLog(PROCESSM_COMPAT_DATA_STORE_ID, result.logId!!)
                     result.logId!!
                 } catch (e: Exception) {
                     logger.error("Failed to load JournalReview-extra.xes", e)
@@ -93,10 +102,12 @@ class TestDataLoader {
     fun loadHospitalLog(): String? {
         return try {
             loadedLogs.getOrPut("Hospital") {
+                ensureCompatibilityDataStore()
                 // Check Neo4j first — prevents re-loading after JVM restart
                 val existing = checkLogExists("Hospital-test")
                 if (existing != null) {
                     logger.info("Hospital log already exists in Neo4j: $existing")
+                    dataStores.attachLog(PROCESSM_COMPAT_DATA_STORE_ID, existing)
                     return@getOrPut existing
                 }
 
@@ -111,6 +122,7 @@ class TestDataLoader {
                         return null
                     }
                     logger.info("Loaded Hospital.xes into Neo4j: ${result.tracesCount} traces, logId: ${result.logId}")
+                    dataStores.attachLog(PROCESSM_COMPAT_DATA_STORE_ID, result.logId!!)
                     result.logId!!
                 }
             }
@@ -126,10 +138,12 @@ class TestDataLoader {
     fun loadBPILog(): String? {
         return try {
             loadedLogs.getOrPut("BPI") {
+                ensureCompatibilityDataStore()
                 // Check Neo4j first — prevents re-loading after JVM restart
                 val existing = checkLogExists("BPI-test")
                 if (existing != null) {
                     logger.info("BPI log already exists in Neo4j: $existing")
+                    dataStores.attachLog(PROCESSM_COMPAT_DATA_STORE_ID, existing)
                     return@getOrPut existing
                 }
 
@@ -144,6 +158,7 @@ class TestDataLoader {
                         return null
                     }
                     logger.info("Loaded BPI Challenge 2013 into Neo4j: ${result.tracesCount} traces, logId: ${result.logId}")
+                    dataStores.attachLog(PROCESSM_COMPAT_DATA_STORE_ID, result.logId!!)
                     result.logId!!
                 }
             }
@@ -155,10 +170,16 @@ class TestDataLoader {
 
     /**
      * Clear all test data from Neo4j.
-     * Removes only logs with known test logIds (JournalReview-test, Hospital-test, BPI-test).
+     * Removes only logs with known test logIds.
      * Call this from @AfterAll if you need a clean database for the next test run.
      */
-    fun clearTestData(logIds: List<String> = listOf("JournalReview-test", "Hospital-test", "BPI-test")) {
+    fun clearTestData(
+        logIds: List<String> = listOf(
+            "0f6a2822-6d9a-4dd2-88d7-0f50e10b5f5f",
+            "Hospital-test",
+            "BPI-test",
+        ),
+    ) {
         logger.info("Clearing test data for logIds: $logIds")
         neo4jDriver.session().use { session ->
             for (logId in logIds) {
@@ -178,4 +199,19 @@ class TestDataLoader {
         }
         loadedLogs.clear()
     }
+
+    private fun ensureCompatibilityDataStore() {
+        if (dataStores.exists(PROCESSM_COMPAT_DATA_STORE_ID)) return
+        val now = LocalDateTime.now()
+        dataStores.save(
+            DataStore(
+                id = PROCESSM_COMPAT_DATA_STORE_ID,
+                name = "ProcessM compatibility tests",
+                createdAt = now,
+                updatedAt = now,
+            ),
+        )
+    }
 }
+
+

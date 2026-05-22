@@ -22,7 +22,7 @@ repositories {
 
 dependencies {
     implementation("org.springframework.boot:spring-boot-starter-web")
-    implementation("org.neo4j.driver:neo4j-java-driver:5.24.0")
+    implementation("org.neo4j.driver:neo4j-java-driver:5.26.3")
     implementation("com.fasterxml.jackson.module:jackson-module-kotlin")
     implementation("org.jetbrains.kotlin:kotlin-reflect")
     implementation("org.springframework.boot:spring-boot-starter-actuator")
@@ -74,6 +74,12 @@ sourceSets {
 // Ensure ANTLR generates parser before Kotlin compilation
 tasks.named("compileKotlin") {
     dependsOn("generateGrammarSource")
+}
+
+// Gradle 8 strict mode: compileTestKotlin reads from generated antlr/test output dir
+// even when there's no test grammar, so make the dependency explicit.
+tasks.named("compileTestKotlin") {
+    dependsOn("generateTestGrammarSource")
 }
 
 tasks.withType<Test> {

@@ -470,6 +470,105 @@ textarea {
     box-shadow: var(--shadow-md);
 }
 
+.data-store-toolbar {
+    align-items: end;
+    display: grid;
+    gap: 1rem;
+    grid-template-columns: minmax(220px, 1fr) auto auto;
+    margin-bottom: 1rem;
+}
+
+.import-controls {
+    align-items: end;
+    display: grid;
+    gap: 1rem;
+    grid-template-columns: minmax(260px, 1fr) minmax(260px, 1fr) auto;
+}
+
+.compact-form {
+    margin-bottom: 0;
+}
+
+.custom-log-picker {
+    align-items: center;
+    display: flex;
+    gap: 0.75rem;
+    min-width: 0;
+}
+
+.custom-log-picker input[type="file"] {
+    display: none;
+}
+
+#selectedCustomLogName {
+    color: var(--text-muted);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.compact-import-panel {
+    padding-bottom: 1.25rem;
+}
+
+.data-store-list+#refreshLogsButton {
+    display: none;
+}
+
+.data-store-item {
+    gap: 1rem;
+}
+
+.data-store-item.active {
+    border-color: rgba(79, 172, 254, 0.55);
+    background: rgba(79, 172, 254, 0.08);
+}
+
+.data-store-meta {
+    display: grid;
+    min-width: 0;
+}
+
+.data-store-meta span,
+.data-store-meta small,
+.contained-log-item span {
+    color: var(--text-muted);
+    overflow-wrap: anywhere;
+}
+
+.contained-log-list {
+    display: grid;
+    gap: 0.75rem;
+}
+
+.contained-log-item {
+    align-items: center;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    display: flex;
+    justify-content: space-between;
+    padding: 1rem;
+}
+
+.contained-log-meta {
+    display: grid;
+    min-width: 0;
+}
+
+.contained-log-actions {
+    flex-shrink: 0;
+}
+
+.error-text {
+    color: #ff6b81;
+}
+
+.compare-layout {
+    grid-template-columns: minmax(0, 1fr);
+}
+
 .log-actions {
     display: flex;
     gap: 0.75rem;
@@ -482,6 +581,10 @@ textarea {
 
 .quick-start li {
     margin-bottom: 0.5rem;
+}
+
+#logs .quick-start {
+    display: none;
 }
 
 /* Toasts */
@@ -574,6 +677,36 @@ textarea {
     grid-template-columns: 250px 1fr;
     gap: 2rem;
     align-items: start;
+}
+
+.query-layout.compare-layout {
+    display: block;
+}
+
+.compare-layout .query-main {
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+    width: 100%;
+}
+
+.compare-layout .endpoint {
+    min-width: 0;
+}
+
+.remote-store-picker {
+    display: flex;
+    gap: 0.75rem;
+    align-items: center;
+}
+
+.remote-store-picker select {
+    flex: 1;
+    min-width: 0;
+}
+
+.query-only-layout {
+    grid-template-columns: minmax(0, 1fr);
 }
 
 /* Schema Sidebar */
@@ -860,4 +993,83 @@ textarea {
 
 .copy-btn:active {
     transform: translateY(0);
+}
+
+@media (max-width: 900px) {
+    body {
+        padding: 1rem;
+    }
+
+    h1 {
+        font-size: 2.2rem;
+    }
+
+    .tabs,
+    .data-store-toolbar,
+    .import-controls,
+    .query-layout,
+    .verification-content {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .tabs,
+    .log-list-item,
+    .log-actions,
+    .action-buttons {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .tabs,
+    .log-list-item,
+    .log-actions,
+    .action-buttons,
+    .data-store-toolbar,
+    .import-controls,
+    .remote-store-picker {
+        display: flex;
+    }
+
+    .compare-layout .query-main {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .endpoint {
+        padding: 1.25rem;
+        border-radius: 14px;
+    }
+
+    button,
+    .log-actions button {
+        width: 100%;
+    }
+
+    .remote-store-picker {
+        flex-direction: column;
+        align-items: stretch;
+    }
+}
+
+@media (max-width: 560px) {
+    body {
+        padding: 0.75rem;
+    }
+
+    h1 {
+        font-size: 1.8rem;
+    }
+
+    h2 {
+        font-size: 1.35rem;
+    }
+
+    .endpoint {
+        padding: 1rem;
+    }
+
+    .output-block pre,
+    .verification-detail {
+        font-size: 0.78rem;
+        padding: 0.875rem;
+    }
 }

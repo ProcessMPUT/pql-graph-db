@@ -22,7 +22,7 @@ Stworzenie **standalone REST component** dla ProcessM, który:
 ### ProcessM System
 - **Official Website:** https://processm.cs.put.poznan.pl
 - **Main Repository:** https://github.com/ProcessMPUT/processm
-- **PQL Specification:** [docs/pql.md](https://github.com/ProcessMPUT/processm/blob/master/docs/pql.md)
+- **PQL Specification:** [ProcessM PQL specification](https://github.com/ProcessMPUT/processm/blob/master/docs/pql.md)
 
 ### ProcessM Implementation (Reference)
 - **Parser Grammar (ANTLR4):** [processm.core/...​/querylanguage](https://github.com/ProcessMPUT/processm/tree/master/processm.core/src/main/antlr4/processm/core/querylanguage)
@@ -319,7 +319,7 @@ netstat -an | findstr 7687
 ### Problemy z pamięcią
 ```bash
 # Zwiększ limity pamięci w docker-compose.yml
-NEO4J_dbms_memory_heap_max__size: "2G"
+NEO4J_server_memory_heap_max__size: "2G"
 ```
 
 ### Błędy połączenia

@@ -1,9 +1,13 @@
 package com.processm.processminterpreter.processm.hierarchical
 
+import com.processm.processminterpreter.TestcontainersConfiguration
 import org.junit.jupiter.api.BeforeAll
+import org.junit.jupiter.api.Disabled
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
 import org.springframework.boot.test.context.SpringBootTest
+import org.springframework.context.annotation.Import
+import java.time.DayOfWeek
 import java.time.Instant
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -19,6 +23,7 @@ import kotlin.test.assertTrue
  * Original: https://github.com/ProcessMPUT/processm/blob/master/processm.core/src/test/kotlin/processm/core/log/hierarchical/DBHierarchicalXESInputStreamWithWhereQueryTests.kt
  */
 @SpringBootTest
+@Import(TestcontainersConfiguration::class)
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class WhereQueryTests : HierarchicalTestsBase() {
     private var journalLogId: String = ""
@@ -55,9 +60,11 @@ class WhereQueryTests : HierarchicalTestsBase() {
             assertTrue(conceptName >= -1, "Trace conceptName >= -1")
             assertTrue(conceptName <= 100, "Trace conceptName <= 100")
             assertEquals("EUR", trace.costCurrency, "Trace cost:currency should be EUR")
-            assertTrue(trace.costTotal === null || trace.costTotal!! > 0.0, "Trace cost:total should be > 0 if not null")
+            assertTrue(
+                trace.costTotal === null || trace.costTotal!! > 0.0,
+                "Trace cost:total should be null or positive",
+            )
             assertNull(trace.identityId, "Trace identity:id should be null")
-            assertFalse(trace.isEventStream, "Trace isEventStream should be false")
 
             assertTrue(trace.events.count() > 0, "Trace should have events")
             for (event in trace.events) {
@@ -100,9 +107,8 @@ class WhereQueryTests : HierarchicalTestsBase() {
             assertTrue(conceptName >= -1)
             assertTrue(conceptName <= 100)
             assertEquals("EUR", trace.costCurrency)
-            assertTrue(trace.costTotal === null || trace.costTotal!! > 0.0)
+            assertTrue(trace.costTotal === null || trace.costTotal!!.toInt() == trace.events.count())
             assertNull(trace.identityId)
-            assertFalse(trace.isEventStream)
 
             assertTrue(trace.events.count() > 0, "Trace should have events")
             for (event in trace.events) {
@@ -114,7 +120,10 @@ class WhereQueryTests : HierarchicalTestsBase() {
                 trace.events.any { e -> e.timeTimestamp!!.atZone(java.time.ZoneOffset.UTC).dayOfWeek in validDays },
                 "Trace should have at least one weekend-day event (that's why it was included by hoisting)",
             )
-            // NOT all events need to be weekend events (hoisting includes ALL trace events)
+            assertTrue(
+                trace.events.any { e -> e.timeTimestamp!!.atZone(java.time.ZoneOffset.UTC).dayOfWeek !in validDays },
+                "Hoisting should keep non-weekend events inside the matching trace",
+            )
         }
     }
 
@@ -134,7 +143,21 @@ class WhereQueryTests : HierarchicalTestsBase() {
         val log = result.first()
         standardLogAssertionsWithMetadata(log)
 
+        assertEquals(TOTAL_TRACES, log.traces.count(), "Log-level hoisting should return every JournalReview trace")
         assertTrue(log.traces.count() > 0, "Log should have traces")
+        val validDays = setOf(DayOfWeek.SATURDAY, DayOfWeek.SUNDAY)
+        assertTrue(
+            log.traces.any { trace -> trace.events.any { event -> event.timeTimestamp!!.atZone(java.time.ZoneOffset.UTC).dayOfWeek in validDays } },
+            "Returned log should contain weekend events",
+        )
+        assertTrue(
+            log.traces.any { trace -> trace.events.any { event -> event.timeTimestamp!!.atZone(java.time.ZoneOffset.UTC).dayOfWeek !in validDays } },
+            "Log-level hoisting should keep non-weekend events too",
+        )
+        assertTrue(
+            log.traces.any { trace -> trace.events.none { event -> event.timeTimestamp!!.atZone(java.time.ZoneOffset.UTC).dayOfWeek in validDays } },
+            "Log-level hoisting should keep traces that do not individually match the event predicate",
+        )
         // ALL traces and ALL events are returned (filter at log level)
         for (trace in log.traces) {
             val conceptName = Integer.parseInt(trace.conceptName!!)
@@ -143,8 +166,16 @@ class WhereQueryTests : HierarchicalTestsBase() {
             assertEquals("EUR", trace.costCurrency)
             assertTrue(trace.costTotal === null || trace.costTotal!! > 0.0)
             assertNull(trace.identityId)
-            assertFalse(trace.isEventStream)
 
+            assertTrue(trace.events.count() > 0, "Trace should have events")
+            assertTrue(
+                trace.events.any { it.timeTimestamp!!.atZone(java.time.ZoneOffset.UTC).dayOfWeek in validDays } || trace.conceptName == "-1",
+                "Every regular trace should contain at least one weekend event in the full JournalReview fixture",
+            )
+            assertTrue(
+                trace.events.any { it.timeTimestamp!!.atZone(java.time.ZoneOffset.UTC).dayOfWeek !in validDays },
+                "Every returned trace should still include non-weekend events",
+            )
             for (event in trace.events) {
                 standardEventAssertions(event)
             }
@@ -175,16 +206,13 @@ class WhereQueryTests : HierarchicalTestsBase() {
             assertEquals("EUR", trace.costCurrency, "Trace cost:currency should be EUR")
             assertTrue(trace.costTotal === null || trace.costTotal!! > 0.0)
             assertNull(trace.identityId)
-            assertFalse(trace.isEventStream)
 
             assertTrue(trace.events.count() > 0, "Trace should have events")
             for (event in trace.events) {
                 assertTrue(event.conceptName in eventNames)
                 assertTrue(event.timeTimestamp!!.isAfter(begin))
                 assertTrue(event.timeTimestamp!!.isBefore(end))
-                if (event.conceptInstance != null) {
-                    assertNotNull(event.conceptInstance!!.toIntOrNull(), "concept:instance should be parseable as int")
-                }
+                assertNull(event.conceptInstance, "concept:instance should not be synthesized")
                 assertEquals("USD", event.costCurrency, "Event cost:currency should be USD (mismatch with trace EUR)")
                 assertEquals(1.08, event.costTotal, "Event cost:total should be exactly 1.08 (USD events)")
                 assertNull(event.lifecycleState)
@@ -220,16 +248,13 @@ class WhereQueryTests : HierarchicalTestsBase() {
             assertEquals("EUR", trace.costCurrency, "Trace cost:currency should be EUR")
             assertTrue(trace.costTotal === null || trace.costTotal!! > 0.0)
             assertNull(trace.identityId)
-            assertFalse(trace.isEventStream)
 
             assertTrue(trace.events.count() > 0)
             for (event in trace.events) {
                 assertTrue(event.conceptName in eventNames)
                 assertTrue(event.timeTimestamp!!.isAfter(begin))
                 assertTrue(event.timeTimestamp!!.isBefore(end))
-                if (event.conceptInstance != null) {
-                    assertNotNull(event.conceptInstance!!.toIntOrNull(), "concept:instance should be parseable as int")
-                }
+                assertNull(event.conceptInstance, "concept:instance should not be synthesized")
                 assertEquals("USD", event.costCurrency, "Event cost:currency should be USD")
                 assertEquals(1.08, event.costTotal, "Event cost:total should be exactly 1.08")
                 assertNull(event.lifecycleState)
@@ -265,16 +290,13 @@ class WhereQueryTests : HierarchicalTestsBase() {
             assertEquals("EUR", trace.costCurrency)
             assertNull(trace.costTotal, "Trace cost:total should be null (filtered by t:total is null)")
             assertNull(trace.identityId)
-            assertFalse(trace.isEventStream)
 
             assertTrue(trace.events.count() > 0)
             for (event in trace.events) {
                 assertTrue(event.conceptName in eventNames)
                 assertTrue(event.timeTimestamp!!.isAfter(begin))
                 assertTrue(event.timeTimestamp!!.isBefore(end))
-                if (event.conceptInstance != null) {
-                    assertNotNull(event.conceptInstance!!.toIntOrNull(), "concept:instance should be parseable as int")
-                }
+                assertNull(event.conceptInstance, "concept:instance should not be synthesized")
                 assertEquals("USD", event.costCurrency, "Event cost:currency should be USD")
                 assertEquals(1.08, event.costTotal, "Event cost:total should be exactly 1.08")
                 assertNull(event.lifecycleState)
@@ -322,7 +344,6 @@ class WhereQueryTests : HierarchicalTestsBase() {
             assertEquals("EUR", trace.costCurrency)
             assertNull(trace.costTotal)
             assertNull(trace.identityId)
-            assertFalse(trace.isEventStream)
 
             assertTrue(trace.events.count() > 0)
         }
@@ -352,12 +373,13 @@ class WhereQueryTests : HierarchicalTestsBase() {
                 "Trace name should end with '5', got: $traceName",
             )
             assertNull(trace.identityId)
-            assertFalse(trace.isEventStream)
 
             // With hoisting (^e:resource), filter is at trace level — all events returned
             // At least one event per trace must have Sam/Pam resource (that's why trace was included)
             val hasMatchingResource = trace.events.any { it.orgResource == "Sam" || it.orgResource == "Pam" }
             assertTrue(hasMatchingResource, "Trace should have at least one Sam/Pam event")
+            val hasNonMatchingResource = trace.events.any { it.orgResource != "Sam" && it.orgResource != "Pam" }
+            assertTrue(hasNonMatchingResource, "Hoisting should keep non-Sam/Pam events inside the matching trace")
             // Do NOT check every event's resource — hoisting returns all events in matching traces
         }
     }
@@ -372,7 +394,7 @@ class WhereQueryTests : HierarchicalTestsBase() {
             )
 
         assertTrue(result.success, "Query should succeed: ${result.error}")
-        assertTrue(result.logs.isNotEmpty(), "Should have logs")
+        assertEquals(1, result.count(), "Should have exactly 1 log")
 
         val log = result.first()
         val traces = log.traces.toList()
@@ -396,10 +418,11 @@ class WhereQueryTests : HierarchicalTestsBase() {
             }
         val result = q("where l:logId='$hospitalLogId' and [t:Diagnosis] is not null", hospitalLogId)
         assertTrue(result.success, "Query should succeed: ${result.error}")
+        assertEquals(1, result.count(), "Should have exactly 1 log")
         val traces = result.first().traces.toList()
         assertTrue(traces.isNotEmpty(), "Should have traces with non-null Diagnosis")
         for (trace in traces) {
-            val diagnosis = trace.attributes["Diagnosis"]
+            val diagnosis = trace.customAttributes["Diagnosis"]
             assertNotNull(diagnosis, "Trace Diagnosis should not be null (filtered by IS NOT NULL)")
             assertTrue(diagnosis.toString().isNotBlank(), "Trace Diagnosis should not be blank")
         }

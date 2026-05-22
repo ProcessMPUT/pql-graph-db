@@ -1,17 +1,17 @@
 package com.processm.processminterpreter.processm.hierarchical
 
-import com.processm.processminterpreter.model.hierarchical.Event
-import com.processm.processminterpreter.model.hierarchical.Log
-import com.processm.processminterpreter.model.hierarchical.Trace
+import com.processm.processminterpreter.application.query.DataStorePqlQueryResult
+import com.processm.processminterpreter.application.query.PQLQueryService
+import com.processm.processminterpreter.domain.log.xes.XesEvent
+import com.processm.processminterpreter.domain.log.xes.XesLog
+import com.processm.processminterpreter.domain.log.xes.XesTrace
 import com.processm.processminterpreter.processm.TestDataLoader
-import com.processm.processminterpreter.service.PQLQueryResult
-import com.processm.processminterpreter.service.PQLQueryService
+import com.processm.processminterpreter.processm.TestDataLoader.Companion.PROCESSM_COMPAT_DATA_STORE_ID
 import org.neo4j.driver.Driver
 import org.springframework.beans.factory.annotation.Autowired
 import java.time.Instant
 import java.time.ZonedDateTime
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -59,7 +59,7 @@ abstract class HierarchicalTestsBase {
         /** Sentinel value: no default trace limit (matches ProcessM test behavior) */
         const val NO_DEFAULT_LIMIT = -1
 
-        const val JOURNAL_LOG_ID = "JournalReview-test"
+        const val JOURNAL_LOG_ID = "0f6a2822-6d9a-4dd2-88d7-0f50e10b5f5f"
 
         const val TOTAL_TRACES = 101
         const val TOTAL_EVENTS = 2298L
@@ -98,7 +98,7 @@ abstract class HierarchicalTestsBase {
      * Standard log-level assertions matching ProcessM's DBHierarchicalXESInputStreamWithQueryTestsBase.
      * Validates conceptName = "JournalReview" and lifecycle:model = "standard".
      */
-    protected fun standardLogAssertions(log: Log) {
+    protected fun standardLogAssertions(log: XesLog) {
         assertEquals("JournalReview", log.conceptName, "Log conceptName should be 'JournalReview'")
         assertEquals("standard", log.lifecycleModel, "Log lifecycle:model should be 'standard'")
     }
@@ -106,10 +106,10 @@ abstract class HierarchicalTestsBase {
     /**
      * Standard trace-level assertions matching ProcessM originals.
      * Validates cost:currency is EUR or null, cost:total is null or > 0,
-     * conceptName is parseable as int in -1..100, isEventStream is false,
-     * and identityId is null (JournalReview traces have no identity:id).
+     * conceptName is parseable as int in -1..100, and identityId is null
+     * (JournalReview traces have no identity:id).
      */
-    protected fun standardTraceAssertions(trace: Trace) {
+    protected fun standardTraceAssertions(trace: XesTrace) {
         val currency = trace.costCurrency
         assertTrue(
             currency == null || currency == "EUR",
@@ -119,7 +119,7 @@ abstract class HierarchicalTestsBase {
         val total = trace.costTotal
         assertTrue(
             total == null || total > 0.0,
-            "Trace cost:total should be null or > 0, got: $total",
+            "Trace cost:total should be null or positive, got: $total",
         )
 
         val name = trace.conceptName
@@ -131,18 +131,17 @@ abstract class HierarchicalTestsBase {
             "Trace conceptName (as int) should be in -1..100, got: $parsed",
         )
 
-        assertFalse(trace.isEventStream, "Trace isEventStream should be false")
         assertNull(trace.identityId, "Trace identity:id should be null for JournalReview traces")
     }
 
     /**
      * Standard event-level assertions matching ProcessM originals.
      * Validates conceptName in eventNames, timestamp in range, cost:total 1.0-1.08,
-     * conceptInstance parseable as int, costCurrency in validCurrencies,
+     * no synthetic concept:instance, costCurrency in validCurrencies,
      * lifecycle:state null, org:group null, org:role null, identity:id null,
      * org:resource in orgResources, lifecycle:transition in lifecycleTransitions.
      */
-    protected fun standardEventAssertions(event: Event) {
+    protected fun standardEventAssertions(event: XesEvent) {
         assertTrue(
             event.conceptName in eventNames,
             "Event conceptName should be in eventNames, got: ${event.conceptName}",
@@ -158,14 +157,7 @@ abstract class HierarchicalTestsBase {
             "Event timestamp should be before end, got: ${event.timeTimestamp}",
         )
 
-        // Note: ProcessM's JournalReview-extra.xes has concept:instance; ours does not.
-        // If present, it must be parseable as int:
-        if (event.conceptInstance != null) {
-            assertNotNull(
-                event.conceptInstance!!.toIntOrNull(),
-                "Event concept:instance should be parseable as int, got: ${event.conceptInstance}",
-            )
-        }
+        assertNull(event.conceptInstance, "Event concept:instance should not be synthesized")
 
         assertTrue(
             event.costCurrency in validCurrencies,
@@ -202,17 +194,17 @@ abstract class HierarchicalTestsBase {
      * Validates conceptName, lifecycleModel, source, description, classifiers, globals.
      * Use only when SELECT * is expected (not partial SELECT queries).
      */
-    protected fun standardLogAssertionsWithMetadata(log: Log) {
+    protected fun standardLogAssertionsWithMetadata(log: XesLog) {
         standardLogAssertions(log)
         assertTrue(
-            log.attributes["source"].let { it is String && it == "CPN Tools" },
-            "Log source should be 'CPN Tools', got: ${log.attributes["source"]}",
+            log.customAttributes["source"].let { it is String && it == "CPN Tools" },
+            "Log source should be 'CPN Tools', got: ${log.customAttributes["source"]}",
         )
         assertTrue(
-            log.attributes["description"].let { it is String && it == "Log file created in CPN Tools" },
-            "Log description should be 'Log file created in CPN Tools', got: ${log.attributes["description"]}",
+            log.customAttributes["description"].let { it is String && it == "Log file created in CPN Tools" },
+            "Log description should be 'Log file created in CPN Tools', got: ${log.customAttributes["description"]}",
         )
-        assertEquals(3, log.eventClassifiers.size, "Should have 3 event classifiers")
+        assertEquals(3, log.classifiers.size, "Should have 3 event classifiers")
         assertEquals(2, log.eventGlobals.size, "Should have 2 event globals")
         assertEquals(1, log.traceGlobals.size, "Should have 1 trace global")
     }
@@ -225,12 +217,23 @@ abstract class HierarchicalTestsBase {
     protected fun q(
         query: String,
         logId: String,
-    ): PQLQueryResult = pqlQueryService.executePQLQuery(query, logId, defaultTraceLimit = NO_DEFAULT_LIMIT)
+    ): DataStorePqlQueryResult =
+        pqlQueryService.executeDataStoreQuery(
+            pqlQuery = query,
+            dataStoreId = PROCESSM_COMPAT_DATA_STORE_ID,
+            logId = logId,
+            defaultTraceLimit = NO_DEFAULT_LIMIT,
+        )
 
     /**
      * Execute PQL query without log filter
      */
-    protected fun q(query: String): PQLQueryResult = pqlQueryService.executePQLQuery(query, defaultTraceLimit = NO_DEFAULT_LIMIT)
+    protected fun q(query: String): DataStorePqlQueryResult =
+        pqlQueryService.executeDataStoreQuery(
+            pqlQuery = query,
+            dataStoreId = PROCESSM_COMPAT_DATA_STORE_ID,
+            defaultTraceLimit = NO_DEFAULT_LIMIT,
+        )
 
     /**
      * Parse ISO8601 datetime string

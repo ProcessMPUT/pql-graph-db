@@ -46,29 +46,48 @@ function setLoading(element, isLoading, loadingText = 'Loading...') {
     }
 }
 
-async function apiCall(endpoint, options = {}, outputElement) {
-    outputElement.style.color = 'var(--text-color)';
-    outputElement.textContent = 'Executing...';
+async function apiCall(endpoint, options = {}, outputElement = null) {
+    if (outputElement) {
+        outputElement.style.color = 'var(--text-color)';
+        outputElement.textContent = 'Executing...';
+    }
     try {
         const response = await fetch(`${API_BASE}${endpoint}`, options);
         const resultText = await response.text();
+        const jsonResult = resultText.trim() ? JSON.parse(resultText) : null;
         let formattedResult;
-        try {
-            const jsonResult = JSON.parse(resultText);
+        if (jsonResult !== null) {
             formattedResult = JSON.stringify(jsonResult, null, 2);
-        } catch (e) {
+        } else {
             formattedResult = resultText;
         }
-        outputElement.textContent = `Status: ${response.status} ${response.statusText}\n\n${formattedResult}`;
-        if (!response.ok) {
-            outputElement.style.color = 'var(--red-color)';
+        if (outputElement) {
+            outputElement.textContent = `Status: ${response.status} ${response.statusText}\n\n${formattedResult}`;
+            if (!response.ok) {
+                outputElement.style.color = 'var(--red-color)';
+            }
         }
-        return JSON.parse(resultText);
+        return jsonResult;
     } catch (error) {
-        outputElement.style.color = 'var(--red-color)';
-        outputElement.textContent = `Error: ${error.message}`;
+        if (outputElement) {
+            outputElement.style.color = 'var(--red-color)';
+            outputElement.textContent = `Error: ${error.message}`;
+        }
         throw error;
     }
+}
+
+async function fetchJson(endpoint, options = {}) {
+    const response = await fetch(`${API_BASE}${endpoint}`, options);
+    const resultText = await response.text();
+    const payload = resultText.trim() ? JSON.parse(resultText) : null;
+
+    if (!response.ok) {
+        const message = payload?.message || payload?.error || `${response.status} ${response.statusText}`;
+        throw new Error(message);
+    }
+
+    return payload;
 }
 
 function openTab(tabName) {
@@ -80,121 +99,382 @@ function openTab(tabName) {
 
 // --- Log Management ---
 const logList = document.getElementById('logList');
+const dataStoreLogList = document.getElementById('dataStoreLogList');
+const activeDataStoreSummary = document.getElementById('activeDataStoreSummary');
+const dataStoreNameInput = document.getElementById('dataStoreNameInput');
+const createDataStoreButton = document.getElementById('createDataStoreButton');
 const uploadOutput = document.getElementById('uploadOutput');
+const logImportSelect = document.getElementById('logImportSelect');
+const customLogFileGroup = document.getElementById('customLogFileGroup');
+const chooseCustomLogButton = document.getElementById('chooseCustomLogButton');
+const selectedCustomLogName = document.getElementById('selectedCustomLogName');
 const activeLogSelect = document.getElementById('activeLogSelect');
 const compareLogSelect = document.getElementById('compareLogSelect');
+const remoteProcessMDataStoreSelect = document.getElementById('remoteProcessMDataStoreSelect');
+const refreshRemoteProcessMStoresButton = document.getElementById('refreshRemoteProcessMStoresButton');
+let currentDataStores = [];
+let currentRemoteProcessMDataStores = [];
 
-async function refreshLogs() {
-    try {
-        const logs = await apiCall('/logs', {}, uploadOutput);
-        logList.innerHTML = '';
-        activeLogSelect.innerHTML = '';
-        if (compareLogSelect) compareLogSelect.innerHTML = '';
+function getSelectedDataStoreId() {
+    return activeLogSelect?.value || compareLogSelect?.value || '';
+}
 
-        if (logs && logs.length > 0) {
-            logs.forEach(log => {
-                const logId = log.logId;
-                const listItem = document.createElement('div');
-                listItem.className = 'log-list-item';
-                listItem.innerHTML = `
-        <span><strong>${log.name || logId}</strong> (${logId})</span>
-        <div class="log-actions">
-            <button onclick="getLogStatistics('${logId}')">📊 Stats</button>
-            <button class="danger" onclick="deleteLog('${logId}')">🗑️ Delete</button>
-        </div>
+function setSelectedDataStore(dataStoreId) {
+    if (activeLogSelect) activeLogSelect.value = dataStoreId;
+    if (compareLogSelect) compareLogSelect.value = dataStoreId;
+    renderDataStores();
+    refreshSelectedDataStoreLogs();
+}
+
+function renderDataStoreOptions() {
+    const previousActive = activeLogSelect?.value || '';
+    const previousCompare = compareLogSelect?.value || previousActive;
+
+    activeLogSelect.innerHTML = '';
+    if (compareLogSelect) compareLogSelect.innerHTML = '';
+
+    currentDataStores.forEach(store => {
+        const option = document.createElement('option');
+        option.value = store.id;
+        option.textContent = `${store.name || store.id} (${store.id})`;
+        activeLogSelect.appendChild(option.cloneNode(true));
+        if (compareLogSelect) compareLogSelect.appendChild(option);
+    });
+
+    const fallbackId = currentDataStores[0]?.id || '';
+    if (activeLogSelect) activeLogSelect.value = currentDataStores.some(s => s.id === previousActive) ? previousActive : fallbackId;
+    if (compareLogSelect) compareLogSelect.value = currentDataStores.some(s => s.id === previousCompare) ? previousCompare : activeLogSelect?.value || fallbackId;
+}
+
+function renderDataStores() {
+    logList.innerHTML = '';
+    const selectedId = getSelectedDataStoreId();
+
+    if (!currentDataStores.length) {
+        logList.innerHTML = '<p>No data stores found.</p>';
+        return;
+    }
+
+    currentDataStores.forEach(store => {
+        const item = document.createElement('div');
+        item.className = `log-list-item data-store-item${store.id === selectedId ? ' active' : ''}`;
+
+        const meta = document.createElement('div');
+        meta.className = 'data-store-meta';
+        meta.innerHTML = `
+            <strong>${store.name || store.id}</strong>
+            <span>${store.id}</span>
+            <small>Created: ${store.createdAt || 'unknown'}</small>
         `;
-                logList.appendChild(listItem);
 
-                const option = document.createElement('option');
-                option.value = logId;
-                option.textContent = `${log.name || logId} (${logId})`;
-                activeLogSelect.appendChild(option.cloneNode(true));
-                if (compareLogSelect) compareLogSelect.appendChild(option);
-            });
-        } else {
-            logList.innerHTML = '<p>No logs found. Load Hospital Log to get started!</p>';
+        const actions = document.createElement('div');
+        actions.className = 'log-actions';
+
+        const selectButton = document.createElement('button');
+        selectButton.textContent = store.id === selectedId ? 'Active' : 'Use';
+        selectButton.disabled = store.id === selectedId;
+        selectButton.addEventListener('click', () => setSelectedDataStore(store.id));
+
+        const renameButton = document.createElement('button');
+        renameButton.className = 'secondary';
+        renameButton.textContent = 'Rename';
+        renameButton.addEventListener('click', () => renameDataStore(store.id, store.name || ''));
+
+        const deleteButton = document.createElement('button');
+        deleteButton.className = 'danger';
+        deleteButton.textContent = 'Delete';
+        deleteButton.addEventListener('click', () => deleteLog(store.id));
+
+        actions.append(selectButton, renameButton, deleteButton);
+        item.append(meta, actions);
+        logList.appendChild(item);
+    });
+}
+
+async function refreshSelectedDataStoreLogs() {
+    if (!dataStoreLogList || !activeDataStoreSummary) return;
+
+    const dataStoreId = getSelectedDataStoreId();
+    const store = currentDataStores.find(item => item.id === dataStoreId);
+    if (!dataStoreId) {
+        activeDataStoreSummary.textContent = 'Select a data store to inspect its logs.';
+        dataStoreLogList.innerHTML = '';
+        return;
+    }
+
+    activeDataStoreSummary.textContent = `Active: ${store?.name || dataStoreId} (${dataStoreId})`;
+    dataStoreLogList.innerHTML = '<p>Loading logs...</p>';
+
+    try {
+        const logs = await fetchJson(`/data-stores/${dataStoreId}/log-summaries`, {
+            headers: { 'Accept': 'application/json' }
+        });
+        if (!logs.length) {
+            dataStoreLogList.innerHTML = '<p>No logs are attached to this data store.</p>';
+            return;
         }
+
+        dataStoreLogList.innerHTML = '';
+        logs.forEach(log => {
+            const item = document.createElement('div');
+            item.className = 'contained-log-item';
+            const meta = document.createElement('div');
+            meta.className = 'contained-log-meta';
+            meta.innerHTML = `
+                <strong>${log.name}</strong>
+                <span>${log.logId}${log.createdAt ? ` - Imported: ${log.createdAt}` : ''}</span>
+            `;
+
+            const actions = document.createElement('div');
+            actions.className = 'log-actions contained-log-actions';
+
+            const deleteButton = document.createElement('button');
+            deleteButton.className = 'danger';
+            deleteButton.textContent = 'Delete';
+            deleteButton.addEventListener('click', () => deleteDataStoreLog(dataStoreId, log));
+
+            actions.appendChild(deleteButton);
+            item.append(meta, actions);
+            dataStoreLogList.appendChild(item);
+        });
     } catch (error) {
-        console.error("Failed to refresh logs", error);
+        dataStoreLogList.innerHTML = `<p class="error-text">Failed to read store logs: ${error.message}</p>`;
     }
 }
 
-async function getLogStatistics(logId) {
-    await apiCall(`/logs/${logId}/statistics`, {}, uploadOutput);
+async function deleteDataStoreLog(dataStoreId, log) {
+    if (!confirm(`Delete log "${log.name}" (${log.logId}) from this data store?`)) {
+        return;
+    }
+
+    try {
+        await apiCall(`/data-stores/${dataStoreId}/logs/${encodeURIComponent(log.logId)}`, { method: 'DELETE' }, uploadOutput);
+        showToast(`Log "${log.name}" deleted`, 'success');
+        await refreshSelectedDataStoreLogs();
+    } catch (error) {
+        showToast('Failed to delete log: ' + error.message, 'error');
+    }
 }
 
-async function deleteLog(logId) {
-    if (confirm(`Are you sure you want to delete log "${logId}"?`)) {
+async function refreshLogs() {
+    try {
+        let dataStores = await apiCall('/data-stores', { headers: { 'Accept': 'application/json' } }, uploadOutput);
+        if (!dataStores || dataStores.length === 0) {
+            await apiCall('/data-stores', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                body: JSON.stringify({ name: 'Default' })
+            }, uploadOutput);
+            dataStores = await apiCall('/data-stores', { headers: { 'Accept': 'application/json' } }, uploadOutput);
+        }
+
+        currentDataStores = dataStores || [];
+        renderDataStoreOptions();
+        renderDataStores();
+        await refreshSelectedDataStoreLogs();
+    } catch (error) {
+        console.error("Failed to refresh data stores", error);
+    }
+}
+
+async function getLogStatistics(dataStoreId) {
+    await apiCall(`/data-stores/${dataStoreId}`, { headers: { 'Accept': 'application/json' } }, uploadOutput);
+}
+
+async function deleteLog(dataStoreId) {
+    if (confirm(`Are you sure you want to delete data store "${dataStoreId}" and all its logs?`)) {
         try {
-            await apiCall(`/logs/${logId}?deleteAllData=true`, { method: 'DELETE' }, uploadOutput);
-            showToast(`Log "${logId}" deleted`, 'success');
+            await apiCall(`/data-stores/${dataStoreId}`, { method: 'DELETE' }, uploadOutput);
+            showToast(`Data store "${dataStoreId}" deleted`, 'success');
             refreshLogs();
         } catch (e) {
-            showToast('Failed to delete log: ' + e.message, 'error');
+            showToast('Failed to delete data store: ' + e.message, 'error');
         }
     }
 }
 
 document.getElementById('refreshLogsButton').addEventListener('click', refreshLogs);
+if (createDataStoreButton) {
+    createDataStoreButton.addEventListener('click', async () => {
+        const name = dataStoreNameInput.value.trim();
+        if (!name) {
+            showToast('Enter a data store name first.', 'error');
+            return;
+        }
+
+        setLoading(createDataStoreButton, true, 'Creating...');
+        try {
+            const created = await apiCall('/data-stores', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                body: JSON.stringify({ name })
+            }, uploadOutput);
+            dataStoreNameInput.value = '';
+            await refreshLogs();
+            if (created?.id) setSelectedDataStore(created.id);
+            showToast('Data store created', 'success');
+        } catch (error) {
+            showToast('Failed to create data store: ' + error.message, 'error');
+        } finally {
+            setLoading(createDataStoreButton, false);
+        }
+    });
+}
+
+async function renameDataStore(dataStoreId, currentName) {
+    const nextName = prompt('New data store name:', currentName);
+    if (!nextName || nextName.trim() === currentName) return;
+
+    try {
+        await apiCall(`/data-stores/${dataStoreId}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+            body: JSON.stringify({ name: nextName.trim() })
+        }, uploadOutput);
+        showToast('Data store renamed', 'success');
+        await refreshLogs();
+        setSelectedDataStore(dataStoreId);
+    } catch (error) {
+        showToast('Failed to rename data store: ' + error.message, 'error');
+    }
+}
+
+if (activeLogSelect) activeLogSelect.addEventListener('change', () => setSelectedDataStore(activeLogSelect.value));
+if (compareLogSelect) compareLogSelect.addEventListener('change', () => setSelectedDataStore(compareLogSelect.value));
+
+function renderRemoteProcessMDataStoreOptions() {
+    if (!remoteProcessMDataStoreSelect) return;
+
+    const previousSelection = remoteProcessMDataStoreSelect.value;
+    remoteProcessMDataStoreSelect.innerHTML = '';
+
+    if (!currentRemoteProcessMDataStores.length) {
+        const option = document.createElement('option');
+        option.value = '';
+        option.textContent = 'No remote data stores found';
+        remoteProcessMDataStoreSelect.appendChild(option);
+        return;
+    }
+
+    currentRemoteProcessMDataStores.forEach(store => {
+        const option = document.createElement('option');
+        option.value = store.id;
+        option.textContent = `${store.name || store.id} (${store.id})`;
+        remoteProcessMDataStoreSelect.appendChild(option);
+    });
+
+    const fallbackId = currentRemoteProcessMDataStores[0]?.id || '';
+    remoteProcessMDataStoreSelect.value =
+        currentRemoteProcessMDataStores.some(store => store.id === previousSelection)
+            ? previousSelection
+            : fallbackId;
+}
+
+async function refreshRemoteProcessMDataStores() {
+    if (!remoteProcessMDataStoreSelect) return;
+
+    remoteProcessMDataStoreSelect.innerHTML = '<option value="">Loading remote data stores...</option>';
+
+    try {
+        currentRemoteProcessMDataStores = await fetchJson('/query/processm/data-stores', {
+            headers: { 'Accept': 'application/json' }
+        }) || [];
+        renderRemoteProcessMDataStoreOptions();
+    } catch (error) {
+        currentRemoteProcessMDataStores = [];
+        remoteProcessMDataStoreSelect.innerHTML = '<option value="">Failed to load remote data stores</option>';
+        showToast('Failed to load remote ProcessM data stores: ' + error.message, 'error');
+    }
+}
+
+if (refreshRemoteProcessMStoresButton) {
+    refreshRemoteProcessMStoresButton.addEventListener('click', refreshRemoteProcessMDataStores);
+}
+
+async function loadImportSources() {
+    if (!logImportSelect) return;
+
+    try {
+        const samples = await fetchJson('/logs/samples', { headers: { 'Accept': 'application/json' } });
+        logImportSelect.innerHTML = '<option value="custom">Custom log...</option>';
+        (samples || []).forEach(sample => {
+            const option = document.createElement('option');
+            option.value = sample.resourcePath;
+            option.textContent = sample.name;
+            option.dataset.sourceType = 'resource';
+            logImportSelect.appendChild(option);
+        });
+        updateImportSourceMode();
+    } catch (error) {
+        showToast('Failed to load sample log list: ' + error.message, 'error');
+    }
+}
+
+function updateImportSourceMode() {
+    if (!logImportSelect || !customLogFileGroup) return;
+    customLogFileGroup.style.display = logImportSelect.value === 'custom' ? '' : 'none';
+}
+
+function resourceLogId(resourcePath) {
+    return resourcePath
+        .split('/')
+        .pop()
+        .replace(/\.xes\.gz$/i, '')
+        .replace(/\.xes$/i, '')
+        .replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
+if (logImportSelect) {
+    logImportSelect.addEventListener('change', updateImportSourceMode);
+}
+
+if (chooseCustomLogButton) {
+    chooseCustomLogButton.addEventListener('click', () => {
+        document.getElementById('xesFileInput')?.click();
+    });
+}
+
+document.getElementById('xesFileInput')?.addEventListener('change', (event) => {
+    const fileName = event.target.files?.[0]?.name || 'No file selected';
+    if (selectedCustomLogName) selectedCustomLogName.textContent = fileName;
+});
 
 document.getElementById('uploadButton').addEventListener('click', async () => {
     const fileInput = document.getElementById('xesFileInput');
     const btn = document.getElementById('uploadButton');
+    const selectedSource = logImportSelect?.value || 'custom';
 
-    if (fileInput.files.length === 0) {
-        showToast('Please select a file first.', 'error');
+    const dataStoreId = activeLogSelect.value;
+    if (!dataStoreId) {
+        showToast('Please select a data store first.', 'error');
         return;
     }
 
-    setLoading(btn, true, 'Uploading...');
-    const formData = new FormData();
-    formData.append('file', fileInput.files[0]);
-
     try {
-        await apiCall('/logs/upload', { method: 'POST', body: formData }, uploadOutput);
-        showToast('Log uploaded successfully!', 'success');
-        refreshLogs();
+        setLoading(btn, true, 'Importing...');
+
+        if (selectedSource === 'custom') {
+            if (fileInput.files.length === 0) {
+                showToast('Please select a file first.', 'error');
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+            await apiCall(`/data-stores/${dataStoreId}/logs`, { method: 'POST', body: formData }, uploadOutput);
+        } else {
+            const params = new URLSearchParams({
+                resourcePath: selectedSource,
+                logId: resourceLogId(selectedSource),
+                dataStoreId
+            });
+            await apiCall(`/logs/load-sample?${params}`, { method: 'POST' }, uploadOutput);
+        }
+
+        showToast('Log imported successfully!', 'success');
+        await refreshLogs();
     } catch (e) {
-        showToast('Upload failed: ' + e.message, 'error');
-    } finally {
-        setLoading(btn, false);
-    }
-});
-
-document.getElementById('loadSampleButton').addEventListener('click', async () => {
-    const btn = document.getElementById('loadSampleButton');
-    setLoading(btn, true, 'Loading...');
-    uploadOutput.textContent = 'Loading Hospital Log (81MB)... This may take 1-3 minutes...';
-
-    const params = new URLSearchParams({
-        resourcePath: 'logs/Hospital_log.xes',
-        logId: 'Hospital_log'
-    });
-
-    try {
-        await apiCall(`/logs/load-sample?${params}`, { method: 'POST' }, uploadOutput);
-        showToast('Hospital log loaded successfully!', 'success');
-        refreshLogs();
-    } catch (e) {
-        showToast('Failed to load sample: ' + e.message, 'error');
-    } finally {
-        setLoading(btn, false);
-    }
-});
-
-document.getElementById('loadSampleButton2').addEventListener('click', async () => {
-    const btn = document.getElementById('loadSampleButton2');
-    setLoading(btn, true, 'Loading...');
-    const params = new URLSearchParams({
-        resourcePath: 'logs/sample_process.xes',
-        logId: 'sample_process'
-    });
-    try {
-        await apiCall(`/logs/load-sample?${params}`, { method: 'POST' }, uploadOutput);
-        showToast('Sample process log loaded successfully!', 'success');
-        refreshLogs();
-    } catch (e) {
-        showToast('Failed to load sample: ' + e.message, 'error');
+        showToast('Import failed: ' + e.message, 'error');
     } finally {
         setLoading(btn, false);
     }
@@ -424,11 +704,11 @@ function exportToCSV() {
 }
 
 async function exportToXES(compress = false) {
-    const logId = activeLogSelect.value;
+    const dataStoreId = activeLogSelect.value;
     const query = pqlQueryText.value;
 
-    if (!logId) {
-        showToast('Please select an active log first.', 'error');
+    if (!dataStoreId) {
+        showToast('Please select an active data store first.', 'error');
         return;
     }
 
@@ -438,44 +718,33 @@ async function exportToXES(compress = false) {
     }
 
     try {
-        // Show loading indicator
         const originalText = pqlOutput.textContent;
-        pqlOutput.textContent = `Exporting to XES${compress ? ' (compressed)' : ''}...`;
+        pqlOutput.textContent = 'Exporting ProcessM ZIP...';
         pqlOutput.style.color = 'var(--text-color)';
-        showToast(`Starting XES export${compress ? ' (compressed)' : ''}...`, 'info');
 
-        // Prepare request URL with query parameters
         const params = new URLSearchParams({
-            compress: compress.toString(),
-            logName: `PQL Query Result - ${new Date().toISOString()}`
+            query,
+            includeTraces: 'true',
+            includeEvents: 'true'
         });
 
-        // Make request to execute-xes endpoint
-        const response = await fetch(`${API_BASE}/query/execute-xes?${params}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ logId, query })
+        const response = await fetch(`${API_BASE}/data-stores/${dataStoreId}/logs?${params}`, {
+            method: 'GET',
+            headers: { 'Accept': 'application/zip' }
         });
 
         if (!response.ok) {
             throw new Error(`Server returned ${response.status}: ${response.statusText}`);
         }
 
-        // Get the blob from response
         const blob = await response.blob();
-
-        // Get filename from Content-Disposition header or generate one
         const contentDisposition = response.headers.get('Content-Disposition');
-        let filename = `query_result_${Date.now()}.${compress ? 'xes.gz' : 'xes'}`;
-
+        let filename = `xes_${Date.now()}.zip`;
         if (contentDisposition) {
-            const filenameMatch = contentDisposition.match(/filename="?([^"]+)"?/);
-            if (filenameMatch) {
-                filename = filenameMatch[1];
-            }
+            const filenameMatch = contentDisposition.match(/filename="?([^";]+)"?/);
+            if (filenameMatch) filename = filenameMatch[1];
         }
 
-        // Create download link
         const url = window.URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
@@ -485,14 +754,12 @@ async function exportToXES(compress = false) {
         document.body.removeChild(a);
         window.URL.revokeObjectURL(url);
 
-        // Show success message
         pqlOutput.textContent = originalText;
-        showToast(`XES file downloaded successfully: ${filename}`, 'success');
-
+        showToast(`ZIP file downloaded successfully: ${filename}`, 'success');
     } catch (error) {
         pqlOutput.style.color = 'var(--red-color)';
-        pqlOutput.textContent = `Error exporting to XES: ${error.message}`;
-        showToast(`Failed to export to XES: ${error.message}`, 'error');
+        pqlOutput.textContent = `Error exporting ZIP: ${error.message}`;
+        showToast(`Failed to export ZIP: ${error.message}`, 'error');
     }
 }
 
@@ -512,31 +779,37 @@ function copyToClipboard() {
 }
 
 pqlButton.addEventListener('click', async () => {
-    const logId = activeLogSelect.value;
+    const dataStoreId = activeLogSelect.value;
     const query = pqlQueryText.value;
-    if (!logId) {
-        showToast('Please select an active log first.', 'error');
+    if (!dataStoreId) {
+        showToast('Please select an active data store first.', 'error');
         return;
     }
 
     setLoading(pqlButton, true, 'Running...');
-    pqlOutput.textContent = 'Executing query...';
+    pqlOutput.textContent = 'Executing query through ProcessM-compatible API...';
     pqlOutput.style.color = 'var(--text-color)';
 
     try {
-        const response = await fetch(`${API_BASE}/query/execute`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ logId, query })
+        const params = new URLSearchParams({
+            query,
+            includeTraces: 'true',
+            includeEvents: 'true'
+        });
+        const response = await fetch(`${API_BASE}/data-stores/${dataStoreId}/logs?${params}`, {
+            method: 'GET',
+            headers: { 'Accept': 'application/json' }
         });
 
         const data = await response.json();
-        renderQueryResults(data, pqlOutput);
-        if (data.success) {
-            showToast(`Query executed in ${data.executionTimeMs}ms`, 'success');
-        } else {
-            showToast('Query failed', 'error');
-        }
+        renderQueryResults({
+            success: response.ok,
+            query,
+            results: data,
+            resultCount: Array.isArray(data) ? data.length : 1,
+            executionTimeMs: 0
+        }, pqlOutput);
+        showToast('Query executed', response.ok ? 'success' : 'error');
     } catch (error) {
         pqlOutput.style.color = 'var(--red-color)';
         pqlOutput.textContent = `Error: ${error.message}`;
@@ -580,19 +853,25 @@ if (sampleQueriesSelect) {
 
 if (verifyButtonNew) {
     verifyButtonNew.addEventListener('click', async () => {
-        const logId = compareLogSelect.value;
-        // Get text of selected option for name heuristic
-        const logNameText = compareLogSelect.options[compareLogSelect.selectedIndex]?.text || logId;
+        const dataStoreId = compareLogSelect.value;
+        const remoteDataStoreId = remoteProcessMDataStoreSelect?.value || '';
+        const selectedStore = currentDataStores.find(store => store.id === dataStoreId);
+        const logNameText = selectedStore?.name || dataStoreId;
 
         const query = compareQueryText.value;
 
-        if (!logId) {
-            showToast('Please select a log first', 'error');
+        if (!dataStoreId) {
+            showToast('Please select a data store first', 'error');
             return;
         }
 
         if (!query) {
             showToast('Please enter a query to verify', 'error');
+            return;
+        }
+
+        if (!remoteDataStoreId) {
+            showToast('Please select a remote ProcessM data store first', 'error');
             return;
         }
 
@@ -607,7 +886,8 @@ if (verifyButtonNew) {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    logId: logId,
+                    dataStoreId: dataStoreId,
+                    remoteDataStoreId: remoteDataStoreId,
                     logName: logNameText,
                     query: query,
                     includeTraces: includeTraces,
@@ -695,7 +975,7 @@ function renderVerificationResult(data) {
                  <div class="verification-col" style="grid-column: span 2;">
                     <h4>Remote Request Details</h4>
                     <div class="verification-detail" style="font-size: 0.8rem; min-height: auto;">
-                        <div style="margin-bottom: 0.5rem;"><strong>Remote Log ID:</strong> ${data.remoteLogId || 'Unknown'}</div>
+                        <div style="margin-bottom: 0.5rem;"><strong>Remote Data Store ID:</strong> ${data.remoteDataStoreId || 'Unknown'}</div>
                         <div style="margin-bottom: 0.5rem;"><strong>Adapted Query:</strong> ${data.remoteAdaptedQuery || 'N/A'}</div>
                         <div style="word-break: break-all;"><strong>URL:</strong> ${data.remoteRequestUrl || 'N/A'}</div>
                     </div>
@@ -820,6 +1100,7 @@ if (uploadToProcessMButton && processmLogUpload) {
                 processmUploadStatus.textContent = 'Upload Success! ' + (result.message || '');
                 processmUploadStatus.style.color = '#4caf50';
                 showToast('Log uploaded to local ProcessM!', 'success');
+                await refreshRemoteProcessMDataStores();
             } else {
                 throw new Error(result.error || 'Unknown error');
             }
@@ -864,7 +1145,7 @@ if (downloadComparisonButton) {
         snapshot += `REMOTE PROCESSM:\n`;
         snapshot += `  Success: ${data.remoteSuccess}\n`;
         snapshot += `  Row Count: ${data.remoteCount}\n`;
-        snapshot += `  Remote Log ID: ${data.remoteLogId || 'Unknown'}\n`;
+        snapshot += `  Remote Data Store ID: ${data.remoteDataStoreId || 'Unknown'}\n`;
         snapshot += `  Request URL: ${data.remoteRequestUrl || 'N/A'}\n\n`;
 
         snapshot += `=`.repeat(80) + `\n`;
@@ -921,7 +1202,7 @@ if (downloadLightSnapshotButton) {
 
         snapshot += `LOCAL:  Success=${data.localSuccess}, Count=${data.localCount}\n`;
         snapshot += `REMOTE: Success=${data.remoteSuccess}, Count=${data.remoteCount}\n`;
-        snapshot += `Remote Log ID: ${data.remoteLogId || 'Unknown'}\n\n`;
+        snapshot += `Remote Data Store ID: ${data.remoteDataStoreId || 'Unknown'}\n\n`;
 
         if (data.details) {
             snapshot += `=`.repeat(80) + `\n`;
@@ -947,7 +1228,11 @@ if (downloadLightSnapshotButton) {
 
 // --- Initial Load ---
 document.addEventListener('DOMContentLoaded', () => {
+    document.querySelector('label[for="activeLogSelect"]')?.replaceChildren(document.createTextNode('Active Data Store'));
+    document.querySelector('label[for="compareLogSelect"]')?.replaceChildren(document.createTextNode('Active Data Store'));
     openTab('logs');
     refreshLogs();
+    refreshRemoteProcessMDataStores();
+    loadImportSources();
     populateSampleQueries();
 });

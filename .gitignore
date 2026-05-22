@@ -46,13 +46,19 @@ docs/
 ### AI Agents ###
 junie.md
 claude.md
+.agent/
+.agents/
+.claude/
 
 ### Large Data Files ###
-src/main/resources/logs/Hospital_log.xes
+src/main/resources/logs/*.xes
+!src/main/resources/logs/Hospital_log.xes
+!src/main/resources/logs/sample_process.xes
 
 ### Temporary Output ###
+tmp/
 *.txt
 *.log
 *.py
-docs/
-
+!scripts/init-processm-datastores.py
+scripts/verify-compatibility.cases.local.json

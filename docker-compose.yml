@@ -1,8 +1,6 @@
-version: '3.8'
-
 services:
   neo4j:
-    image: neo4j:5.15-community
+    image: neo4j:5.26.25-community-ubi10
     container_name: processm-neo4j
     ports:
       - "7474:7474"  # HTTP
@@ -12,10 +10,10 @@ services:
       - NEO4J_PLUGINS=["apoc"]
       - NEO4J_dbms_security_procedures_unrestricted=apoc.*
       - NEO4J_dbms_security_procedures_allowlist=apoc.*
-      - NEO4J_dbms_memory_heap_initial__size=1G
-      - NEO4J_dbms_memory_heap_max__size=6G
-      - NEO4J_dbms_memory_pagecache_size=1G
-      - NEO4J_dbms_memory_transaction_total_max=8G
+      - NEO4J_server_memory_heap_initial__size=1G
+      - NEO4J_server_memory_heap_max__size=6G
+      - NEO4J_server_memory_pagecache_size=1G
+      - NEO4J_db_memory_transaction_total_max=8G
     volumes:
       - neo4j_data:/data
       - neo4j_logs:/logs
@@ -61,138 +59,14 @@ services:
     networks:
       - processm-network
     volumes:
-      - ./src/test/resources/JournalReview-extra.xes:/xes/JournalReview-extra.xes:ro
+      - ./src/main/resources/logs:/xes:ro
+      - ./scripts/init-processm-datastores.py:/scripts/init-processm-datastores.py:ro
     environment:
       - PROCESSM_URL=http://processm:2080/api
       - PROCESSM_LOGIN=admin@example.com
       - PROCESSM_PASSWORD=Admin1234
       - PROCESSM_ORG=TestOrg
-    entrypoint:
-      - python3
-      - -c
-      - |
-        import urllib.request, urllib.error, json, os, sys, time
-
-        url = os.environ.get('PROCESSM_URL', 'http://processm:2080/api')
-        email = os.environ.get('PROCESSM_LOGIN', 'admin@example.com')
-        pwd = os.environ.get('PROCESSM_PASSWORD', 'Admin1234')
-        org = os.environ.get('PROCESSM_ORG', 'TestOrg')
-
-        def post(path, data):
-            req = urllib.request.Request(f'{url}{path}', json.dumps(data).encode(), {'Content-Type': 'application/json'})
-            try:
-                with urllib.request.urlopen(req) as r:
-                    body = r.read()
-                    return (json.loads(body) if body.strip() else {}), r.status
-            except urllib.error.HTTPError as e:
-                body = e.read()
-                return (json.loads(body) if body.strip() else {}), e.code
-
-        # Wait for ProcessM to be ready
-        for i in range(30):
-            try:
-                post('/users/session', {'login': 'probe', 'password': 'probe'})
-                break
-            except Exception:
-                print(f'Waiting for ProcessM... ({i+1}/30)')
-                time.sleep(5)
-
-        def auth_get(path, token):
-            req = urllib.request.Request(f'{url}{path}')
-            req.add_header('Authorization', f'Bearer {token}')
-            try:
-                with urllib.request.urlopen(req) as r:
-                    body = r.read()
-                    return (json.loads(body) if body.strip() else {}), r.status
-            except urllib.error.HTTPError as e:
-                body = e.read()
-                return (json.loads(body) if body.strip() else {}), e.code
-
-        def multipart_upload(path, token, filepath, filename):
-            import mimetypes
-            boundary = '----PythonFormBoundary'
-            with open(filepath, 'rb') as f:
-                file_data = f.read()
-            content_type = mimetypes.guess_type(filename)[0] or 'application/octet-stream'
-            body = (
-                f'--{boundary}\r\n'
-                f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
-                f'Content-Type: {content_type}\r\n\r\n'
-            ).encode() + file_data + f'\r\n--{boundary}--\r\n'.encode()
-            req = urllib.request.Request(f'{url}{path}', body)
-            req.add_header('Authorization', f'Bearer {token}')
-            req.add_header('Content-Type', f'multipart/form-data; boundary={boundary}')
-            try:
-                with urllib.request.urlopen(req) as r:
-                    rb = r.read()
-                    return (json.loads(rb) if rb.strip() else {}), r.status
-            except urllib.error.HTTPError as e:
-                rb = e.read()
-                return (json.loads(rb) if rb.strip() else {}), e.code
-
-        # Try login first — if user exists, get token
-        resp, code = post('/users/session', {'login': email, 'password': pwd})
-        if 'authorizationToken' not in resp:
-            # Create user
-            print(f'Creating user {email}...')
-            resp2, code2 = post('/users', {'userEmail': email, 'userPassword': pwd, 'newOrganization': True, 'organizationName': org})
-            if code2 == 201 or 'already exists' in resp2.get('error', ''):
-                print('User created (or already exists).')
-            else:
-                print(f'Create user failed ({code2}): {resp2}')
-                sys.exit(1)
-            # Login after creation
-            resp, code = post('/users/session', {'login': email, 'password': pwd})
-
-        if 'authorizationToken' not in resp:
-            print(f'Login failed: {resp}')
-            sys.exit(1)
-
-        token = resp['authorizationToken']
-        print('Login OK.')
-
-        # Create data store if needed
-        ds_name = os.environ.get('PROCESSM_DATASTORE', 'TestDataStore')
-        stores, _ = auth_get('/data-stores', token)
-        ds_id = None
-        if isinstance(stores, list):
-            for s in stores:
-                if s.get('name') == ds_name:
-                    ds_id = s['id']
-                    print(f'Data store "{ds_name}" already exists: {ds_id}')
-                    break
-        if not ds_id:
-            print(f'Creating data store "{ds_name}"...')
-            req = urllib.request.Request(f'{url}/data-stores', json.dumps({'name': ds_name}).encode(), {'Content-Type': 'application/json'})
-            req.add_header('Authorization', f'Bearer {token}')
-            try:
-                with urllib.request.urlopen(req) as r:
-                    resp = json.loads(r.read())
-                ds_id = resp['id']
-                print(f'Data store created: {ds_id}')
-            except urllib.error.HTTPError as e:
-                print(f'Create data store failed ({e.code}): {e.read().decode()}')
-                sys.exit(1)
-
-        # Check if datastore already has logs
-        logs, _ = auth_get(f'/data-stores/{ds_id}/logs', token)
-        existing = logs if isinstance(logs, list) else []
-        if existing:
-            print(f'Data store already has {len(existing)} log(s), skipping upload.')
-        else:
-            # Upload XES files
-            xes_dir = os.environ.get('XES_DIR', '/xes')
-            if os.path.isdir(xes_dir):
-                for fname in os.listdir(xes_dir):
-                    if fname.endswith('.xes'):
-                        fpath = os.path.join(xes_dir, fname)
-                        print(f'Uploading {fname}...')
-                        resp, code = multipart_upload(f'/data-stores/{ds_id}/logs', token, fpath, fname)
-                        print(f'  Upload response ({code}): {resp}')
-            else:
-                print(f'No XES directory found at {xes_dir}, skipping upload.')
-
-        print('Init complete.')
+    entrypoint: ["python3", "/scripts/init-processm-datastores.py"]
     restart: "no"
 
 

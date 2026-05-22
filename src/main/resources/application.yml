@@ -44,9 +44,11 @@ processm:
   api:
     url: http://localhost:80/api
   compatibility:
-    default-trace-limit:
+    default-limits:
       enabled: true
-      limit: 30
+      log: 10
+      trace: 30
+      event: 90
   login: admin@example.com
   password: Admin1234
 

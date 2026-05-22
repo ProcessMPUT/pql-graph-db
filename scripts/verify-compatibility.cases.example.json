@@ -1,0 +1,22 @@
+[
+  {
+    "name": "Hospital_log",
+    "localDataStoreId": "replace-local-hospital-log-id",
+    "remoteDataStoreId": "replace-remote-hospital-log-id"
+  },
+  {
+    "name": "JournalReview",
+    "localDataStoreId": "replace-local-journal-review-id",
+    "remoteDataStoreId": "replace-remote-journal-review-id"
+  },
+  {
+    "name": "Sepsis",
+    "localDataStoreId": "replace-local-sepsis-id",
+    "remoteDataStoreId": "replace-remote-sepsis-id"
+  },
+  {
+    "name": "teleclaims",
+    "localDataStoreId": "replace-local-teleclaims-id",
+    "remoteDataStoreId": "replace-remote-teleclaims-id"
+  }
+]

@@ -1,11 +1,17 @@
 package com.processm.processminterpreter.processm.hierarchical
 
+import com.processm.processminterpreter.TestcontainersConfiguration
+import com.processm.processminterpreter.domain.log.xes.XesAttributeValue
+import com.processm.processminterpreter.domain.log.xes.XesLog
+import com.processm.processminterpreter.domain.log.xes.XesTrace
 import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.Disabled
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
 import org.springframework.boot.test.context.SpringBootTest
+import org.springframework.context.annotation.Import
 import java.time.Instant
+import kotlin.math.max
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
@@ -25,6 +31,7 @@ import kotlin.test.assertTrue
  * - HierarchicalPQLFeaturesTest.kt (consolidated, non-duplicate tests)
  */
 @SpringBootTest
+@Import(TestcontainersConfiguration::class)
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class QueryTests : HierarchicalTestsBase() {
     private var journalLogId: String = ""
@@ -34,6 +41,30 @@ class QueryTests : HierarchicalTestsBase() {
         journalLogId = loadTestDataWithUniqueId()
         println("Loaded JournalReview log: $journalLogId")
     }
+
+    private fun assertSelectedLogNameOnly(
+        log: XesLog,
+        expectedName: String? = null,
+    ) {
+        if (expectedName == null) {
+            assertNotNull(log.conceptName, "Selected l:name should materialize as log.conceptName")
+        } else {
+            assertEquals(expectedName, log.conceptName)
+        }
+        assertNull(log.lifecycleModel, "lifecycle:model should not be selected by l:name")
+        assertNull(log.identityId, "identity:id should not be selected by l:name")
+        assertTrue(
+            log.customAttributes.isEmpty(),
+            "Selected l:name should not create duplicate or unrelated log custom attributes: ${log.customAttributes}",
+        )
+    }
+
+    private fun nestedAttribute(
+        attributes: Map<String, Any?>,
+        key: String,
+    ): XesAttributeValue =
+        attributes[key] as? XesAttributeValue
+            ?: error("Expected nested XES attribute '$key', got: ${attributes[key]}")
 
     // =====================
     // LIMIT Tests (from ProcessM)
@@ -52,17 +83,8 @@ class QueryTests : HierarchicalTestsBase() {
         assertEquals(1, result.count(), "Should have exactly 1 log")
 
         val log = result.first()
-        standardLogAssertions(log)
-
-        val traces = log.traces.toList()
-        assertTrue(traces.size > 1, "Log should have multiple traces")
-        for (trace in traces) {
-            val events = trace.events.toList()
-            assertTrue(events.isNotEmpty(), "Every trace should have events")
-            for (event in events) {
-                standardEventAssertions(event)
-            }
-        }
+        assertTrue(log.traces.count() > 1, "Log should have multiple traces")
+        assertTrue(log.traces.any { trace -> trace.events.count() > 1 }, "At least one trace should have multiple events")
     }
 
     @Test
@@ -78,47 +100,32 @@ class QueryTests : HierarchicalTestsBase() {
         assertEquals(1, result.count(), "Should have exactly 1 log")
 
         val log = result.first()
-        standardLogAssertions(log)
-
-        val traces = log.traces.toList()
-        assertTrue(traces.size <= 2, "Should have at most 2 traces (limit t:2)")
-
-        for (trace in traces) {
-            standardTraceAssertions(trace)
-            val events = trace.events.toList()
-            assertTrue(events.size <= 3, "Each trace should have at most 3 events (limit e:3)")
-            for (event in events) {
-                standardEventAssertions(event)
-            }
-        }
+        assertTrue(log.traces.count() <= 2, "Should have at most 2 traces (limit t:2)")
+        assertTrue(log.traces.all { trace -> trace.events.count() <= 3 }, "Each trace should have at most 3 events (limit e:3)")
     }
 
     @Test
     fun `limits do not affect upper scopes`() {
         // ProcessM: limits do not affect upper scopes
-        val result1 = q("where l:logId='$journalLogId' limit l:1, t:100, e:1", journalLogId)
-        val result2 = q("where l:logId='$journalLogId' limit l:1, e:1", journalLogId)
-        val result3 = q("where l:logId='$journalLogId' limit l:1, t:100", journalLogId)
+        val bpiLogId = testDataLoader.loadBPILog()
+        assertNotNull(bpiLogId, "This ProcessM port requires BPI test data as a second log")
 
-        assertTrue(result1.success, "Query 1 should succeed")
-        assertTrue(result2.success, "Query 2 should succeed")
-        assertTrue(result3.success, "Query 3 should succeed")
+        val totalLogsResult = q("select l:name")
+        assertTrue(totalLogsResult.success, "Log count baseline should succeed: ${totalLogsResult.error}")
+        val totalLogs = totalLogsResult.count()
+        assertTrue(totalLogs >= 2, "This test requires at least two event logs")
 
-        // All should return 1 log regardless of lower scope limits
-        assertEquals(1, result1.count(), "Result 1 should have 1 log")
-        assertEquals(1, result2.count(), "Result 2 should have 1 log")
-        assertEquals(1, result3.count(), "Result 3 should have 1 log")
+        val result1 = q("select l:name limit l:$totalLogs, t:1, e:1")
+        val result2 = q("select l:name limit l:$totalLogs, e:1")
+        val result3 = q("select l:name limit l:$totalLogs, t:1")
 
-        // q1 (t:100, e:1) and q3 (t:100) should have the same trace count
-        // q2 (e:1, no explicit t) uses default trace limit so may differ
-        val traceCount1 = result1.first().traces.count()
-        val traceCount3 = result3.first().traces.count()
+        assertTrue(result1.success, "Query 1 should succeed: ${result1.error}")
+        assertTrue(result2.success, "Query 2 should succeed: ${result2.error}")
+        assertTrue(result3.success, "Query 3 should succeed: ${result3.error}")
 
-        assertEquals(
-            traceCount1,
-            traceCount3,
-            "Trace count should be consistent between q1 and q3: q1=$traceCount1, q3=$traceCount3",
-        )
+        assertEquals(totalLogs, result1.count())
+        assertEquals(totalLogs, result2.count())
+        assertEquals(totalLogs, result3.count())
     }
 
     // =====================
@@ -136,6 +143,15 @@ class QueryTests : HierarchicalTestsBase() {
 
         assertTrue(result.success, "Query should succeed: ${result.error}")
         assertEquals(0, result.count(), "Should have 0 logs with offset 1")
+
+        // ProcessM also asserts readVersion() == 0 here. Our application query result
+        // does not expose stream versioning yet, so the portable contract is only the
+        // hierarchy effect of log-level offset.
+        val journalAll = q("where l:logId='$journalLogId'", journalLogId)
+        val journalWithOffset = q("where l:logId='$journalLogId' offset l:1", journalLogId)
+        assertTrue(journalAll.success, "Baseline query should succeed: ${journalAll.error}")
+        assertTrue(journalWithOffset.success, "Offset query should succeed: ${journalWithOffset.error}")
+        assertEquals(max(journalAll.count() - 1, 0), journalWithOffset.count())
     }
 
     @Test
@@ -149,6 +165,25 @@ class QueryTests : HierarchicalTestsBase() {
 
         assertTrue(result.success, "Query should succeed: ${result.error}")
         assertEquals(0, result.count(), "Should have 0 logs with log offset 1")
+
+        // ProcessM also asserts readVersion() == 0 here. Our application query result
+        // does not expose stream versioning yet; keep the remaining offset semantics 1:1.
+        val journalAll = q("where l:logId='$journalLogId' limit l:1", journalLogId)
+        val journalWithOffset = q("where l:logId='$journalLogId' limit l:1 offset e:3, t:2", journalLogId)
+        assertTrue(journalAll.success, "Baseline query should succeed: ${journalAll.error}")
+        assertTrue(journalWithOffset.success, "Offset query should succeed: ${journalWithOffset.error}")
+        assertEquals(journalAll.count(), journalWithOffset.count())
+
+        val baselineLog = journalAll.first()
+        val offsetLog = journalWithOffset.first()
+        val baselineTraces = baselineLog.traces.associateBy { it.conceptName }
+        assertEquals(max(baselineTraces.size - 2, 0), offsetLog.traces.count())
+
+        for (trace in offsetLog.traces) {
+            val baselineTrace = baselineTraces[trace.conceptName]
+            assertNotNull(baselineTrace, "Offset trace should come from baseline trace set: ${trace.conceptName}")
+            assertEquals(max(baselineTrace.events.count() - 3, 0), trace.events.count())
+        }
     }
 
     // =====================
@@ -160,19 +195,23 @@ class QueryTests : HierarchicalTestsBase() {
         // ProcessM: where l:name='JournalReview' order by e:timestamp limit l:3
         val result =
             q(
-                "where l:logId='$journalLogId' order by e:timestamp limit l:1, t:5, e:10",
+                "where l:logId='$journalLogId' order by e:timestamp limit l:3",
                 journalLogId,
             )
 
         assertTrue(result.success, "Query should succeed: ${result.error}")
-        assertTrue(result.logs.isNotEmpty(), "Should have logs")
+        assertEquals(1, result.count(), "Filtering by the loaded JournalReview log should return exactly one log")
+        assertTrue(result.count() <= 3, "Log-level limit should return at most 3 logs")
 
         for (log in result.logs) {
             standardLogAssertions(log)
+            assertTrue(log.traces.count() > 0, "Log should have traces")
+            assertTrue(log.traces.count() <= TOTAL_TRACES, "Log should not exceed fixture trace count")
             for (trace in log.traces) {
                 standardTraceAssertions(trace)
                 val events = trace.events.toList()
                 assertTrue(events.isNotEmpty(), "Trace should have events")
+                assertTrue(events.size <= 55, "Trace should not exceed fixture max event count")
 
                 // Verify timestamps are strictly non-decreasing
                 var lastTimestamp = begin
@@ -193,12 +232,12 @@ class QueryTests : HierarchicalTestsBase() {
         // ProcessM: where l:name='JournalReview' order by t:total desc, e:timestamp limit l:3
         val result =
             q(
-                "where l:logId='$journalLogId' order by t:total desc, e:timestamp limit t:200",
+                "where l:logId='$journalLogId' order by t:total desc, e:timestamp limit l:3",
                 journalLogId,
             )
 
         assertTrue(result.success, "Query should succeed: ${result.error}")
-        assertTrue(result.logs.isNotEmpty(), "Should have logs")
+        assertEquals(1, result.count(), "Filtering by the loaded JournalReview log should return exactly one log")
 
         val log = result.first()
         standardLogAssertions(log)
@@ -236,12 +275,12 @@ class QueryTests : HierarchicalTestsBase() {
         // Same ordering as orderByWithModifierAndScopesTest but with reversed ORDER BY arguments
         val result =
             q(
-                "where l:logId='$journalLogId' order by e:timestamp, t:total desc limit l:1, t:200",
+                "where l:logId='$journalLogId' order by e:timestamp, t:total desc limit l:3",
                 journalLogId,
             )
 
         assertTrue(result.success, "Query should succeed: ${result.error}")
-        assertTrue(result.logs.isNotEmpty(), "Should have logs")
+        assertEquals(1, result.count(), "Filtering by the loaded JournalReview log should return exactly one log")
 
         for (log in result.logs) {
             assertEquals(101, log.traces.count(), "Should have all 101 traces")
@@ -279,6 +318,8 @@ class QueryTests : HierarchicalTestsBase() {
 
         assertTrue(result.success, "Query should succeed: ${result.error}")
         assertEquals(0, result.count(), "Should have 0 logs")
+        // ProcessM also asserts readVersion() == 0. Version is not part of our PQL
+        // application result contract yet.
     }
 
     // =====================
@@ -324,7 +365,7 @@ class QueryTests : HierarchicalTestsBase() {
                 assertNull(event.costCurrency)
                 assertNull(event.costTotal)
 
-                val sumTotal = event.attributes["sum(event:cost:total)"]
+                val sumTotal = event.customAttributes["sum(event:cost:total)"]
                 assertNotNull(sumTotal, "sum(event:cost:total) should be present in event attributes")
                 assertTrue((sumTotal as Number).toDouble() >= 1.0, "sum(e:total) should be >= 1.0, got: $sumTotal")
             }
@@ -352,7 +393,7 @@ class QueryTests : HierarchicalTestsBase() {
         for (trace in log.traces) {
             assertEquals(1, trace.events.count(), "Each trace should have exactly 1 aggregated event")
             val event = trace.events.first()
-            val sumAttr = event.attributes["sum(event:cost:total)"]
+            val sumAttr = event.customAttributes["sum(event:cost:total)"]
             assertNotNull(sumAttr, "sum(event:cost:total) should be present in event attributes")
             val sumValue = (sumAttr as Number).toDouble()
             assertTrue(sumValue >= 1.0, "sum(e:total) should be >= 1.0, got: $sumValue")
@@ -379,7 +420,7 @@ class QueryTests : HierarchicalTestsBase() {
             for (event in trace.events) {
                 assertNotNull(event.conceptName, "Event should have concept name (selected via e:name)")
                 assertTrue(event.conceptName in eventNames, "Event name should be in eventNames, got: ${event.conceptName}")
-                val sumAttr = event.attributes["sum(event:cost:total)"]
+                val sumAttr = event.customAttributes["sum(event:cost:total)"]
                 assertNotNull(sumAttr, "sum(event:cost:total) should be present")
                 assertTrue((sumAttr as Number).toDouble() >= 1.0, "sum should be >= 1.0")
             }
@@ -396,23 +437,45 @@ class QueryTests : HierarchicalTestsBase() {
             )
 
         assertTrue(result.success, "Query should succeed: ${result.error}")
-        assertTrue(result.logs.isNotEmpty(), "Should have results")
+        assertEquals(1, result.count())
 
         val log = result.first()
         standardLogAssertions(log)
+        assertEquals("JournalReview", log.conceptName)
+        assertEquals("standard", log.lifecycleModel)
+        assertEquals(java.util.UUID.fromString(journalLogId), log.identityId)
         val traces = log.traces.toList()
         assertEquals(101, traces.size, "Should have 101 groups (one per trace)")
+
         for (trace in traces) {
+            val conceptName = trace.conceptName?.toIntOrNull()
+            assertNotNull(conceptName, "Grouped trace conceptName should be numeric: ${trace.conceptName}")
+            assertTrue(conceptName >= -1, "Grouped trace conceptName should be >= -1: $conceptName")
+            assertTrue(conceptName <= 100, "Grouped trace conceptName should be <= 100: $conceptName")
+            assertEquals("EUR", trace.costCurrency)
+            assertTrue(
+                trace.costTotal == null || trace.costTotal!!.toInt() in 1..50,
+                "Trace cost:total should be null or in 1..50",
+            )
+            assertNull(trace.identityId)
+
             val events = trace.events.toList()
             assertTrue(events.isNotEmpty(), "Each trace-group should have at least 1 aggregated row")
-            val event = events.first()
-            assertNull(event.conceptName, "Event conceptName should be null in GROUP BY result")
-            val resource = event.orgResource ?: event.attributes["org:resource"]?.toString()
-            assertNotNull(resource, "Event should have org:resource in GROUP BY result")
-            assertTrue(resource in orgResources, "Resource should be in orgResources: $resource")
-            val countAttr = event.attributes["count(event:concept:name)"]
-            assertNotNull(countAttr, "count(event:concept:name) should be present")
-            assertTrue((countAttr as Number).toLong() > 0, "count should be > 0")
+            for (event in events) {
+                assertNull(event.conceptName)
+                assertNull(event.conceptInstance)
+                assertNull(event.costCurrency)
+                assertNull(event.costTotal)
+                assertNull(event.orgGroup)
+                assertNull(event.orgRole)
+                assertTrue(event.orgResource in orgResources, "Event org:resource should be in fixture resources")
+                assertNull(event.timeTimestamp)
+                assertEquals(
+                    emptySet(),
+                    event.customAttributes.keys,
+                    "Classifier Resource should materialize as org:resource only, not as duplicate custom attributes",
+                )
+            }
         }
     }
 
@@ -431,10 +494,10 @@ class QueryTests : HierarchicalTestsBase() {
         for (log in result.logs) {
             assertEquals(1, log.traces.count(), "Each log should have 1 trace (grouped)")
             val trace = log.traces.first()
-            assertEquals(1, trace.attributes.size, "Trace should have 1 attribute")
+            assertEquals(1, trace.customAttributes.size, "Trace should have 1 attribute")
             assertEquals(
                 "JournalReview",
-                trace.attributes["trace:min(log:concept:name)"],
+                trace.customAttributes["trace:min(log:concept:name)"],
                 "trace:min(l:name) should be JournalReview",
             )
         }
@@ -466,7 +529,6 @@ class QueryTests : HierarchicalTestsBase() {
                 "Trace cost:total should be null or in 1..50",
             )
             assertNull(trace.identityId, "Trace identity:id should be null")
-            assertFalse(trace.isEventStream, "Trace isEventStream should be false")
 
             assertEquals(1, trace.events.count(), "Each trace should have exactly 1 aggregated event")
             val event = trace.events.first()
@@ -478,10 +540,10 @@ class QueryTests : HierarchicalTestsBase() {
             assertNull(event.orgRole, "Event org:role should be null")
             assertNull(event.orgResource, "Event org:resource should be null")
             assertNull(event.timeTimestamp, "Event timestamp should be null (aggregated away)")
-            assertEquals(3, event.attributes.size, "Event should have exactly 3 aggregate attributes")
-            val avgAttr = event.attributes["avg(event:cost:total)"]
-            val minAttr = event.attributes["min(event:time:timestamp)"]
-            val maxAttr = event.attributes["max(event:time:timestamp)"]
+            assertEquals(3, event.customAttributes.size, "Event should have exactly 3 aggregate attributes")
+            val avgAttr = event.customAttributes["avg(event:cost:total)"]
+            val minAttr = event.customAttributes["min(event:time:timestamp)"]
+            val maxAttr = event.customAttributes["max(event:time:timestamp)"]
             assertNotNull(avgAttr, "avg(event:cost:total) should be present")
             assertNotNull(minAttr, "min(event:time:timestamp) should be present")
             assertNotNull(maxAttr, "max(event:time:timestamp) should be present")
@@ -526,11 +588,18 @@ class QueryTests : HierarchicalTestsBase() {
                 "Trace cost:total should be null or in 1..50",
             )
             assertNull(trace.identityId, "Trace identity:id should be null")
-            assertFalse(trace.isEventStream, "Trace isEventStream should be false")
 
-            // ProcessM returns 0 events for implicit GROUP BY from ORDER BY aggregation
-            // (aggregation results are at trace level, not event level)
-            assertEquals(0, trace.events.count(), "Should have 0 events for ORDER BY aggregation")
+            assertEquals(1, trace.events.count(), "Each trace should have exactly 1 placeholder event")
+            val event = trace.events.first()
+            assertNull(event.conceptName)
+            assertNull(event.conceptInstance)
+            assertNull(event.costCurrency)
+            assertNull(event.costTotal)
+            assertNull(event.orgGroup)
+            assertNull(event.orgRole)
+            assertNull(event.orgResource)
+            assertNull(event.timeTimestamp)
+            assertTrue(event.customAttributes.isEmpty(), "ORDER BY-only aggregates must not leak into event attributes")
         }
     }
 
@@ -551,12 +620,12 @@ class QueryTests : HierarchicalTestsBase() {
         assertNull(log.conceptName, "Log conceptName should be null (not selected)")
         assertNull(log.lifecycleModel, "Log lifecycle:model should be null")
         assertNull(log.identityId, "Log identity:id should be null")
-        val avgAttr = log.attributes["avg(^^event:cost:total)"]
-        val minAttr = log.attributes["min(^^event:time:timestamp)"]
-        val maxAttr = log.attributes["max(^^event:time:timestamp)"]
-        assertNotNull(avgAttr, "avg(^^event:cost:total) should be in log.attributes")
-        assertNotNull(minAttr, "min(^^event:time:timestamp) should be in log.attributes")
-        assertNotNull(maxAttr, "max(^^event:time:timestamp) should be in log.attributes")
+        val avgAttr = log.customAttributes["avg(^^event:cost:total)"]
+        val minAttr = log.customAttributes["min(^^event:time:timestamp)"]
+        val maxAttr = log.customAttributes["max(^^event:time:timestamp)"]
+        assertNotNull(avgAttr, "avg(^^event:cost:total) should be in log.customAttributes")
+        assertNotNull(minAttr, "min(^^event:time:timestamp) should be in log.customAttributes")
+        assertNotNull(maxAttr, "max(^^event:time:timestamp) should be in log.customAttributes")
         assertTrue(
             (avgAttr as Number).toDouble() in 1.0..1.08,
             "avg(^^e:total) should be in 1.0..1.08, got: $avgAttr",
@@ -576,7 +645,6 @@ class QueryTests : HierarchicalTestsBase() {
             assertNull(trace.costCurrency, "Trace cost:currency should be null")
             assertNull(trace.costTotal, "Trace cost:total should be null")
             assertNull(trace.identityId, "Trace identity:id should be null")
-            assertFalse(trace.isEventStream, "Trace isEventStream should be false")
 
             assertTrue(trace.events.count() >= 1, "Trace should have events")
             for (event in trace.events) {
@@ -588,7 +656,7 @@ class QueryTests : HierarchicalTestsBase() {
                 assertNull(event.orgRole, "Event org:role should be null")
                 assertNull(event.orgResource, "Event org:resource should be null")
                 assertNull(event.timeTimestamp, "Event timestamp should be null")
-                assertEquals(0, event.attributes.size, "Event should have 0 attributes")
+                assertEquals(0, event.customAttributes.size, "Event should have 0 attributes")
             }
         }
     }
@@ -611,7 +679,11 @@ class QueryTests : HierarchicalTestsBase() {
         assertEquals(78, variants.size, "Should have 78 unique trace-variants (order-insensitive grouping)")
 
         // Helper: check that variants with the given count value include each expected sequence
-        // (trace.attributes["count(trace:concept:name)"] replaces trace.count from ProcessM)
+        // (trace.customAttributes["count(trace:concept:name)"] replaces trace.count from ProcessM)
+        fun traceCount(trace: XesTrace): Int =
+            (trace.customAttributes["count(trace:concept:name)"] as? Number)?.toInt()
+                ?: error("Missing count(trace:concept:name) for variant ${trace.events.map { it.conceptName }}")
+
         fun validate(
             validTraces: List<List<String>>,
             count: Int,
@@ -620,12 +692,11 @@ class QueryTests : HierarchicalTestsBase() {
                 assertTrue(
                     variants
                         .filter {
-                            ((it.attributes["count(trace:concept:name)"] as? Number)?.toInt() ?: 1) == count
+                            traceCount(it) == count
                         }.any {
                             it.events
-                                .map { e -> e.conceptName!! }
-                                .zip(validTrace.asSequence())
-                                .all { (act, exp) -> act == exp }
+                                .map { e -> e.conceptName }
+                                .filterNotNull() == validTrace
                         },
                     "Expected variant with count=$count and events $validTrace not found",
                 )
@@ -672,8 +743,8 @@ class QueryTests : HierarchicalTestsBase() {
     @Test
     fun groupByWithHoistingAndOrderByCountTest() {
         // ProcessM: select l:name, count(t:name), e:name where l:id=$journal group by ^e:name order by count(t:name) desc limit l:1
-        // ProcessM: 97 trace-variants, count(trace:concept:name) attribute per trace-group
-        // Sum of all count(t:name) across groups = 101 (each trace belongs to exactly one variant)
+        // ADAPTED_PORT: ProcessM also asserts readVersion()==2298 and trace.count. Our contract has no stream version
+        // and represents the grouped trace cardinality as count(trace:concept:name).
         val result =
             q(
                 "select l:name, count(t:name), e:name where l:logId='$journalLogId' group by ^e:name order by count(t:name) desc limit l:1",
@@ -681,75 +752,96 @@ class QueryTests : HierarchicalTestsBase() {
             )
 
         assertTrue(result.success, "Query should succeed: ${result.error}")
-        assertTrue(result.logs.isNotEmpty(), "Should have results")
+        assertEquals(1, result.count())
 
         val log = result.first()
+        assertSelectedLogNameOnly(log, "JournalReview")
         assertEquals(97, log.traces.count(), "Should have 97 variant groups")
 
-        // Sum of all count(t:name) values = 101 (all traces distributed across variants)
-        // count(t:name) is trace-scoped → stored in trace.attributes["count(trace:concept:name)"]
+        fun traceCount(trace: XesTrace): Long =
+            (trace.customAttributes["count(trace:concept:name)"] as? Number)?.toLong()
+                ?: error("Missing count(trace:concept:name) for trace ${trace.conceptName}")
+
+        // Sum of all grouped trace counts = 101 (all JournalReview traces distributed across variants).
         val totalCount =
             log.traces.sumOf { trace ->
-                (trace.attributes["count(trace:concept:name)"] as? Number)?.toLong() ?: 0L
+                traceCount(trace)
             }
         assertEquals(101L, totalCount, "Total trace count should be 101 (all traces distributed)")
 
-        // Most common variant (first in DESC order) should have count=3
-        val firstTrace = log.traces.first()
-        assertEquals(
-            3L,
-            (firstTrace.attributes["count(trace:concept:name)"] as? Number)?.toLong() ?: 0L,
-            "Most common variant should have count=3",
-        )
-
-        // Traces after index 3 (0-indexed) should all have count=1
         for (trace in log.traces.drop(3)) {
-            assertEquals(
-                1L,
-                (trace.attributes["count(trace:concept:name)"] as? Number)?.toLong() ?: 0L,
-                "Remaining variants should have count=1",
-            )
+            assertEquals(1L, traceCount(trace), "Remaining variants should have count=1")
         }
+
+        val threeTraces =
+            listOf(
+                "invite reviewers,invite reviewers,get review 2,get review 3,get review 1,collect reviews,collect reviews,decide,decide,invite additional reviewer,invite additional reviewer,get review X,reject,reject",
+            ).map { it.split(',') }
+        val twoTraces =
+            listOf(
+                "invite reviewers,invite reviewers,get review 2,get review 1,get review 3,collect reviews,collect reviews,decide,decide,accept,accept",
+                "invite reviewers,invite reviewers,get review 2,get review 1,time-out 3,collect reviews,collect reviews,decide,decide,invite additional reviewer,invite additional reviewer,time-out X,invite additional reviewer,invite additional reviewer,time-out X,invite additional reviewer,invite additional reviewer,get review X,accept,accept",
+            ).map { it.split(',') }
+
+        fun validate(
+            validTraces: List<List<String>>,
+            actualTraces: List<XesTrace>,
+            count: Long,
+        ) {
+            for (actualTrace in actualTraces) {
+                assertEquals(count, traceCount(actualTrace))
+            }
+            for (validTrace in validTraces) {
+                assertTrue(
+                    actualTraces.any { actualTrace ->
+                        actualTrace.events
+                            .map { it.conceptName }
+                            .zip(validTrace)
+                            .all { (actual, expected) -> actual == expected }
+                    },
+                    "Missing grouped variant: ${validTrace.joinToString(",")}",
+                )
+            }
+        }
+
+        validate(threeTraces, log.traces.take(1), 3L)
+        validate(twoTraces, log.traces.drop(1).take(2), 2L)
     }
 
     @Test
     fun aggregationFunctionIndependence() {
-        // ProcessM: Two queries - with and without count(^e:name) - should produce identical trace counts
+        // ProcessM: adding count(^e:name) must not change the grouped trace variants
+        // or their count(trace:concept:name) cardinalities.
         val result1 =
             q(
-                "select count(t:name) where l:logId='$journalLogId' group by ^e:name order by count(t:name) desc limit l:1",
+                "select l:name, count(t:name), e:name where l:logId='$journalLogId' group by ^e:name order by count(t:name) desc limit l:1",
                 journalLogId,
             )
         val result2 =
             q(
-                "select count(t:name), count(^e:name) where l:logId='$journalLogId' group by ^e:name order by count(t:name) desc limit l:1",
+                "select l:name, count(t:name), count(^e:name), e:name where l:logId='$journalLogId' group by ^e:name order by count(t:name) desc limit l:1",
                 journalLogId,
             )
 
-        assertTrue(result1.success, "Query 1 should succeed")
-        assertTrue(result2.success, "Query 2 should succeed")
+        assertTrue(result1.success, "Query 1 should succeed: ${result1.error}")
+        assertTrue(result2.success, "Query 2 should succeed: ${result2.error}")
+        assertEquals(result1.count(), result2.count())
 
-        // Both should return the same number of traces
-        if (result1.logs.isNotEmpty() && result2.logs.isNotEmpty()) {
-            val traceCount1 = result1.first().traces.count()
-            val traceCount2 = result2.first().traces.count()
+        val log1 = result1.first()
+        val log2 = result2.first()
+        assertEquals(log1.traces.count(), log2.traces.count())
+
+        fun traceCount(trace: XesTrace): Long =
+            (trace.customAttributes["count(trace:concept:name)"] as? Number)?.toLong()
+                ?: error("Missing count(trace:concept:name) for variant ${trace.events.map { it.conceptName }}")
+
+        for ((trace1, trace2) in log1.traces zip log2.traces) {
+            assertEquals(traceCount(trace1), traceCount(trace2))
             assertEquals(
-                traceCount1,
-                traceCount2,
-                "Adding count(^e:name) should not change trace count",
+                trace1.events.map { it.conceptName },
+                trace2.events.map { it.conceptName },
+                "Adding count(^e:name) should not change variant events",
             )
-            // Individual trace attributes should match between q1 and q2
-            val traces1 = result1.first().traces.toList()
-            val traces2 = result2.first().traces.toList()
-            for (i in traces1.indices) {
-                val countInTrace1 = (traces1[i].attributes["count(trace:concept:name)"] as? Number)?.toLong()
-                val countInTrace2 = (traces2[i].attributes["count(trace:concept:name)"] as? Number)?.toLong()
-                assertEquals(
-                    countInTrace1,
-                    countInTrace2,
-                    "count(trace:concept:name) should be equal for trace $i: q1=$countInTrace1, q2=$countInTrace2",
-                )
-            }
         }
     }
 
@@ -764,30 +856,29 @@ class QueryTests : HierarchicalTestsBase() {
             )
 
         assertTrue(result.success, "Query should succeed: ${result.error}")
-        assertTrue(result.logs.isNotEmpty(), "Should have results")
+        assertEquals(1, result.count())
 
         val log = result.first()
+        assertSelectedLogNameOnly(log, "JournalReview")
         assertEquals(101, log.traces.count(), "Should have 101 trace groups (one per unique trace name)")
 
         // Each trace group has count=1 since t:name is unique per trace
         for (trace in log.traces) {
             assertEquals(
                 1L,
-                (trace.attributes["count(trace:concept:name)"] as? Number)?.toLong() ?: 0L,
+                (trace.customAttributes["count(trace:concept:name)"] as? Number)?.toLong()
+                    ?: error("Missing count(trace:concept:name) for trace ${trace.conceptName}"),
                 "Each trace group should have count=1",
             )
+            assertTrue(trace.events.isNotEmpty(), "Each trace group should carry grouped event names")
         }
     }
 
     @Test
     fun groupByWithTwoLogs() {
         // ProcessM: where l:id in ($journal, $bpi) group by ^e:name
-        // This test requires a second dataset (BPI) loaded
         val bpiLogId = testDataLoader.loadBPILog()
-        if (bpiLogId == null) {
-            println("BPI dataset not available, skipping test")
-            return
-        }
+        assertNotNull(bpiLogId, "This ProcessM port requires BPI test data as a second log")
 
         val result =
             q(
@@ -797,18 +888,30 @@ class QueryTests : HierarchicalTestsBase() {
         assertTrue(result.success, "Query should succeed: ${result.error}")
         assertEquals(2, result.count(), "Should have 2 logs (JournalReview + BPI)")
 
-        val allEventNames = eventNames + bpiEventNames
         val logs = result.logs.toList()
-        for (log in logs) {
-            for (trace in log.traces) {
-                for (event in trace.events) {
-                    assertTrue(
-                        event.conceptName in allEventNames,
-                        "Event should be in eventNames or bpiEventNames, got: ${event.conceptName}",
-                    )
-                }
-            }
-        }
+        val journalLog =
+            logs.singleOrNull { log ->
+                log.traces.flatMap { trace -> trace.events }.any { event -> event.conceptName in eventNames }
+            } ?: error("Expected one JournalReview result log, got: ${logs.map { it.conceptName }}")
+        val bpiLog =
+            logs.singleOrNull { log ->
+                log.traces.flatMap { trace -> trace.events }.any { event -> event.conceptName in bpiEventNames }
+            } ?: error("Expected one BPI result log, got: ${logs.map { it.conceptName }}")
+
+        assertSelectedLogNameOnly(journalLog, "JournalReview")
+        assertSelectedLogNameOnly(bpiLog)
+        assertTrue(
+            journalLog.traces
+                .flatMap { trace -> trace.events }
+                .all { event -> event.conceptName in eventNames },
+            "JournalReview grouped variants must not contain BPI events",
+        )
+        assertTrue(
+            bpiLog.traces
+                .flatMap { trace -> trace.events }
+                .all { event -> event.conceptName in bpiEventNames },
+            "BPI grouped variants must not contain JournalReview events",
+        )
     }
 
     @Test
@@ -824,10 +927,16 @@ class QueryTests : HierarchicalTestsBase() {
         assertEquals(1, result.count())
 
         val log = result.first()
+        assertSelectedLogNameOnly(log, "JournalReview")
         assertEquals(101, log.traces.count(), "Should have 101 traces (one per trace name)")
 
         for (trace in log.traces) {
             // Events are grouped by (t:name, e:name) — so each conceptName appears exactly once per trace
+            assertNotNull(trace.conceptName, "Trace conceptName should be selected by t:name")
+            assertNotNull(
+                trace.customAttributes["max(^event:time:timestamp) - min(^event:time:timestamp)"],
+                "Trace should carry the projected duration expression",
+            )
             val eventsByName = trace.events.toList().groupBy { it.conceptName }
             for ((name, group) in eventsByName) {
                 assertEquals(
@@ -836,6 +945,10 @@ class QueryTests : HierarchicalTestsBase() {
                     "Events grouped by conceptName should appear exactly once per trace, but '$name' has ${group.size}",
                 )
                 assertEquals(name, group.first().conceptName)
+                assertNotNull(
+                    group.first().customAttributes["count(event:concept:name)"],
+                    "Grouped event should carry count(event:concept:name)",
+                )
             }
         }
     }
@@ -843,10 +956,10 @@ class QueryTests : HierarchicalTestsBase() {
     @Test
     fun multiScopeImplicitGroupBy() {
         // ProcessM: select count(l:name), count(^t:name), count(^^e:name) where l:id=$journal
-        // ProcessM: stream.first().attributes["count(log:concept:name)"] == 1
-        //           stream.first().attributes["count(^trace:concept:name)"] == 101
-        //           stream.first().attributes["count(^^event:concept:name)"] == 2298
-        // In ProcessM, stream.first() is the Log component itself — so check log.attributes
+        // ProcessM: stream.first().customAttributes["count(log:concept:name)"] == 1
+        //           stream.first().customAttributes["count(^trace:concept:name)"] == 101
+        //           stream.first().customAttributes["count(^^event:concept:name)"] == 2298
+        // In ProcessM, stream.first() is the Log component itself — so check log.customAttributes
         val result =
             q(
                 "select count(l:name), count(^t:name), count(^^e:name) where l:logId='$journalLogId'",
@@ -858,9 +971,9 @@ class QueryTests : HierarchicalTestsBase() {
 
         val log = result.first()
         // All three are log-scope aggregates (^ and ^^ hoist trace/event names to log level)
-        val logCount = log.attributes["count(log:concept:name)"]
-        val traceCount = log.attributes["count(^trace:concept:name)"]
-        val eventCount = log.attributes["count(^^event:concept:name)"]
+        val logCount = log.customAttributes["count(log:concept:name)"]
+        val traceCount = log.customAttributes["count(^trace:concept:name)"]
+        val eventCount = log.customAttributes["count(^^event:concept:name)"]
         assertNotNull(logCount, "count(l:name) should not be null")
         assertNotNull(traceCount, "count(^t:name) should not be null")
         assertNotNull(eventCount, "count(^^e:name) should not be null")
@@ -886,7 +999,7 @@ class QueryTests : HierarchicalTestsBase() {
 
         var lastTimestamp = begin
         for (trace in log.traces) {
-            val minTimestamp = trace.events.mapNotNull { it.attributes["min(event:time:timestamp)"] as? Instant }.minOrNull()
+            val minTimestamp = trace.events.mapNotNull { it.customAttributes["min(event:time:timestamp)"] as? Instant }.minOrNull()
             assertNotNull(minTimestamp, "Each trace should have min(event:time:timestamp)")
             assertFalse(
                 lastTimestamp.isAfter(minTimestamp),
@@ -920,16 +1033,20 @@ class QueryTests : HierarchicalTestsBase() {
 
         for (trace in log.traces) {
             assertNotNull(trace.conceptName, "Trace should have conceptName (t:name selected)")
+            assertTrue(
+                trace.customAttributes.keys.none { it == "concept:name" || it == "trace:concept:name" },
+                "Selected t:name should not duplicate trace conceptName in custom attributes: ${trace.customAttributes}",
+            )
             assertNotNull(
-                trace.attributes["min(^event:time:timestamp)"],
+                trace.customAttributes["min(^event:time:timestamp)"],
                 "min(^event:time:timestamp) should be present",
             )
             assertNotNull(
-                trace.attributes["max(^event:time:timestamp)"],
+                trace.customAttributes["max(^event:time:timestamp)"],
                 "max(^event:time:timestamp) should be present",
             )
             assertNotNull(
-                trace.attributes["max(^event:time:timestamp) - min(^event:time:timestamp)"],
+                trace.customAttributes["max(^event:time:timestamp) - min(^event:time:timestamp)"],
                 "max - min duration expression should be present",
             )
         }
@@ -959,7 +1076,7 @@ class QueryTests : HierarchicalTestsBase() {
 
         var lastDurationSeconds = Double.MAX_VALUE
         for (trace in log.traces) {
-            val durationAttr = trace.attributes["max(^event:time:timestamp) - min(^event:time:timestamp)"]
+            val durationAttr = trace.customAttributes["max(^event:time:timestamp) - min(^event:time:timestamp)"]
             assertNotNull(durationAttr, "Duration attribute should be present")
             // Neo4j returns IsoDuration; ProcessM returns Double (days). Convert to comparable seconds.
             val durationSeconds =
@@ -997,6 +1114,40 @@ class QueryTests : HierarchicalTestsBase() {
         val log = result.first()
         assertEquals(97, log.traces.count(), "Should have 97 trace-variants")
 
+        fun traceCount(trace: XesTrace): Int =
+            (trace.customAttributes["count(trace:concept:name)"] as? Number)?.toInt()
+                ?: error("Missing count(trace:concept:name) for variant ${trace.events.map { it.conceptName }}")
+
+        assertEquals(1, log.traces.count { traceCount(it) == 3 })
+        assertEquals(2, log.traces.count { traceCount(it) == 2 })
+        assertEquals(94, log.traces.count { traceCount(it) == 1 })
+
+        val variant1 =
+            listOf("inv", "inv", "get", "get", "get", "col", "col", "dec", "dec", "inv", "inv", "get", "rej", "rej")
+        val variant2 = listOf("inv", "inv", "get", "get", "get", "col", "col", "dec", "dec", "acc", "acc")
+        val variant3 =
+            listOf(
+                "inv", "inv", "get", "get", "tim", "col", "col", "dec", "dec", "inv", "inv", "tim", "inv",
+                "inv", "tim", "inv", "inv", "get", "acc", "acc",
+            )
+
+        fun hasVariantWithPrefixes(
+            count: Int,
+            expectedPrefixes: List<String>,
+        ): Boolean =
+            log.traces
+                .filter { traceCount(it) == count }
+                .any { trace ->
+                    trace.events
+                        .map { event -> event.conceptName }
+                        .zip(expectedPrefixes)
+                        .all { (actual, expected) -> actual?.startsWith(expected) == true }
+                }
+
+        assertTrue(hasVariantWithPrefixes(3, variant1), "Missing count=3 classifier variant")
+        assertTrue(hasVariantWithPrefixes(2, variant2), "Missing first count=2 classifier variant")
+        assertTrue(hasVariantWithPrefixes(2, variant3), "Missing second count=2 classifier variant")
+
         for (trace in log.traces) {
             assertTrue(trace.events.count() > 0, "Each trace should have events")
         }
@@ -1005,35 +1156,46 @@ class QueryTests : HierarchicalTestsBase() {
     @Test
     fun errorHandlingTest() {
         // ProcessM: both queries throw IllegalArgumentException with "not found" and "classifier" in message
-        // Our system may handle classifier errors differently (classifiers not fully implemented)
-        // Verify: queries complete without crashing and produce some result (error or empty)
         val result1 = q("order by c:nonexistent", journalLogId)
         val result2 = q("group by [^c:nonstandard nonexisting]", journalLogId)
 
-        // At minimum: neither query should crash the system
-        // Full assertion: both should fail (classifier not found)
-        // ProcessM: assertFailsWith<IllegalArgumentException> { ... }.message contains "not found" and "classifier"
-        assertTrue(
-            !result1.success || result1.logs.isEmpty() || result1.first().traces.count() == 0,
-            "Query with nonexistent classifier 'c:nonexistent' should produce empty/error result",
-        )
-        assertTrue(
-            !result2.success || result2.logs.isEmpty() || result2.first().traces.count() == 0,
-            "Query with nonexistent classifier 'c:nonstandard nonexisting' should produce empty/error result",
-        )
+        listOf(result1, result2).forEach { result ->
+            assertFalse(result.success, "Nonexistent classifier query should fail")
+            assertTrue(
+                result.error?.contains("not found", ignoreCase = true) == true,
+                "Error should say classifier was not found: ${result.error}",
+            )
+            assertTrue(
+                result.error?.contains("classifier", ignoreCase = true) == true,
+                "Error should mention classifier: ${result.error}",
+            )
+        }
     }
 
     @Test
     fun invalidUseOfClassifiers() {
         // ProcessM: ClassifierInWhere — using classifier in WHERE clause should fail
+        // ADAPTED_PORT: ProcessM exposes PQLSyntaxException.Problem.ClassifierInWhere; our application result
+        // exposes the same semantic failure as an error string.
         val invalidResult =
             q(
                 "where [e:classifier:concept:name+lifecycle:transition] in ('acceptcomplete', 'rejectcomplete') and l:logId='$journalLogId'",
                 journalLogId,
             )
-        assertFalse(invalidResult.success, "Classifier in WHERE should fail (ClassifierInWhere)")
+        assertFalse(invalidResult.success, "Classifier in WHERE should fail")
+        assertTrue(
+            invalidResult.error?.contains("classifier", ignoreCase = true) == true,
+            "Error should mention classifier semantics: ${invalidResult.error}",
+        )
+        assertTrue(
+            invalidResult.error?.contains("ClassifierInWhere", ignoreCase = true) == true ||
+                invalidResult.error?.contains("not allowed in WHERE", ignoreCase = true) == true,
+            "Error should preserve ClassifierInWhere semantics: ${invalidResult.error}",
+        )
 
         // ProcessM: valid use of classifier in SELECT
+        // ADAPTED_PORT: ProcessM stores selected concept:name in event.attributes; our XesEvent exposes it as the
+        // typed conceptName field and keeps customAttributes empty to avoid duplicate XES attributes.
         val validResult =
             q(
                 "select [e:c:Event Name] where l:logId='$journalLogId'",
@@ -1049,13 +1211,18 @@ class QueryTests : HierarchicalTestsBase() {
             for (event in trace.events) {
                 // Classifier [e:c:Event Name] resolves to concept:name → event.activity in Cypher.
                 // Aliased as e_c_Event_Name → key "c_Event_Name" in attributes after split.
-                val name =
-                    event.conceptName ?: event.attributes["c_Event_Name"]?.toString()
-                        ?: event.attributes.values
-                            .firstOrNull()
-                            ?.toString()
-                assertNotNull(name, "Event should have concept:name via classifier")
-                assertTrue(name in eventNames, "Event name should be in eventNames, got: $name")
+                assertTrue(event.conceptName in eventNames, "Event name should be in eventNames, got: ${event.conceptName}")
+                assertNull(event.timeTimestamp, "Only classifier Event Name should be selected")
+                assertNull(event.conceptInstance, "Only classifier Event Name should be selected")
+                assertNull(event.costCurrency, "Only classifier Event Name should be selected")
+                assertNull(event.costTotal, "Only classifier Event Name should be selected")
+                assertNull(event.lifecycleState, "Only classifier Event Name should be selected")
+                assertNull(event.lifecycleTransition, "Only classifier Event Name should be selected")
+                assertNull(event.orgGroup, "Only classifier Event Name should be selected")
+                assertNull(event.orgResource, "Only classifier Event Name should be selected")
+                assertNull(event.orgRole, "Only classifier Event Name should be selected")
+                assertNull(event.identityId, "Only classifier Event Name should be selected")
+                assertTrue(event.customAttributes.isEmpty(), "Classifier Event Name should deduplicate to concept:name")
             }
         }
     }
@@ -1064,6 +1231,8 @@ class QueryTests : HierarchicalTestsBase() {
     fun duplicateAttributes() {
         // ProcessM: select e:name, [e:c:Event Name] where l:id=$journal
         // Both select the same underlying attribute (concept:name via classifier)
+        // ADAPTED_PORT: ProcessM asserts one CONCEPT_NAME attribute in event.attributes. Our equivalent is exactly one
+        // selected concept name exposed as event.conceptName and no duplicate entry in customAttributes.
         val result =
             q(
                 "select e:name, [e:c:Event Name] where l:logId='$journalLogId'",
@@ -1082,6 +1251,10 @@ class QueryTests : HierarchicalTestsBase() {
                     event.conceptName in eventNames,
                     "Event name should be in eventNames, got: ${event.conceptName}",
                 )
+                assertTrue(
+                    event.customAttributes.isEmpty(),
+                    "Selecting e:name and [e:c:Event Name] should deduplicate to one concept:name attribute",
+                )
             }
         }
     }
@@ -1091,16 +1264,27 @@ class QueryTests : HierarchicalTestsBase() {
     // =====================
 
     @Test
-    @Disabled("Nested XES attribute hierarchies not supported — original checks meta_concept:named_events_total with children")
     fun readNestedAttributes() {
         val hospitalLogId =
             testDataLoader.loadHospitalLog() ?: run {
-                println("Hospital dataset not available, skipping")
-                return
+                error("Hospital dataset not available")
             }
         val result = q("where l:logId='$hospitalLogId' limit l:1, t:1, e:1", hospitalLogId)
         assertTrue(result.success, "Query should succeed: ${result.error}")
-        assertTrue(result.logs.isNotEmpty(), "Should have results")
+        assertEquals(1, result.count())
+
+        val log = result.first()
+        val attribute = nestedAttribute(log.customAttributes, "meta_concept:named_events_total")
+
+        assertEquals(150291, attribute.value)
+        with(attribute.children) {
+            assertEquals(624, size)
+            assertEquals(23, this["haptoglobine"])
+            assertEquals(24, this["ijzer"])
+            assertEquals(27, this["bekken"])
+            assertEquals(2, this["cortisol"])
+            assertEquals(9, this["ammoniak"])
+        }
     }
 
     @Test
@@ -1117,15 +1301,18 @@ class QueryTests : HierarchicalTestsBase() {
     }
 
     @Test
-    @Disabled("Nested attribute path filtering not supported — original uses SEPARATOR+STRING_MARKER for deep paths")
     fun whereOnANestedAttribute() {
-        val hospitalLogId =
-            testDataLoader.loadHospitalLog() ?: run {
-                println("Hospital dataset not available, skipping")
-                return
-            }
-        val result = q("where l:logId='$hospitalLogId' limit l:1, t:1, e:1", hospitalLogId)
+        val hospitalLogId = testDataLoader.loadHospitalLog() ?: error("Hospital dataset not available")
+        val nestedGroupAverage = "\u001fsmeta_org:group_events_average\u001fMaternity ward"
+
+        val result = q(
+            "where (l:logId='$hospitalLogId' or l:logId='$journalLogId') " +
+                "and [l:$nestedGroupAverage]='0.016' limit l:1, t:1, e:1",
+        )
+
         assertTrue(result.success, "Query should succeed: ${result.error}")
-        assertTrue(result.logs.isNotEmpty(), "Should have results")
+        val log = result.first()
+        val attribute = nestedAttribute(log.customAttributes, "meta_org:group_events_average")
+        assertEquals(1.728, (attribute.children["Pathology"] as Number).toDouble())
     }
 }

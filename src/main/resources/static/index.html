@@ -35,51 +35,59 @@
             </div>
 
             <div class="endpoint">
-                <h2>Available Logs</h2>
-                <div id="logList"></div>
-                <button id="refreshLogsButton">🔄 Refresh List</button>
+                <h2>Data Stores</h2>
+                <div class="data-store-toolbar">
+                    <div class="form-group compact-form">
+                        <label for="dataStoreNameInput">New data store</label>
+                        <input type="text" id="dataStoreNameInput" placeholder="e.g. teleclaims">
+                    </div>
+                    <button id="createDataStoreButton">Create</button>
+                    <button id="refreshLogsButton" class="secondary">Refresh</button>
+                </div>
+                <div id="logList" class="data-store-list"></div>
             </div>
 
             <div class="endpoint">
-                <h2>Load Sample Data</h2>
-                <div class="info-box">
-                    <strong>Hospital Log Dataset:</strong> Real-life event log from a Dutch academic hospital (BPIC
-                    2011).
-                    Contains 1,143 cases and 150,291 events across multiple departments.
-                </div>
-                <button id="loadSampleButton">📥 Load Hospital Log (Recommended for Demo)</button>
-                <button id="loadSampleButton2" class="secondary">Load Sample Process Log</button>
-                <div class="output-block">
-                    <pre id="uploadOutput">Click "Load Hospital Log" to get started...</pre>
-                </div>
+                <h2>Selected Store Logs</h2>
+                <div id="activeDataStoreSummary" class="info-box">Select a data store to inspect its logs.</div>
+                <div id="dataStoreLogList" class="contained-log-list"></div>
             </div>
 
-            <div class="endpoint">
-                <h2>Upload Custom Log</h2>
-                <div class="form-group">
-                    <label for="xesFileInput">Upload XES File (.xes or .xes.gz, max 500MB)</label>
-                    <input type="file" id="xesFileInput" accept=".xes,.xes.gz">
+            <div class="endpoint compact-import-panel">
+                <h2>Import Log</h2>
+                <div class="import-controls">
+                    <div class="form-group compact-form">
+                        <label for="logImportSelect">Source</label>
+                        <select id="logImportSelect">
+                            <option value="custom">Custom log...</option>
+                        </select>
+                    </div>
+                    <div class="compact-form custom-log-picker" id="customLogFileGroup">
+                        <input type="file" id="xesFileInput" accept=".xes,.xes.gz">
+                        <button type="button" id="chooseCustomLogButton" class="secondary">Choose custom log</button>
+                        <span id="selectedCustomLogName">No file selected</span>
+                    </div>
+                    <button id="uploadButton">Import</button>
                 </div>
-                <button id="uploadButton">📤 Upload</button>
             </div>
         </div>
 
         <div id="compare" class="tab-content">
-            <div class="query-layout">
-                <!-- Sidebar (Reused/Shared or specific) -->
-                <div class="schema-sidebar">
-                    <h3 class="schema-section-title">Comparison Helper</h3>
-                    <div class="info-box" style="font-size: 0.9rem; margin-bottom: 1rem;">
-                        Use this tab to verify local PQL execution against the remote ProcessM engine.
-                    </div>
-                </div>
-
+            <div class="query-layout compare-layout">
                 <div class="query-main">
                     <div class="endpoint" style="margin-bottom: 0;">
                         <h2>Verify & Compare</h2>
                         <div class="form-group">
-                            <label for="compareLogSelect">📁 Active Log (for Comparison)</label>
+                            <label for="compareLogSelect">Active Data Store</label>
                             <select id="compareLogSelect"></select>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="remoteProcessMDataStoreSelect">Remote ProcessM Data Store</label>
+                            <div class="remote-store-picker">
+                                <select id="remoteProcessMDataStoreSelect"></select>
+                                <button id="refreshRemoteProcessMStoresButton" class="secondary" type="button">Refresh</button>
+                            </div>
                         </div>
 
                         <div class="form-group">
@@ -106,9 +114,9 @@
                                             <option value="limit l:1, t:10 offset t:2">offset with limit</option>
                                         </optgroup>
                                         <optgroup label="QueryTests: ORDER BY">
-                                            <option value="order by e:timestamp limit l:1, t:5, e:10">orderBySimple</option>
-                                            <option value="order by e:timestamp desc limit l:1, t:3, e:5">orderByDesc</option>
-                                            <option value="order by e:timestamp, t:total desc limit l:1, t:3, e:10">orderByMultiScope</option>
+                                            <option value="order by e:timestamp, e:name limit l:1, t:5, e:10">orderBySimple</option>
+                                            <option value="order by e:timestamp desc, e:name limit l:1, t:3, e:5">orderByDesc</option>
+                                            <option value="order by e:timestamp, e:name, e:transition, t:total desc, t:name limit l:1, t:3, e:10">orderByMultiScope</option>
                                         </optgroup>
                                         <optgroup label="QueryTests: GROUP BY">
                                             <option value="select sum(e:total) group by ^^e:name">groupLogByEventStd + implicitGroupEvent</option>
@@ -119,7 +127,7 @@
                                             <option value="order by avg(e:total), min(e:timestamp), max(e:timestamp)">groupByImplicitFromOrderBy</option>
                                             <option value="select avg(^^e:total), min(^^e:timestamp), max(^^e:timestamp)">groupByImplicitWithHoisting</option>
                                             <option value="group by ^e:name order by name">groupByHoisting + orderByWithinGroup</option>
-                                            <option value="select l:name, count(t:name), e:name group by ^e:name order by count(t:name) desc limit l:1">groupByHoisting + orderByCount</option>
+                                            <option value="select l:name, count(t:name), e:name group by ^e:name order by count(t:name) desc limit l:1, t:3">groupByHoisting + orderByCount top3</option>
                                             <option value="select count(t:name) group by ^e:name order by count(t:name) desc limit l:1">aggregationFunctionIndependence (1)</option>
                                             <option value="select count(t:name), count(^e:name) group by ^e:name order by count(t:name) desc limit l:1">aggregationFunctionIndependence (2)</option>
                                             <option value="select l:name, count(t:name), e:name group by t:name, ^e:name order by count(t:name) desc limit l:1">groupByWithAndWithoutHoisting</option>
@@ -228,39 +236,13 @@
         </div>
 
         <div id="query" class="tab-content">
-            <div class="query-layout">
-                <!-- Sidebar -->
-                <div class="schema-sidebar">
-                    <h3 class="schema-section-title">Schema Helper</h3>
-
-                    <div class="schema-section">
-                        <div class="schema-title">Log Scope (l:)</div>
-                        <div class="schema-item" onclick="insertAtCursor('l:id')">l:id</div>
-                        <div class="schema-item" onclick="insertAtCursor('l:name')">l:name</div>
-                    </div>
-
-                    <div class="schema-section">
-                        <div class="schema-title">Trace Scope (t:)</div>
-                        <div class="schema-item" onclick="insertAtCursor('t:id')">t:id</div>
-                        <div class="schema-item" onclick="insertAtCursor('t:name')">t:name (Case ID)</div>
-                    </div>
-
-                    <div class="schema-section">
-                        <div class="schema-title">Event Scope (e:)</div>
-                        <div class="schema-item" onclick="insertAtCursor('e:id')">e:id</div>
-                        <div class="schema-item" onclick="insertAtCursor('e:name')">e:name (Activity)</div>
-                        <div class="schema-item" onclick="insertAtCursor('e:timestamp')">e:timestamp</div>
-                        <div class="schema-item" onclick="insertAtCursor('e:cost')">e:cost</div>
-                    </div>
-                </div>
-
-                <!-- Main Content -->
+            <div class="query-layout query-only-layout">
                 <div class="query-main">
                     <div class="endpoint" style="margin-bottom: 0;">
                         <h2>Execute PQL Query</h2>
 
                         <div class="form-group">
-                            <label for="activeLogSelect">📁 Active Log</label>
+                            <label for="activeLogSelect">Active Data Store</label>
                             <select id="activeLogSelect"></select>
                         </div>
 
@@ -295,7 +277,7 @@
                                 <span>▼</span>
                             </div>
                             <div id="resultsContainer" class="collapsible-content open">
-                                <div id="pqlOutput">Select a log and click "Run Query" to see results...</div>
+                                <div id="pqlOutput">Select a data store and click "Run Query" to see results...</div>
                             </div>
                         </div>
                     </div>
