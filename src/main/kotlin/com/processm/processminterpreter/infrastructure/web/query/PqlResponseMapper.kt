@@ -1,7 +1,7 @@
 package com.processm.processminterpreter.infrastructure.web.query
 
-import com.processm.processminterpreter.application.processm.ProcessMXesJsonFormatter
-import com.processm.processminterpreter.application.processm.QueryJsonProjection
+import com.processm.processminterpreter.application.ports.ProcessMJsonFormatter
+import com.processm.processminterpreter.application.ports.QueryJsonProjection
 import com.processm.processminterpreter.application.query.PqlQueryStatisticsSummary
 import com.processm.processminterpreter.application.query.QueryResult
 import com.processm.processminterpreter.application.query.SupportedPqlFeatures
@@ -15,7 +15,7 @@ import java.time.LocalDateTime
 
 @Component
 class PqlResponseMapper(
-    private val processMXesJsonFormatter: ProcessMXesJsonFormatter,
+    private val processMXesJsonFormatter: ProcessMJsonFormatter,
 ) {
     fun toQueryResponse(
         query: String,
@@ -49,7 +49,7 @@ class PqlResponseMapper(
             query = result.query,
             cypherQuery = null,
             message = if (result.valid) "Query is valid" else "Query has errors",
-            error = result.errors.ifEmpty { null }?.joinToString("\n"),
+            error = result.errors.takeIf { it.isNotEmpty() }?.joinToString("\n"),
             timestamp = LocalDateTime.now(),
         )
 

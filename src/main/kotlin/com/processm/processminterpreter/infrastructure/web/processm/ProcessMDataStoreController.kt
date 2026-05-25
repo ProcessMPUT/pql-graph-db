@@ -1,22 +1,17 @@
 package com.processm.processminterpreter.infrastructure.web.processm
 
 import com.processm.processminterpreter.application.datastore.CreateDataStoreRequest
-import com.processm.processminterpreter.application.datastore.CreateDataStoreUseCase
-import com.processm.processminterpreter.application.datastore.DeleteDataStoreUseCase
-import com.processm.processminterpreter.application.datastore.GetDataStoreUseCase
-import com.processm.processminterpreter.application.datastore.ListDataStoreLogsUseCase
-import com.processm.processminterpreter.application.datastore.ListDataStoresUseCase
-import com.processm.processminterpreter.application.datastore.RenameDataStoreUseCase
-import com.processm.processminterpreter.application.log.DeleteLogUseCase
+import com.processm.processminterpreter.application.datastore.DataStoreUseCases
+import com.processm.processminterpreter.application.datastore.DataStoreNotFoundException
 import com.processm.processminterpreter.application.log.ImportXesLogRequest
 import com.processm.processminterpreter.application.log.ImportXesLogUseCase
+import com.processm.processminterpreter.application.log.LogUseCases
 import com.processm.processminterpreter.application.query.ExecutePqlQueryRequest
 import com.processm.processminterpreter.application.query.ExecutePqlQueryUseCase
 import com.processm.processminterpreter.application.query.ExportQueryAsXesRequest
 import com.processm.processminterpreter.application.query.ExportQueryAsXesUseCase
-import com.processm.processminterpreter.application.ports.DataStoreNotFoundException
-import com.processm.processminterpreter.application.processm.QueryJsonProjection
-import com.processm.processminterpreter.application.processm.ProcessMXesJsonFormatter
+import com.processm.processminterpreter.application.ports.ProcessMJsonFormatter
+import com.processm.processminterpreter.application.ports.QueryJsonProjection
 import com.processm.processminterpreter.domain.pql.catalog.Scope
 import com.processm.processminterpreter.infrastructure.config.ProcessMConfig
 import com.processm.processminterpreter.infrastructure.web.processm.dto.ProcessMDataStoreRequest
@@ -37,58 +32,54 @@ import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RestController
 import org.springframework.web.multipart.MultipartHttpServletRequest
-import org.springframework.web.multipart.MultipartFile
 import java.io.ByteArrayOutputStream
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
+private const val MEDIA_TYPE_ZIP = "application/zip"
+
 @RestController
 @RequestMapping("/api/data-stores")
 class ProcessMDataStoreController(
-    private val createDataStore: CreateDataStoreUseCase,
-    private val listDataStores: ListDataStoresUseCase,
-    private val listDataStoreLogs: ListDataStoreLogsUseCase,
-    private val getDataStore: GetDataStoreUseCase,
-    private val renameDataStore: RenameDataStoreUseCase,
-    private val deleteDataStore: DeleteDataStoreUseCase,
-    private val deleteLog: DeleteLogUseCase,
+    private val dataStores: DataStoreUseCases,
+    private val logs: LogUseCases,
     private val importXesLog: ImportXesLogUseCase,
     private val executeQuery: ExecutePqlQueryUseCase,
     private val exportQueryAsXes: ExportQueryAsXesUseCase,
-    private val formatter: ProcessMXesJsonFormatter,
+    private val formatter: ProcessMJsonFormatter,
     private val processMConfig: ProcessMConfig,
 ) {
 
     @PostMapping
     fun create(@RequestBody request: ProcessMDataStoreRequest): ResponseEntity<ProcessMDataStoreResponse> {
-        val dataStore = createDataStore.create(CreateDataStoreRequest(name = request.name))
+        val dataStore = dataStores.create(CreateDataStoreRequest(name = request.name))
         return ResponseEntity.status(HttpStatus.CREATED).body(ProcessMDataStoreResponse.from(dataStore))
     }
 
     @GetMapping
     fun list(): ResponseEntity<List<ProcessMDataStoreResponse>> =
-        ResponseEntity.ok(listDataStores.list().map { ProcessMDataStoreResponse.from(it) })
+        ResponseEntity.ok(dataStores.list().map { ProcessMDataStoreResponse.from(it) })
 
     @GetMapping("/{dataStoreId}")
     fun get(@PathVariable dataStoreId: String): ResponseEntity<ProcessMDataStoreResponse> =
-        ResponseEntity.ok(ProcessMDataStoreResponse.from(getDataStore.get(dataStoreId)))
+        ResponseEntity.ok(ProcessMDataStoreResponse.from(dataStores.get(dataStoreId)))
 
     @GetMapping("/{dataStoreId}/log-summaries")
     fun logSummaries(@PathVariable dataStoreId: String): ResponseEntity<List<ProcessMDataStoreLogSummaryResponse>> =
-        ResponseEntity.ok(listDataStoreLogs.list(dataStoreId).map { ProcessMDataStoreLogSummaryResponse.from(it) })
+        ResponseEntity.ok(dataStores.listLogs(dataStoreId).map { ProcessMDataStoreLogSummaryResponse.from(it) })
 
     @PatchMapping("/{dataStoreId}")
     fun rename(
         @PathVariable dataStoreId: String,
         @RequestBody request: ProcessMDataStoreRequest,
     ): ResponseEntity<Unit> {
-        renameDataStore.rename(dataStoreId, request.name)
+        dataStores.rename(dataStoreId, request.name)
         return ResponseEntity.noContent().build()
     }
 
     @DeleteMapping("/{dataStoreId}")
     fun delete(@PathVariable dataStoreId: String): ResponseEntity<Unit> =
-        if (deleteDataStore.delete(dataStoreId)) ResponseEntity.noContent().build()
+        if (dataStores.delete(dataStoreId)) ResponseEntity.noContent().build()
         else ResponseEntity.notFound().build()
 
     @PostMapping("/{dataStoreId}/logs", consumes = [MediaType.MULTIPART_FORM_DATA_VALUE])
@@ -96,7 +87,7 @@ class ProcessMDataStoreController(
         @PathVariable dataStoreId: String,
         request: MultipartHttpServletRequest,
     ): ResponseEntity<Any> {
-        getDataStore.get(dataStoreId)
+        dataStores.get(dataStoreId)
         val file = request.fileMap.values.firstOrNull()
             ?: return ResponseEntity.badRequest().body(mapOf("error" to "Expected a multipart file"))
         val result = importXesLog.import(
@@ -121,13 +112,13 @@ class ProcessMDataStoreController(
         @RequestParam(required = false) includeEvents: Boolean?,
         @RequestHeader(HttpHeaders.ACCEPT, required = false) accept: String?,
     ): ResponseEntity<Any> {
-        getDataStore.get(dataStoreId)
+        dataStores.get(dataStoreId)
         val resolvedIncludeEvents = includeEvents ?: true
         val resolvedIncludeTraces = resolvedIncludeEvents || (includeTraces ?: true)
         val requestedType = resolveAcceptedContentType(accept)
-        return if (requestedType == "application/zip") {
+        return if (requestedType == MEDIA_TYPE_ZIP) {
             ResponseEntity.ok()
-                .contentType(MediaType.parseMediaType("application/zip"))
+                .contentType(MediaType.parseMediaType(MEDIA_TYPE_ZIP))
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"xes.zip\"")
                 .body(exportZip(dataStoreId, query))
         } else {
@@ -161,12 +152,12 @@ class ProcessMDataStoreController(
         @PathVariable dataStoreId: String,
         @PathVariable logId: String,
     ): ResponseEntity<Unit> {
-        val belongsToStore = listDataStoreLogs.list(dataStoreId).any { it.logId == logId }
+        val belongsToStore = dataStores.listLogs(dataStoreId).any { it.logId == logId }
         if (!belongsToStore) {
             return ResponseEntity.notFound().build()
         }
 
-        return if (deleteLog.deleteWithData(logId)) ResponseEntity.noContent().build()
+        return if (logs.deleteWithData(logId)) ResponseEntity.noContent().build()
         else ResponseEntity.notFound().build()
     }
 
@@ -199,7 +190,7 @@ class ProcessMDataStoreController(
         accept
             ?.split(',')
             ?.map { it.substringBefore(';').trim() }
-            ?.firstOrNull { it == MediaType.APPLICATION_JSON_VALUE || it == "application/zip" }
+            ?.firstOrNull { it == MediaType.APPLICATION_JSON_VALUE || it == MEDIA_TYPE_ZIP }
             ?: MediaType.APPLICATION_JSON_VALUE
 
     private fun requestedScopes(includeTraces: Boolean, includeEvents: Boolean): Set<Scope> =

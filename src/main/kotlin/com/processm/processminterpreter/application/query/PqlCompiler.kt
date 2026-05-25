@@ -11,6 +11,7 @@ import com.processm.processminterpreter.domain.pql.plan.HierarchicalOffsets
 import com.processm.processminterpreter.domain.pql.plan.LogicalPlan
 import com.processm.processminterpreter.application.ports.DataStoreRepository
 import com.processm.processminterpreter.application.ports.LogRepository
+import com.processm.processminterpreter.application.ports.PqlParser
 import com.processm.processminterpreter.domain.log.Classifier
 import com.processm.processminterpreter.domain.log.Log
 import com.processm.processminterpreter.domain.pql.syntax.RawAttributeRef

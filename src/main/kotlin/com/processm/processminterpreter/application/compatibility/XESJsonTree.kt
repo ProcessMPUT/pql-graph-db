@@ -1,4 +1,4 @@
-package com.processm.processminterpreter.application.processm
+package com.processm.processminterpreter.application.compatibility
 
 private val XES_ATTRIBUTE_TYPES = setOf("string", "date", "float", "int", "boolean", "id")
 

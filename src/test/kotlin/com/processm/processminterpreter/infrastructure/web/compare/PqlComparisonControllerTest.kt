@@ -2,9 +2,9 @@ package com.processm.processminterpreter.infrastructure.web.compare
 
 import com.processm.processminterpreter.application.ports.RemoteProcessMDataStore
 import com.processm.processminterpreter.application.ports.RemoteProcessMGateway
-import com.processm.processminterpreter.application.processm.VerifyPqlQueryRequest as VerifyPqlQueryUseCaseRequest
-import com.processm.processminterpreter.application.processm.VerifyPqlQueryResult
-import com.processm.processminterpreter.application.processm.VerifyPqlQueryUseCase
+import com.processm.processminterpreter.application.compatibility.VerifyPqlQueryRequest as VerifyPqlQueryUseCaseRequest
+import com.processm.processminterpreter.application.compatibility.VerifyPqlQueryResult
+import com.processm.processminterpreter.application.compatibility.VerifyPqlQueryUseCase
 import com.processm.processminterpreter.domain.pql.plan.HierarchicalLimits
 import com.processm.processminterpreter.infrastructure.config.ProcessMConfig
 import org.junit.jupiter.api.Assertions.assertEquals

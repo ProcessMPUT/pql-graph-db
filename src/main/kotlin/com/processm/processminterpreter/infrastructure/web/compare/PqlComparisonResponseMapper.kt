@@ -1,6 +1,6 @@
 package com.processm.processminterpreter.infrastructure.web.compare
 
-import com.processm.processminterpreter.application.processm.VerifyPqlQueryResult
+import com.processm.processminterpreter.application.compatibility.VerifyPqlQueryResult
 import com.processm.processminterpreter.infrastructure.web.compare.dto.PQLVerificationResponse
 import org.springframework.stereotype.Component
 

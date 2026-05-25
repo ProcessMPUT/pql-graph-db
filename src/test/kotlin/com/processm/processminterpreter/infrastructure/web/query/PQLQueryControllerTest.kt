@@ -1,14 +1,14 @@
 package com.processm.processminterpreter.infrastructure.web.query
 
 import com.fasterxml.jackson.databind.ObjectMapper
-import com.processm.processminterpreter.application.processm.ProcessMXesJsonFormatter
-import com.processm.processminterpreter.application.processm.QueryJsonProjection
+import com.processm.processminterpreter.application.ports.ProcessMJsonFormatter
+import com.processm.processminterpreter.application.ports.QueryJsonProjection
 import com.processm.processminterpreter.application.query.ExecutePqlQueryRequest
 import com.processm.processminterpreter.application.query.ExecutePqlQueryUseCase
 import com.processm.processminterpreter.application.query.ExportQueryAsXesRequest
 import com.processm.processminterpreter.application.query.ExportQueryAsXesUseCase
 import com.processm.processminterpreter.application.query.ExportResult
-import com.processm.processminterpreter.application.query.GetPqlQueryMetadataUseCase
+import com.processm.processminterpreter.application.query.PqlMetadataUseCase
 import com.processm.processminterpreter.application.query.PqlQueryStatisticsSummary
 import com.processm.processminterpreter.application.query.QueryResult
 import com.processm.processminterpreter.application.query.SupportedPqlFeatures
@@ -55,10 +55,10 @@ class PQLQueryControllerTest {
     private lateinit var exportQueryUseCase: ExportQueryAsXesUseCase
 
     @MockitoBean
-    private lateinit var queryMetadataUseCase: GetPqlQueryMetadataUseCase
+    private lateinit var queryMetadataUseCase: PqlMetadataUseCase
 
     @MockitoBean
-    private lateinit var processMXesJsonFormatter: ProcessMXesJsonFormatter
+    private lateinit var processMXesJsonFormatter: ProcessMJsonFormatter
 
     @Autowired
     private lateinit var objectMapper: ObjectMapper
@@ -238,7 +238,7 @@ class PQLQueryControllerTest {
     }
 
     @Test
-    fun `getQueryStatistics should return stub statistics`() {
+    fun `getQueryStatistics should return current query statistics`() {
         `when`(queryMetadataUseCase.statistics()).thenReturn(
             PqlQueryStatisticsSummary(
                 totalQueries = 0,

@@ -1,8 +1,8 @@
 package com.processm.processminterpreter.infrastructure.web.compare
 
 import com.processm.processminterpreter.application.ports.RemoteProcessMGateway
-import com.processm.processminterpreter.application.processm.VerifyPqlQueryRequest as VerifyPqlQueryUseCaseRequest
-import com.processm.processminterpreter.application.processm.VerifyPqlQueryUseCase
+import com.processm.processminterpreter.application.compatibility.VerifyPqlQueryRequest as VerifyPqlQueryUseCaseRequest
+import com.processm.processminterpreter.application.compatibility.VerifyPqlQueryUseCase
 import com.processm.processminterpreter.infrastructure.config.ProcessMConfig
 import com.processm.processminterpreter.infrastructure.web.compare.dto.PQLVerificationRequest
 import com.processm.processminterpreter.infrastructure.web.compare.dto.PQLVerificationResponse

@@ -1,18 +1,13 @@
 package com.processm.processminterpreter.infrastructure.web.log
 
-import com.processm.processminterpreter.application.log.CreateLogUseCase
-import com.processm.processminterpreter.application.log.DeleteLogUseCase
-import com.processm.processminterpreter.application.log.GetLogUseCase
+import com.processm.processminterpreter.application.log.AttributeFilter
 import com.processm.processminterpreter.application.log.ImportXesLogRequest
 import com.processm.processminterpreter.application.log.ImportXesLogUseCase
 import com.processm.processminterpreter.application.log.ImportSampleXesLogRequest
 import com.processm.processminterpreter.application.log.ImportSampleXesLogUseCase
-import com.processm.processminterpreter.application.log.ListLogsUseCase
 import com.processm.processminterpreter.application.log.LogNotFoundException
+import com.processm.processminterpreter.application.log.LogUseCases
 import com.processm.processminterpreter.application.log.SearchLogsRequest
-import com.processm.processminterpreter.application.log.SearchLogsUseCase
-import com.processm.processminterpreter.application.log.UpdateLogUseCase
-import com.processm.processminterpreter.application.log.AttributeFilter
 import com.processm.processminterpreter.application.log.CreateLogRequest as CreateLogCommand
 import com.processm.processminterpreter.application.log.UpdateLogRequest as UpdateLogCommand
 import com.processm.processminterpreter.application.ports.LogStatistics as PortLogStatistics
@@ -30,7 +25,6 @@ import org.springframework.core.io.support.PathMatchingResourcePatternResolver
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.CrossOrigin
-import org.springframework.web.bind.annotation.DeleteMapping
 import org.springframework.web.bind.annotation.ExceptionHandler
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RestController
@@ -48,14 +42,7 @@ import java.util.UUID
 @RequestMapping("/api/logs")
 @CrossOrigin(origins = ["*"])
 class LogController(
-    // Field names end in `UseCase` so they don't shadow the endpoint methods
-    // below, which share the short verbs (createLog, updateLog, deleteLog…).
-    private val createLogUseCase: CreateLogUseCase,
-    private val getLogUseCase: GetLogUseCase,
-    private val listLogsUseCase: ListLogsUseCase,
-    private val updateLogUseCase: UpdateLogUseCase,
-    private val deleteLogUseCase: DeleteLogUseCase,
-    private val searchLogsUseCase: SearchLogsUseCase,
+    private val logs: LogUseCases,
     private val importXesUseCase: ImportXesLogUseCase,
     private val importSampleXesUseCase: ImportSampleXesLogUseCase,
 ) : LogApi {
@@ -186,7 +173,7 @@ class LogController(
 
         return try {
             val log =
-                createLogUseCase.create(
+                logs.create(
                     CreateLogCommand(
                         id = request.logId,
                         name = request.name,
@@ -214,7 +201,7 @@ class LogController(
         logger.debug("Retrieving log: $logId")
 
         return try {
-            val log = getLogUseCase.get(logId)
+            val log = logs.get(logId)
             ResponseEntity.ok(LogResponse.from(log))
         } catch (e: LogNotFoundException) {
             logger.warn("Log not found: $logId")
@@ -235,10 +222,10 @@ class LogController(
         logger.debug("Retrieving log statistics: $logId")
 
         return try {
-            val log = getLogUseCase.get(logId)
+            val log = logs.get(logId)
             // Port returns null when the backend hasn't materialized counters yet —
             // emit zeros so the wire shape stays stable.
-            val stats = getLogUseCase.statistics(logId) ?: PortLogStatistics(traceCount = 0, eventCount = 0)
+            val stats = logs.statistics(logId) ?: PortLogStatistics(traceCount = 0, eventCount = 0)
             ResponseEntity.ok(LogWithStatisticsResponse.from(log, stats))
         } catch (e: LogNotFoundException) {
             logger.warn("Log not found: $logId")
@@ -260,11 +247,11 @@ class LogController(
 
         return try {
             if (includeStatistics) {
-                val logsWithStats = listLogsUseCase.listWithStatistics()
+                val logsWithStats = logs.listWithStatistics()
                 ResponseEntity.ok(logsWithStats.map { (log, stats) -> LogWithStatisticsResponse.from(log, stats) })
             } else {
-                val logs = listLogsUseCase.list()
-                ResponseEntity.ok(logs.map { LogResponse.from(it) })
+                val allLogs = logs.list()
+                ResponseEntity.ok(allLogs.map { LogResponse.from(it) })
             }
         } catch (e: Exception) {
             logger.error("Unexpected error retrieving all logs", e)
@@ -290,8 +277,8 @@ class LogController(
                 createdAfter = request.createdAfter,
                 createdBefore = request.createdBefore,
             )
-            val logs = searchLogsUseCase.search(searchRequest)
-            ResponseEntity.ok(logs.map { LogResponse.from(it) })
+            val matchedLogs = logs.search(searchRequest)
+            ResponseEntity.ok(matchedLogs.map { LogResponse.from(it) })
         } catch (e: IllegalArgumentException) {
             logger.warn("Invalid search criteria: ${e.message}")
             ResponseEntity.badRequest().build()
@@ -312,7 +299,7 @@ class LogController(
         logger.info("Updating log: $logId")
 
         return try {
-            val updatedLog = updateLogUseCase.update(
+            val updatedLog = logs.update(
                 UpdateLogCommand(
                     id = logId,
                     name = request.name,
@@ -344,7 +331,7 @@ class LogController(
 
         return try {
             val success =
-                if (deleteAllData) deleteLogUseCase.deleteWithData(logId) else deleteLogUseCase.delete(logId)
+                if (deleteAllData) logs.deleteWithData(logId) else logs.delete(logId)
 
             if (success) {
                 ResponseEntity.ok(
@@ -388,7 +375,7 @@ class LogController(
         return try {
             // `find` is the non-throwing variant — we want a simple 200/404 here, not
             // an exception handler kicking in on the throwing `get`.
-            val exists = getLogUseCase.find(logId) != null
+            val exists = logs.find(logId) != null
             if (exists) ResponseEntity.ok().build() else ResponseEntity.notFound().build()
         } catch (e: Exception) {
             logger.error("Unexpected error checking log existence: $logId", e)

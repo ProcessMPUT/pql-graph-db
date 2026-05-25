@@ -25,7 +25,7 @@ import com.processm.processminterpreter.application.ports.DeleteExecutionResult
 import com.processm.processminterpreter.application.ports.ExecutionOptions
 import com.processm.processminterpreter.application.ports.LogRepository
 import com.processm.processminterpreter.application.ports.LogStatistics
-import com.processm.processminterpreter.application.query.PqlParser
+import com.processm.processminterpreter.application.ports.PqlParser
 import com.processm.processminterpreter.application.ports.QueryExecutionResult
 import com.processm.processminterpreter.application.ports.QueryPlanExecutor
 import org.junit.jupiter.api.Assertions.assertEquals

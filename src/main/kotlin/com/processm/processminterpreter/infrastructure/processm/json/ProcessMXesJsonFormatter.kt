@@ -1,22 +1,13 @@
-package com.processm.processminterpreter.application.processm
+package com.processm.processminterpreter.infrastructure.processm.json
 
-import com.processm.processminterpreter.domain.log.xes.XesLog
+import com.processm.processminterpreter.application.ports.ProcessMJsonFormatter
+import com.processm.processminterpreter.application.ports.QueryJsonProjection
 import com.processm.processminterpreter.domain.pql.catalog.Scope
 import org.springframework.stereotype.Component
 
-data class QueryJsonProjection(
-    val logs: List<XesLog>,
-    val rows: List<Map<String, Any?>> = emptyList(),
-    val hasExplicitSelect: Boolean = false,
-    val selectAllScopes: Set<Scope> = emptySet(),
-    val projectedTraceStandardAttributes: Set<String> = emptySet(),
-    val includeTraces: Boolean = true,
-    val includeEvents: Boolean = true,
-)
-
 @Component
-class ProcessMXesJsonFormatter {
-    fun formatAsXesJson(result: QueryJsonProjection): List<Map<String, Any?>> {
+class ProcessMXesJsonFormatter : ProcessMJsonFormatter {
+    override fun formatAsXesJson(result: QueryJsonProjection): List<Map<String, Any?>> {
         if (result.logs.isEmpty()) {
             return emptyList()
         }

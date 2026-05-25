@@ -1,4 +1,4 @@
-package com.processm.processminterpreter.application.processm
+package com.processm.processminterpreter.application.compatibility
 
 import java.time.Duration
 import java.time.Instant
@@ -19,18 +19,21 @@ import java.time.Instant
  * non-ignored XES content for the compared result.
  */
 object XESJsonComparator {
+    private const val ATTR_CONCEPT_NAME = "concept:name"
+    private const val ATTR_IDENTITY_ID = "identity:id"
+
     private val NOW_ATTRIBUTE = Regex("^(log|trace|event):now\\(\\)$")
     private val NOW_MAX_DRIFT: Duration = Duration.ofMinutes(5)
 
-    private val IGNORED_KEYS = setOf("identity:id")
+    private val IGNORED_KEYS = setOf(ATTR_IDENTITY_ID)
 
     private val IGNORED_LOG_KEYS =
         setOf(
-            "identity:id",
+            ATTR_IDENTITY_ID,
             "source",
             "description",
             "lifecycle:model",
-            "concept:name",
+            ATTR_CONCEPT_NAME,
             "traceGlobals",
             "eventGlobals",
             "extensions",
@@ -38,13 +41,13 @@ object XESJsonComparator {
 
     private val IGNORED_TRACE_KEYS =
         setOf(
-            "identity:id",
+            ATTR_IDENTITY_ID,
             "count(trace:concept:name)",
         )
 
     private val IGNORED_EVENT_KEYS =
         setOf(
-            "identity:id",
+            ATTR_IDENTITY_ID,
         )
 
     fun compare(
@@ -325,7 +328,7 @@ object XESJsonComparator {
 
     private fun groupByConceptName(items: List<XesJsonNode>): Map<String, List<XesJsonNode>> =
         items.groupBy { node ->
-            node.attributesByKey()["concept:name"] ?: "unknown"
+            node.attributesByKey()[ATTR_CONCEPT_NAME] ?: "unknown"
         }
 
     private fun groupEventsByKey(
@@ -337,13 +340,13 @@ object XESJsonComparator {
             if (timestampOnly) {
                 timestamp
             } else {
-                val name = attrs["concept:name"] ?: "?"
+                val name = attrs[ATTR_CONCEPT_NAME] ?: "?"
                 "$timestamp|$name"
             }
         }
 
     private fun hasNamedEvents(events: List<Map<String, String>>): Boolean =
-        events.any { (it["concept:name"] ?: "?") != "?" }
+        events.any { (it[ATTR_CONCEPT_NAME] ?: "?") != "?" }
 
     private fun eventSortKey(event: Map<String, String>): String =
         listOf(

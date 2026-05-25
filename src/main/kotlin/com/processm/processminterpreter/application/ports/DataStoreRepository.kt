@@ -20,5 +20,3 @@ data class DataStoreLogSummary(
     val createdAt: LocalDateTime?,
     val updatedAt: LocalDateTime?,
 )
-
-class DataStoreNotFoundException(id: String) : RuntimeException("Data store with ID '$id' not found")

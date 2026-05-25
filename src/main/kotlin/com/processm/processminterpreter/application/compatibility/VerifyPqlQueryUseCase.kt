@@ -1,5 +1,7 @@
-package com.processm.processminterpreter.application.processm
+package com.processm.processminterpreter.application.compatibility
 
+import com.processm.processminterpreter.application.ports.ProcessMJsonFormatter
+import com.processm.processminterpreter.application.ports.QueryJsonProjection
 import com.processm.processminterpreter.application.ports.RemoteQueryExecutionResult
 import com.processm.processminterpreter.application.ports.RemoteProcessMGateway
 import com.processm.processminterpreter.application.query.ExecutePqlQueryRequest
@@ -16,7 +18,7 @@ import org.springframework.stereotype.Component
 class VerifyPqlQueryUseCase(
     private val executeUseCase: ExecutePqlQueryUseCase,
     private val remoteProcessM: RemoteProcessMGateway,
-    private val formatter: ProcessMXesJsonFormatter,
+    private val formatter: ProcessMJsonFormatter,
 ) {
     private val logger = LoggerFactory.getLogger(VerifyPqlQueryUseCase::class.java)
 

@@ -1,24 +1,19 @@
 package com.processm.processminterpreter.infrastructure.web.processm
 
 import com.fasterxml.jackson.databind.ObjectMapper
-import com.processm.processminterpreter.application.datastore.CreateDataStoreUseCase
-import com.processm.processminterpreter.application.datastore.DeleteDataStoreUseCase
-import com.processm.processminterpreter.application.datastore.GetDataStoreUseCase
-import com.processm.processminterpreter.application.datastore.ListDataStoreLogsUseCase
-import com.processm.processminterpreter.application.datastore.ListDataStoresUseCase
-import com.processm.processminterpreter.application.datastore.RenameDataStoreUseCase
+import com.processm.processminterpreter.application.datastore.DataStoreUseCases
 import com.processm.processminterpreter.application.ports.DataStoreLogSummary
-import com.processm.processminterpreter.application.log.DeleteLogUseCase
 import com.processm.processminterpreter.application.log.ImportXesLogRequest
 import com.processm.processminterpreter.application.log.ImportXesLogUseCase
+import com.processm.processminterpreter.application.log.LogUseCases
 import com.processm.processminterpreter.application.query.ExecutePqlQueryRequest
 import com.processm.processminterpreter.application.query.ExecutePqlQueryUseCase
 import com.processm.processminterpreter.application.query.ExportQueryAsXesUseCase
 import com.processm.processminterpreter.application.query.QueryResult
 import com.processm.processminterpreter.domain.datastore.DataStore
 import com.processm.processminterpreter.application.ports.LogImportResult
-import com.processm.processminterpreter.application.processm.QueryJsonProjection
-import com.processm.processminterpreter.application.processm.ProcessMXesJsonFormatter
+import com.processm.processminterpreter.application.ports.QueryJsonProjection
+import com.processm.processminterpreter.application.ports.ProcessMJsonFormatter
 import com.processm.processminterpreter.domain.pql.plan.HierarchicalLimits
 import com.processm.processminterpreter.infrastructure.config.ProcessMConfig
 import com.processm.processminterpreter.infrastructure.web.processm.dto.ProcessMDataStoreRequest
@@ -50,25 +45,10 @@ class ProcessMDataStoreControllerTest {
     private lateinit var objectMapper: ObjectMapper
 
     @MockitoBean
-    private lateinit var createDataStore: CreateDataStoreUseCase
+    private lateinit var dataStores: DataStoreUseCases
 
     @MockitoBean
-    private lateinit var listDataStores: ListDataStoresUseCase
-
-    @MockitoBean
-    private lateinit var listDataStoreLogs: ListDataStoreLogsUseCase
-
-    @MockitoBean
-    private lateinit var getDataStore: GetDataStoreUseCase
-
-    @MockitoBean
-    private lateinit var renameDataStore: RenameDataStoreUseCase
-
-    @MockitoBean
-    private lateinit var deleteDataStore: DeleteDataStoreUseCase
-
-    @MockitoBean
-    private lateinit var deleteLog: DeleteLogUseCase
+    private lateinit var logs: LogUseCases
 
     @MockitoBean
     private lateinit var importXesLog: ImportXesLogUseCase
@@ -80,7 +60,7 @@ class ProcessMDataStoreControllerTest {
     private lateinit var exportQueryAsXes: ExportQueryAsXesUseCase
 
     @MockitoBean
-    private lateinit var formatter: ProcessMXesJsonFormatter
+    private lateinit var formatter: ProcessMJsonFormatter
 
     @MockitoBean
     private lateinit var processMConfig: ProcessMConfig
@@ -94,7 +74,7 @@ class ProcessMDataStoreControllerTest {
 
     @Test
     fun `create data store exposes ProcessM-compatible path`() {
-        `when`(createDataStore.create(com.processm.processminterpreter.application.datastore.CreateDataStoreRequest("Teleclaims")))
+        `when`(dataStores.create(com.processm.processminterpreter.application.datastore.CreateDataStoreRequest("Teleclaims")))
             .thenReturn(dataStore)
 
         mockMvc.perform(
@@ -109,7 +89,7 @@ class ProcessMDataStoreControllerTest {
 
     @Test
     fun `upload log imports into selected data store`() {
-        `when`(getDataStore.get("ds-1")).thenReturn(dataStore)
+        `when`(dataStores.get("ds-1")).thenReturn(dataStore)
         `when`(importXesLog.import(anyImportRequest())).thenReturn(
             LogImportResult(success = true, logId = "log-1", message = "ok"),
         )
@@ -122,7 +102,7 @@ class ProcessMDataStoreControllerTest {
 
     @Test
     fun `log summaries expose lightweight data store contents for local UI`() {
-        `when`(listDataStoreLogs.list("ds-1")).thenReturn(
+        `when`(dataStores.listLogs("ds-1")).thenReturn(
             listOf(
                 DataStoreLogSummary(
                     logId = "teleclaims",
@@ -141,7 +121,7 @@ class ProcessMDataStoreControllerTest {
 
     @Test
     fun `delete log removes only logs attached to selected data store`() {
-        `when`(listDataStoreLogs.list("ds-1")).thenReturn(
+        `when`(dataStores.listLogs("ds-1")).thenReturn(
             listOf(
                 DataStoreLogSummary(
                     logId = "teleclaims",
@@ -151,18 +131,18 @@ class ProcessMDataStoreControllerTest {
                 ),
             ),
         )
-        `when`(deleteLog.deleteWithData("teleclaims")).thenReturn(true)
+        `when`(logs.deleteWithData("teleclaims")).thenReturn(true)
 
         mockMvc.perform(delete("/api/data-stores/ds-1/logs/teleclaims"))
             .andExpect(status().isNoContent)
 
-        verify(deleteLog).deleteWithData("teleclaims")
+        verify(logs).deleteWithData("teleclaims")
     }
 
     @Test
     fun `query logs executes PQL scoped to selected data store`() {
         val execution = QueryResult(logs = emptyList(), rows = emptyList(), rowCount = 0)
-        `when`(getDataStore.get("ds-1")).thenReturn(dataStore)
+        `when`(dataStores.get("ds-1")).thenReturn(dataStore)
         val defaultLimits = ProcessMConfig.DefaultLimits().apply { enabled = false }
         `when`(processMConfig.defaultLimits).thenReturn(defaultLimits)
         `when`(

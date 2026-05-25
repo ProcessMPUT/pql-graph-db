@@ -1,7 +1,7 @@
-package com.processm.processminterpreter.application.query
+package com.processm.processminterpreter.application.ports
 
 import com.processm.processminterpreter.domain.pql.syntax.RawQuery
 
-interface PqlParser {
+fun interface PqlParser {
     fun parse(source: String): RawQuery
 }

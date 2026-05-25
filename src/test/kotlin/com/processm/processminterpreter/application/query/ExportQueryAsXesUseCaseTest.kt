@@ -117,7 +117,7 @@ class ExportQueryAsXesUseCaseTest {
         // No-op stand-ins — StubExecute overrides `execute`, so the underlying
         // dependencies are never touched. Kept here to keep StubExecute's ctor
         // happy without pulling Mockito in.
-        private fun throwingParser() = object : com.processm.processminterpreter.application.query.PqlParser {
+        private fun throwingParser() = object : com.processm.processminterpreter.application.ports.PqlParser {
             override fun parse(source: String) = error("parser should not be called from StubExecute")
         }
         private fun throwingExecutor() = object : com.processm.processminterpreter.application.ports.QueryPlanExecutor {

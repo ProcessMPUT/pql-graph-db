@@ -1,5 +1,6 @@
-package com.processm.processminterpreter.application.processm
+package com.processm.processminterpreter.infrastructure.processm.json
 
+import com.processm.processminterpreter.application.ports.QueryJsonProjection
 import com.processm.processminterpreter.domain.log.xes.XesEvent
 import com.processm.processminterpreter.domain.log.xes.XesLog
 import com.processm.processminterpreter.domain.log.xes.XesTrace

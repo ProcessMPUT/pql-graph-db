@@ -51,7 +51,7 @@ class LogUseCasesTest {
     @Test
     fun `create generates a UUID when no id is supplied`() {
         val repo = InMemoryLogRepository()
-        val useCase = CreateLogUseCase(repo)
+        val useCase = LogUseCases(repo)
 
         val log = useCase.create(CreateLogRequest(name = "hospital"))
 
@@ -63,7 +63,7 @@ class LogUseCasesTest {
     @Test
     fun `create respects an explicit id`() {
         val repo = InMemoryLogRepository()
-        val useCase = CreateLogUseCase(repo)
+        val useCase = LogUseCases(repo)
 
         val log = useCase.create(CreateLogRequest(name = "n", id = "log-xyz"))
 
@@ -73,7 +73,7 @@ class LogUseCasesTest {
     @Test
     fun `create rejects duplicate ids`() {
         val repo = InMemoryLogRepository()
-        val useCase = CreateLogUseCase(repo)
+        val useCase = LogUseCases(repo)
         useCase.create(CreateLogRequest(name = "a", id = "dup"))
 
         val ex = assertThrows(IllegalArgumentException::class.java) {
@@ -85,7 +85,7 @@ class LogUseCasesTest {
     @Test
     fun `create rejects a blank name`() {
         val repo = InMemoryLogRepository()
-        val useCase = CreateLogUseCase(repo)
+        val useCase = LogUseCases(repo)
 
         assertThrows(IllegalArgumentException::class.java) {
             useCase.create(CreateLogRequest(name = "  "))
@@ -96,14 +96,14 @@ class LogUseCasesTest {
 
     @Test
     fun `get throws LogNotFoundException when missing`() {
-        val useCase = GetLogUseCase(InMemoryLogRepository())
+        val useCase = LogUseCases(InMemoryLogRepository())
 
         assertThrows(LogNotFoundException::class.java) { useCase.get("nope") }
     }
 
     @Test
     fun `find returns null when missing`() {
-        val useCase = GetLogUseCase(InMemoryLogRepository())
+        val useCase = LogUseCases(InMemoryLogRepository())
 
         assertNull(useCase.find("nope"))
     }
@@ -113,7 +113,7 @@ class LogUseCasesTest {
         val repo = InMemoryLogRepository()
         repo.save(sampleLog("log-1"))
         repo.stats["log-1"] = LogStatistics(traceCount = 10, eventCount = 200)
-        val useCase = GetLogUseCase(repo)
+        val useCase = LogUseCases(repo)
 
         val stats = useCase.statistics("log-1")!!
 
@@ -128,7 +128,7 @@ class LogUseCasesTest {
         val repo = InMemoryLogRepository()
         repo.save(sampleLog("a"))
         repo.save(sampleLog("b"))
-        val useCase = ListLogsUseCase(repo)
+        val useCase = LogUseCases(repo)
 
         val out = useCase.list().map { it.id }.toSet()
         assertEquals(setOf("a", "b"), out)
@@ -139,7 +139,7 @@ class LogUseCasesTest {
         val repo = InMemoryLogRepository()
         repo.save(sampleLog("a"))
         repo.stats["a"] = LogStatistics(traceCount = 1, eventCount = 2)
-        val useCase = ListLogsUseCase(repo)
+        val useCase = LogUseCases(repo)
 
         val pairs = useCase.listWithStatistics()
         assertEquals(1, pairs.size)
@@ -154,7 +154,7 @@ class LogUseCasesTest {
         val repo = InMemoryLogRepository()
         val original = sampleLog("log-1", name = "orig", classifiers = listOf(Classifier("C", listOf("k"))))
         repo.save(original)
-        val useCase = UpdateLogUseCase(repo)
+        val useCase = LogUseCases(repo)
 
         val updated = useCase.update(UpdateLogRequest(id = "log-1", name = "renamed"))
 
@@ -166,7 +166,7 @@ class LogUseCasesTest {
 
     @Test
     fun `update fails cleanly when the log is missing`() {
-        val useCase = UpdateLogUseCase(InMemoryLogRepository())
+        val useCase = LogUseCases(InMemoryLogRepository())
         assertThrows(LogNotFoundException::class.java) {
             useCase.update(UpdateLogRequest(id = "nope", name = "x"))
         }
@@ -178,7 +178,7 @@ class LogUseCasesTest {
     fun `delete removes only the metadata`() {
         val repo = InMemoryLogRepository()
         repo.save(sampleLog("a"))
-        val useCase = DeleteLogUseCase(repo)
+        val useCase = LogUseCases(repo)
 
         assertTrue(useCase.delete("a"))
         assertNull(repo.store["a"])
@@ -186,14 +186,14 @@ class LogUseCasesTest {
 
     @Test
     fun `delete returns false when the log is missing`() {
-        assertFalse(DeleteLogUseCase(InMemoryLogRepository()).delete("nope"))
+        assertFalse(LogUseCases(InMemoryLogRepository()).delete("nope"))
     }
 
     @Test
     fun `deleteWithData removes the log as well`() {
         val repo = InMemoryLogRepository()
         repo.save(sampleLog("a"))
-        assertTrue(DeleteLogUseCase(repo).deleteWithData("a"))
+        assertTrue(LogUseCases(repo).deleteWithData("a"))
         assertFalse(repo.exists("a"))
     }
 
@@ -204,7 +204,7 @@ class LogUseCasesTest {
         val repo = InMemoryLogRepository()
         repo.save(sampleLog("a", name = "hospital-log"))
         repo.save(sampleLog("b", name = "bpi-log"))
-        val useCase = SearchLogsUseCase(repo)
+        val useCase = LogUseCases(repo)
 
         assertEquals(setOf("a"), useCase.search(SearchLogsRequest(namePart = "hospital")).map { it.id }.toSet())
     }
@@ -214,7 +214,7 @@ class LogUseCasesTest {
         val repo = InMemoryLogRepository()
         repo.save(sampleLog("a"))
         repo.save(sampleLog("b"))
-        val useCase = SearchLogsUseCase(repo)
+        val useCase = LogUseCases(repo)
 
         assertEquals(2, useCase.search(SearchLogsRequest()).size)
     }
@@ -224,7 +224,7 @@ class LogUseCasesTest {
         val repo = InMemoryLogRepository()
         repo.save(sampleLog("a", attrs = mapOf("owner" to "alice")))
         repo.save(sampleLog("b", attrs = mapOf("owner" to "bob")))
-        val useCase = SearchLogsUseCase(repo)
+        val useCase = LogUseCases(repo)
 
         val hits = useCase.search(SearchLogsRequest(attribute = AttributeFilter("owner", "alice")))
         assertEquals(setOf("a"), hits.map { it.id }.toSet())
@@ -236,7 +236,7 @@ class LogUseCasesTest {
         val t0 = LocalDateTime.of(2020, 1, 1, 0, 0)
         repo.save(sampleLog("old", createdAt = t0))
         repo.save(sampleLog("new", createdAt = t0.plusYears(5)))
-        val useCase = SearchLogsUseCase(repo)
+        val useCase = LogUseCases(repo)
 
         val hits = useCase.search(
             SearchLogsRequest(

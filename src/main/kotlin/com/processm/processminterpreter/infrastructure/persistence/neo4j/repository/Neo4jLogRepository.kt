@@ -1,7 +1,7 @@
 package com.processm.processminterpreter.infrastructure.persistence.neo4j.repository
 
 import com.processm.processminterpreter.domain.log.Log
-import com.processm.processminterpreter.application.ports.LogNotFoundException
+import com.processm.processminterpreter.application.log.LogNotFoundException
 import com.processm.processminterpreter.application.ports.LogRepository
 import com.processm.processminterpreter.application.ports.LogStatistics
 import org.neo4j.driver.Driver

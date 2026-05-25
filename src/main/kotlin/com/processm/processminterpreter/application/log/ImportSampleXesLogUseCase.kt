@@ -4,8 +4,8 @@ import com.processm.processminterpreter.application.ports.LogImportResult
 import com.processm.processminterpreter.application.ports.LogDataImporter
 import com.processm.processminterpreter.application.ports.LogRepository
 import com.processm.processminterpreter.application.ports.DataStoreRepository
+import com.processm.processminterpreter.application.ports.BundledLogResourceReader
 import org.slf4j.LoggerFactory
-import org.springframework.core.io.ClassPathResource
 import org.springframework.stereotype.Component
 
 /**
@@ -16,7 +16,12 @@ class ImportSampleXesLogUseCase(
     private val importer: LogDataImporter,
     private val logs: LogRepository,
     private val dataStores: DataStoreRepository,
+    private val resources: BundledLogResourceReader,
 ) {
+    private companion object {
+        const val IMPORT_REJECTED = "Import rejected"
+    }
+
     private val log = LoggerFactory.getLogger(ImportSampleXesLogUseCase::class.java)
 
     fun import(request: ImportSampleXesLogRequest): LogImportResult {
@@ -25,7 +30,7 @@ class ImportSampleXesLogUseCase(
             return LogImportResult(
                 success = false,
                 logId = explicitId,
-                message = "Import rejected",
+                message = IMPORT_REJECTED,
                 error = "Log with ID '$explicitId' already exists",
             )
         }
@@ -34,7 +39,7 @@ class ImportSampleXesLogUseCase(
             return LogImportResult(
                 success = false,
                 logId = explicitId,
-                message = "Import rejected",
+                message = IMPORT_REJECTED,
                 error = "Data store with ID '$dataStoreId' does not exist",
             )
         }
@@ -44,16 +49,16 @@ class ImportSampleXesLogUseCase(
             explicitId ?: "<generated>",
             dataStoreId ?: "<none>",
         )
-        val resource = ClassPathResource(request.resourcePath.removePrefix("/"))
-        if (!resource.exists()) {
+        val input = resources.open(request.resourcePath)
+        if (input == null) {
             return LogImportResult(
                 success = false,
                 logId = explicitId,
-                message = "Import rejected",
+                message = IMPORT_REJECTED,
                 error = "Resource '${request.resourcePath}' not found",
             )
         }
-        val result = resource.inputStream.use { input -> importer.import(input, explicitId) }
+        val result = input.use { importer.import(it, explicitId) }
         if (result.success && dataStoreId != null && result.logId != null) {
             dataStores.attachLog(dataStoreId, result.logId)
         }

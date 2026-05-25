@@ -1,6 +1,6 @@
 package com.processm.processminterpreter.infrastructure.config
 
-import com.processm.processminterpreter.application.query.PqlParser
+import com.processm.processminterpreter.application.ports.PqlParser
 import com.processm.processminterpreter.application.ports.QueryPlanExecutor
 import com.processm.processminterpreter.infrastructure.parser.antlr.AntlrPqlParser
 import com.processm.processminterpreter.infrastructure.parser.antlr.AstBuilder

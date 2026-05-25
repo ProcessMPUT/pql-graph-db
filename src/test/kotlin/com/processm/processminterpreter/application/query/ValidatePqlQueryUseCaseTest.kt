@@ -13,7 +13,7 @@ import com.processm.processminterpreter.application.ports.DataStoreLogSummary
 import com.processm.processminterpreter.application.ports.DataStoreRepository
 import com.processm.processminterpreter.application.ports.LogRepository
 import com.processm.processminterpreter.application.ports.LogStatistics
-import com.processm.processminterpreter.application.query.PqlParser
+import com.processm.processminterpreter.application.ports.PqlParser
 import com.processm.processminterpreter.domain.pql.syntax.RawExpression
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse

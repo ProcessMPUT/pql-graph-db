@@ -24,5 +24,3 @@ data class LogStatistics(
     val traceCount: Long,
     val eventCount: Long,
 )
-
-class LogNotFoundException(id: String) : RuntimeException("Log with ID '$id' not found")

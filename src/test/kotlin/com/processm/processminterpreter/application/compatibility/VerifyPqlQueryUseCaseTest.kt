@@ -1,5 +1,6 @@
-package com.processm.processminterpreter.application.processm
+package com.processm.processminterpreter.application.compatibility
 
+import com.processm.processminterpreter.application.ports.ProcessMJsonFormatter
 import com.processm.processminterpreter.application.ports.ProcessMUploadResponse
 import com.processm.processminterpreter.application.ports.RemoteProcessMDataStore
 import com.processm.processminterpreter.application.ports.RemoteProcessMGateway
@@ -65,7 +66,7 @@ class VerifyPqlQueryUseCaseTest {
         VerifyPqlQueryUseCase(
             executeUseCase = executeUseCase,
             remoteProcessM = remote,
-            formatter = ProcessMXesJsonFormatter(),
+            formatter = ProcessMJsonFormatter { emptyList() },
         )
 
     private class FakeRemoteProcessMGateway(

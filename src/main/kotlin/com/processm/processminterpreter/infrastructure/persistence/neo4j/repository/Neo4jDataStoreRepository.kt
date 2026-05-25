@@ -1,7 +1,7 @@
 package com.processm.processminterpreter.infrastructure.persistence.neo4j.repository
 
 import com.processm.processminterpreter.domain.datastore.DataStore
-import com.processm.processminterpreter.application.ports.DataStoreNotFoundException
+import com.processm.processminterpreter.application.datastore.DataStoreNotFoundException
 import com.processm.processminterpreter.application.ports.DataStoreLogSummary
 import com.processm.processminterpreter.application.ports.DataStoreRepository
 import org.neo4j.driver.Driver

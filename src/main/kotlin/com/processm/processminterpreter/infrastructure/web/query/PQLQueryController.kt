@@ -4,7 +4,7 @@ import com.processm.processminterpreter.application.query.ExecutePqlQueryRequest
 import com.processm.processminterpreter.application.query.ExecutePqlQueryUseCase
 import com.processm.processminterpreter.application.query.ExportQueryAsXesRequest
 import com.processm.processminterpreter.application.query.ExportQueryAsXesUseCase
-import com.processm.processminterpreter.application.query.GetPqlQueryMetadataUseCase
+import com.processm.processminterpreter.application.query.PqlMetadataUseCase
 import com.processm.processminterpreter.application.query.ValidatePqlQueryRequest
 import com.processm.processminterpreter.application.query.ValidatePqlQueryUseCase
 import com.processm.processminterpreter.domain.pql.catalog.Scope
@@ -40,7 +40,7 @@ class PQLQueryController(
     private val executeQueryUseCase: ExecutePqlQueryUseCase,
     private val validateQueryUseCase: ValidatePqlQueryUseCase,
     private val exportQueryUseCase: ExportQueryAsXesUseCase,
-    private val queryMetadataUseCase: GetPqlQueryMetadataUseCase,
+    private val queryMetadataUseCase: PqlMetadataUseCase,
     private val responseMapper: PqlResponseMapper,
 ) : PqlQueryApi {
     private val logger = LoggerFactory.getLogger(PQLQueryController::class.java)

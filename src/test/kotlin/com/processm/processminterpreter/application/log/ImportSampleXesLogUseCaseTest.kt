@@ -2,6 +2,7 @@ package com.processm.processminterpreter.application.log
 
 import com.processm.processminterpreter.domain.log.Log
 import com.processm.processminterpreter.domain.datastore.DataStore
+import com.processm.processminterpreter.application.ports.BundledLogResourceReader
 import com.processm.processminterpreter.application.ports.DataStoreLogSummary
 import com.processm.processminterpreter.application.ports.DataStoreRepository
 import com.processm.processminterpreter.application.ports.LogDataImporter
@@ -12,6 +13,7 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import java.io.ByteArrayInputStream
 import java.io.InputStream
 import java.time.LocalDateTime
 
@@ -66,10 +68,22 @@ class ImportSampleXesLogUseCaseTest {
         }
     }
 
+    private class FakeBundledLogResourceReader(
+        private val available: Boolean = true,
+    ) : BundledLogResourceReader {
+        override fun open(resourcePath: String): InputStream? =
+            if (available) ByteArrayInputStream("<log/>".toByteArray()) else null
+    }
+
     @Test
     fun `import opens sample resource and passes through importer result`() {
         val importer = FakeImporter()
-        val useCase = ImportSampleXesLogUseCase(importer, FakeLogRepository(), FakeDataStoreRepository())
+        val useCase = ImportSampleXesLogUseCase(
+            importer,
+            FakeLogRepository(),
+            FakeDataStoreRepository(),
+            FakeBundledLogResourceReader(),
+        )
 
         val result = useCase.import(
             ImportSampleXesLogRequest(resourcePath = "logs/sample_process.xes", logId = "my-log"),
@@ -89,6 +103,7 @@ class ImportSampleXesLogUseCaseTest {
             importer,
             FakeLogRepository(existing = setOf("existing")),
             FakeDataStoreRepository(),
+            FakeBundledLogResourceReader(),
         )
 
         val result = useCase.import(
@@ -103,7 +118,12 @@ class ImportSampleXesLogUseCaseTest {
     @Test
     fun `blank logId is treated as no logId`() {
         val importer = FakeImporter()
-        val useCase = ImportSampleXesLogUseCase(importer, FakeLogRepository(), FakeDataStoreRepository())
+        val useCase = ImportSampleXesLogUseCase(
+            importer,
+            FakeLogRepository(),
+            FakeDataStoreRepository(),
+            FakeBundledLogResourceReader(),
+        )
 
         useCase.import(ImportSampleXesLogRequest(resourcePath = "logs/sample_process.xes", logId = "   "))
 
@@ -122,7 +142,12 @@ class ImportSampleXesLogUseCaseTest {
             ),
         )
         val dataStores = FakeDataStoreRepository(existing = setOf("store-1"))
-        val useCase = ImportSampleXesLogUseCase(importer, FakeLogRepository(), dataStores)
+        val useCase = ImportSampleXesLogUseCase(
+            importer,
+            FakeLogRepository(),
+            dataStores,
+            FakeBundledLogResourceReader(),
+        )
 
         val result = useCase.import(
             ImportSampleXesLogRequest(

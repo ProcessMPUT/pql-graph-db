@@ -1,4 +1,4 @@
-package com.processm.processminterpreter.application.processm
+package com.processm.processminterpreter.application.compatibility
 
 import kotlin.test.Test
 import kotlin.test.assertFalse

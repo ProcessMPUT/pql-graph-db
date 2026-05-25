@@ -3,7 +3,7 @@ package com.processm.processminterpreter.infrastructure.parser.antlr
 import QLLexer
 import QLParser
 import com.processm.processminterpreter.domain.pql.syntax.RawQuery
-import com.processm.processminterpreter.application.query.PqlParser
+import com.processm.processminterpreter.application.ports.PqlParser
 import org.antlr.v4.runtime.CharStreams
 import org.antlr.v4.runtime.CommonTokenStream
 
