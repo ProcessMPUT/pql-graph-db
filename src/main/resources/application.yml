@@ -1,13 +1,15 @@
 spring:
   application:
     name: processm-interpreter
+  http:
+    converters:
+      preferred-json-mapper: jackson2
   neo4j:
     uri: bolt://localhost:7687
     authentication:
       username: neo4j
       password: password123
     pool:
-      metrics-enabled: true
       log-leaked-sessions: true
       max-connection-pool-size: 50
       idle-time-before-connection-test: PT30S
@@ -53,6 +55,9 @@ processm:
   password: Admin1234
 
 management:
+  metrics:
+    enable:
+      neo4j: true
   endpoints:
     web:
       exposure:
