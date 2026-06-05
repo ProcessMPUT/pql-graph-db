@@ -1,23 +1,23 @@
 package com.processm.processminterpreter.infrastructure.parser.antlr
 
 import QLParser
-import com.processm.processminterpreter.domain.pql.syntax.BinaryOperator
-import com.processm.processminterpreter.domain.pql.syntax.OrderDirection
+import com.processm.processminterpreter.domain.pql.catalog.BinaryOperator
+import com.processm.processminterpreter.domain.pql.catalog.OrderDirection
 import com.processm.processminterpreter.domain.pql.syntax.AttributeReferenceParser
 import com.processm.processminterpreter.domain.pql.syntax.RawAttributeRef
 import com.processm.processminterpreter.domain.pql.syntax.RawBinaryOp
 import com.processm.processminterpreter.domain.pql.syntax.RawExpression
 import com.processm.processminterpreter.domain.pql.syntax.RawFunctionCall
 import com.processm.processminterpreter.domain.pql.syntax.RawInList
-import com.processm.processminterpreter.domain.pql.syntax.RawLimitSpec
+import com.processm.processminterpreter.domain.pql.common.HierarchicalLimits
 import com.processm.processminterpreter.domain.pql.syntax.RawLiteral
 import com.processm.processminterpreter.domain.pql.syntax.RawLiteralKind
-import com.processm.processminterpreter.domain.pql.syntax.RawOffsetSpec
+import com.processm.processminterpreter.domain.pql.common.HierarchicalOffsets
 import com.processm.processminterpreter.domain.pql.syntax.RawOrderKey
 import com.processm.processminterpreter.domain.pql.syntax.RawQuery
 import com.processm.processminterpreter.domain.pql.syntax.RawSelectColumn
 import com.processm.processminterpreter.domain.pql.syntax.RawUnaryOp
-import com.processm.processminterpreter.domain.pql.syntax.UnaryOperator
+import com.processm.processminterpreter.domain.pql.catalog.UnaryOperator
 import com.processm.processminterpreter.domain.pql.catalog.Scope
 import com.processm.processminterpreter.domain.pql.catalog.SourceLocation
 import com.processm.processminterpreter.domain.pql.error.PQLSyntaxException
@@ -56,8 +56,8 @@ class AstBuilder {
         val where = ctx.where()?.let { buildLogicExpr(it.logic_expr()) }
         val groupBy = ctx.group_by()?.let { buildGroupBy(it) } ?: emptyList()
         val orderBy = ctx.order_by()?.let { buildOrderBy(it) } ?: emptyList()
-        val limit = ctx.limit()?.let { buildLimit(it) } ?: RawLimitSpec()
-        val offset = ctx.offset()?.let { buildOffset(it) } ?: RawOffsetSpec()
+        val limit = ctx.limit()?.let { buildLimit(it) } ?: HierarchicalLimits()
+        val offset = ctx.offset()?.let { buildOffset(it) } ?: HierarchicalOffsets()
         return RawQuery.Select(
             from = Scope.EVENT,
             columns = columns,
@@ -268,7 +268,7 @@ class AstBuilder {
 
     // ---------- LIMIT / OFFSET ----------
 
-    private fun buildLimit(ctx: QLParser.LimitContext): RawLimitSpec {
+    private fun buildLimit(ctx: QLParser.LimitContext): HierarchicalLimits {
         val nums = ctx.limit_number()
         var log: Long? = null; var trace: Long? = null; var event: Long? = null
         val seen = mutableSetOf<Scope>()
@@ -285,10 +285,10 @@ class AstBuilder {
                 Scope.EVENT -> event = value
             }
         }
-        return RawLimitSpec(log = log, trace = trace, event = event)
+        return HierarchicalLimits(log = log, trace = trace, event = event)
     }
 
-    private fun buildOffset(ctx: QLParser.OffsetContext): RawOffsetSpec {
+    private fun buildOffset(ctx: QLParser.OffsetContext): HierarchicalOffsets {
         val nums = ctx.offset_number()
         var log: Long? = null; var trace: Long? = null; var event: Long? = null
         val seen = mutableSetOf<Scope>()
@@ -302,7 +302,7 @@ class AstBuilder {
                 Scope.EVENT -> event = value
             }
         }
-        return RawOffsetSpec(log = log, trace = trace, event = event)
+        return HierarchicalOffsets(log = log, trace = trace, event = event)
     }
 
     /** Parses `"l:5"` / `"trace:10"` into (Scope, Long). ProcessM requires explicit scope. */

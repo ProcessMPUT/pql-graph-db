@@ -80,6 +80,7 @@ internal class TraceBuilder {
     var identityId: UUID? = null
     var costCurrency: String? = null
     var costTotal: Double? = null
+    var count: Int = 1
     var nullEventCount: Int = 0
     val customAttributes: MutableMap<String, Any?> = linkedMapOf()
     val events: MutableList<EventBuilder> = mutableListOf()
@@ -113,6 +114,7 @@ internal class TraceBuilder {
         identityId = identityId,
         costCurrency = costCurrency,
         costTotal = costTotal,
+        count = count,
         customAttributes = customAttributes.toMap(),
         events = events.map { it.build() },
         nullEventCount = nullEventCount,

@@ -9,7 +9,7 @@ package com.processm.processminterpreter.domain.pql.catalog
  *  - report the PQL-level [Type] of a standard attribute
  *  - recognize classifier-prefixed names (`c:*`, `classifier:*`)
  *
- * Physical Neo4j property mapping is NOT this catalog's concern — that lives
+ * Physical Neo4j property mapping is NOT this catalog's concern - that lives
  * in `infrastructure/persistence/neo4j/query/cypher/PhysicalAttributeMapper`. This catalog
  * is pure domain knowledge, safe to use in tests without any adapter wired up.
  *
@@ -36,49 +36,6 @@ object StandardAttributeCatalog {
     const val XES_VERSION = "xes:version"
     const val XES_FEATURES = "xes:features"
 
-    private val eventShorthands: Map<String, String> = mapOf(
-        "name" to CONCEPT_NAME,
-        "instance" to CONCEPT_INSTANCE,
-        "timestamp" to TIME_TIMESTAMP,
-        "resource" to ORG_RESOURCE,
-        "group" to ORG_GROUP,
-        "role" to ORG_ROLE,
-        "transition" to LIFECYCLE_TRANSITION,
-        "state" to LIFECYCLE_STATE,
-        "total" to COST_TOTAL,
-        "currency" to COST_CURRENCY,
-        "id" to CONCEPT_INSTANCE,
-        "identity:id" to IDENTITY_ID,
-        "db:id" to DB_ID,
-    )
-
-    private val traceShorthands: Map<String, String> = mapOf(
-        "name" to CONCEPT_NAME,
-        "id" to CONCEPT_INSTANCE,
-        "total" to COST_TOTAL,
-        "currency" to COST_CURRENCY,
-        "identity:id" to IDENTITY_ID,
-        "db:id" to DB_ID,
-    )
-
-    private val logShorthands: Map<String, String> = mapOf(
-        "name" to CONCEPT_NAME,
-        "id" to CONCEPT_INSTANCE,
-        // `logId` is the Neo4j identity column written by XESLoader (`log.logId`).
-        // PhysicalAttributeMapper maps IDENTITY_ID at LOG scope back to "logId",
-        // so `l:logId = '...'` round-trips through the normal attribute pipeline
-        // and matches the same property the source-pin MATCH `(log:Log {logId:$logId})`
-        // uses. Previously this pointed at CONCEPT_INSTANCE, which is an unrelated
-        // (and usually null) property — filters on `l:logId` silently matched
-        // nothing even though the MATCH pinned the correct log.
-        "logId" to IDENTITY_ID,
-        "version" to XES_VERSION,
-        "features" to XES_FEATURES,
-        "identity:id" to IDENTITY_ID,
-        "db:id" to DB_ID,
-        "lifecycle:model" to LIFECYCLE_MODEL,
-    )
-
     private val typeByCanonicalName: Map<String, Type> = mapOf(
         CONCEPT_NAME to Type.STRING,
         CONCEPT_INSTANCE to Type.ID,
@@ -97,29 +54,101 @@ object StandardAttributeCatalog {
         DB_ID to Type.NUMBER,
     )
 
-    private fun shorthandsFor(scope: Scope): Map<String, String> = when (scope) {
-        Scope.EVENT -> eventShorthands
-        Scope.TRACE -> traceShorthands
-        Scope.LOG -> logShorthands
-    }
+    /**
+     * Per-scope index of accepted attribute references.
+     *
+     * Each entry maps an accepted input string (shorthand like `name` or canonical
+     * XES name like `concept:name`) to the [StandardAttribute] that input resolves to.
+     *
+     * A canonical name appears as its own key only at scopes where it is a valid
+     * standard attribute - that's how `e:lifecycle:model` correctly returns null
+     * (events do not have a lifecycle model) while `l:lifecycle:model` succeeds.
+     */
+    private val eventCatalog: Map<String, StandardAttribute> = buildScopeCatalog(
+        Scope.EVENT,
+        shorthands = mapOf(
+            "name" to CONCEPT_NAME,
+            "instance" to CONCEPT_INSTANCE,
+            "timestamp" to TIME_TIMESTAMP,
+            "resource" to ORG_RESOURCE,
+            "group" to ORG_GROUP,
+            "role" to ORG_ROLE,
+            "transition" to LIFECYCLE_TRANSITION,
+            "state" to LIFECYCLE_STATE,
+            "total" to COST_TOTAL,
+            "currency" to COST_CURRENCY,
+            "id" to CONCEPT_INSTANCE,
+            "identity:id" to IDENTITY_ID,
+            "db:id" to DB_ID,
+        ),
+    )
+
+    private val traceCatalog: Map<String, StandardAttribute> = buildScopeCatalog(
+        Scope.TRACE,
+        shorthands = mapOf(
+            "name" to CONCEPT_NAME,
+            "id" to CONCEPT_INSTANCE,
+            "total" to COST_TOTAL,
+            "currency" to COST_CURRENCY,
+            "identity:id" to IDENTITY_ID,
+            "db:id" to DB_ID,
+        ),
+    )
+
+    private val logCatalog: Map<String, StandardAttribute> = buildScopeCatalog(
+        Scope.LOG,
+        shorthands = mapOf(
+            "name" to CONCEPT_NAME,
+            "id" to CONCEPT_INSTANCE,
+            "version" to XES_VERSION,
+            "features" to XES_FEATURES,
+            "identity:id" to IDENTITY_ID,
+            "db:id" to DB_ID,
+            "lifecycle:model" to LIFECYCLE_MODEL,
+        ),
+    )
 
     /**
      * Look up a [name] (shorthand or canonical XES) at [scope].
-     * Returns the [StandardAttribute] if this name is a standard attribute at that scope, null otherwise.
+     * Returns the [StandardAttribute] when [name] is a standard attribute at that scope,
+     * null otherwise.
      */
-    fun lookup(scope: Scope, name: String): StandardAttribute? {
-        val shorthands = shorthandsFor(scope)
-        val canonical = shorthands[name]
-            ?: name.takeIf { it in shorthands.values && it in typeByCanonicalName.keys }
-            ?: return null
-        return StandardAttribute(
-            scope = scope,
-            canonicalName = canonical,
-            type = typeByCanonicalName[canonical] ?: Type.UNKNOWN,
-        )
-    }
+    fun lookup(scope: Scope, name: String): StandardAttribute? =
+        catalogFor(scope)[name]
 
     /** True iff [name] is a classifier-prefixed reference (not dependent on scope). */
     fun isClassifier(name: String): Boolean =
         name.startsWith("c:") || name.startsWith("classifier:")
+
+    private fun catalogFor(scope: Scope): Map<String, StandardAttribute> = when (scope) {
+        Scope.EVENT -> eventCatalog
+        Scope.TRACE -> traceCatalog
+        Scope.LOG -> logCatalog
+    }
+
+    /**
+     * Build a flat (input -> StandardAttribute) map: every shorthand entry becomes a key,
+     * and every canonical name in the shorthand's range also becomes a key under itself.
+     */
+    private fun buildScopeCatalog(
+        scope: Scope,
+        shorthands: Map<String, String>,
+    ): Map<String, StandardAttribute> {
+        val canonicalNames = shorthands.values.toSet()
+        val entries = mutableMapOf<String, StandardAttribute>()
+        shorthands.forEach { (input, canonical) ->
+            entries[input] = standardAttribute(scope, canonical)
+        }
+        canonicalNames.forEach { canonical ->
+            entries.putIfAbsent(canonical, standardAttribute(scope, canonical))
+        }
+        return entries
+    }
+
+    private fun standardAttribute(scope: Scope, canonicalName: String): StandardAttribute =
+        StandardAttribute(
+            scope = scope,
+            canonicalName = canonicalName,
+            type = typeByCanonicalName[canonicalName] ?: Type.UNKNOWN,
+        )
 }

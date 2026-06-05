@@ -1,6 +1,6 @@
 package com.processm.processminterpreter.domain.pql.semantics
 
-import com.processm.processminterpreter.domain.pql.syntax.BinaryOperator
+import com.processm.processminterpreter.domain.pql.catalog.BinaryOperator
 import com.processm.processminterpreter.domain.pql.syntax.RawAttributeRef
 import com.processm.processminterpreter.domain.pql.syntax.RawBinaryOp
 import com.processm.processminterpreter.domain.pql.syntax.RawExpression
@@ -10,13 +10,13 @@ import com.processm.processminterpreter.domain.pql.syntax.RawLiteral
 import com.processm.processminterpreter.domain.pql.syntax.RawQuery
 import com.processm.processminterpreter.domain.pql.syntax.RawSelectColumn
 import com.processm.processminterpreter.domain.pql.syntax.RawUnaryOp
-import com.processm.processminterpreter.domain.pql.syntax.UnaryOperator
+import com.processm.processminterpreter.domain.pql.catalog.UnaryOperator
 import com.processm.processminterpreter.domain.pql.catalog.Scope
 import com.processm.processminterpreter.domain.pql.catalog.Type
+import com.processm.processminterpreter.domain.pql.common.OrderKey
 import com.processm.processminterpreter.domain.pql.resolved.Aggregation
 import com.processm.processminterpreter.domain.pql.resolved.ResolvedExpression
 import com.processm.processminterpreter.domain.pql.resolved.ResolvedInList
-import com.processm.processminterpreter.domain.pql.resolved.ResolvedOrderKey
 import com.processm.processminterpreter.domain.pql.resolved.ResolvedQuery
 import com.processm.processminterpreter.domain.pql.resolved.ResolvedSelectColumn
 import com.processm.processminterpreter.domain.pql.resolved.ScalarFunction
@@ -52,14 +52,10 @@ class Resolver(
             where = raw.where?.let { resolveExpr(it, base, ctx) },
             groupBy = raw.groupBy.map { resolveExpr(it, base, ctx) },
             orderBy = raw.orderBy.map {
-                ResolvedOrderKey(expression = resolveExpr(it.expression, base, ctx), direction = it.direction)
+                OrderKey(expression = resolveExpr(it.expression, base, ctx), direction = it.direction)
             },
-            limit = com.processm.processminterpreter.domain.pql.resolved.LimitSpec(
-                log = raw.limit.log, trace = raw.limit.trace, event = raw.limit.event,
-            ),
-            offset = com.processm.processminterpreter.domain.pql.resolved.OffsetSpec(
-                log = raw.offset.log, trace = raw.offset.trace, event = raw.offset.event,
-            ),
+            limit = raw.limit,
+            offset = raw.offset,
             location = raw.location,
         )
     }
@@ -137,15 +133,7 @@ class Resolver(
     private fun stripFunctionScope(name: String): ScopedFunctionName {
         val idx = name.indexOf(':')
         if (idx <= 0) return ScopedFunctionName(null, name)
-
-        val prefix = name.substring(0, idx)
-        val scope =
-            when (prefix.lowercase()) {
-                "l", "log" -> Scope.LOG
-                "t", "trace" -> Scope.TRACE
-                "e", "event" -> Scope.EVENT
-                else -> return ScopedFunctionName(null, name)
-            }
+        val scope = Scope.tryParse(name.substring(0, idx)) ?: return ScopedFunctionName(null, name)
         return ScopedFunctionName(scope, name.substring(idx + 1))
     }
 

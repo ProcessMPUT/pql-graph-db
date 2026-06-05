@@ -1,13 +1,13 @@
 package com.processm.processminterpreter.domain.pql.semantics
 
-import com.processm.processminterpreter.domain.pql.syntax.BinaryOperator
+import com.processm.processminterpreter.domain.pql.catalog.BinaryOperator
 import com.processm.processminterpreter.domain.pql.syntax.RawAttributeRef
 import com.processm.processminterpreter.domain.pql.syntax.RawBinaryOp
 import com.processm.processminterpreter.domain.pql.syntax.RawFunctionCall
 import com.processm.processminterpreter.domain.pql.syntax.RawLiteral
 import com.processm.processminterpreter.domain.pql.syntax.RawLiteralKind
 import com.processm.processminterpreter.domain.pql.syntax.RawOrderKey
-import com.processm.processminterpreter.domain.pql.syntax.OrderDirection
+import com.processm.processminterpreter.domain.pql.catalog.OrderDirection
 import com.processm.processminterpreter.domain.pql.syntax.RawQuery
 import com.processm.processminterpreter.domain.pql.syntax.RawSelectColumn
 import com.processm.processminterpreter.domain.pql.catalog.AttributeKind

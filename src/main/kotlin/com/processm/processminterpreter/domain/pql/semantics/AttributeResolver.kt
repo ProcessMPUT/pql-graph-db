@@ -4,6 +4,7 @@ import com.processm.processminterpreter.domain.pql.syntax.RawAttributeRef
 import com.processm.processminterpreter.domain.pql.catalog.AttributeKind
 import com.processm.processminterpreter.domain.pql.catalog.Scope
 import com.processm.processminterpreter.domain.pql.catalog.StandardAttributeCatalog
+import com.processm.processminterpreter.domain.pql.catalog.SystemAttributeCatalog
 import com.processm.processminterpreter.domain.pql.catalog.Type
 import com.processm.processminterpreter.domain.pql.error.PQLSyntaxException
 import com.processm.processminterpreter.domain.pql.error.Problem
@@ -18,12 +19,16 @@ import com.processm.processminterpreter.domain.pql.resolved.ResolvedAttribute
  *  - apply hoisting via [HoistingResolver]
  *  - recognize classifier-prefixed names (`c:*`, `classifier:*`) as CLASSIFIER
  *  - look up the name in the standard-attribute catalog (expanding shorthand like `name` -> `concept:name`)
+ *  - look up PQL-visible system attributes such as `l:logId`
  *  - reject unbracketed non-standard names (ProcessM-compatible NoSuchAttribute)
  *  - accept bracketed non-standard names as CUSTOM
  *
- * Kept as a class (not object) with catalog injected to keep tests hermetic.
+ * Kept as a class (not object) with catalogs injected to keep tests hermetic.
  */
-class AttributeResolver(private val catalog: StandardAttributeCatalog = StandardAttributeCatalog) {
+class AttributeResolver(
+    private val standardAttributes: StandardAttributeCatalog = StandardAttributeCatalog,
+    private val systemAttributes: SystemAttributeCatalog = SystemAttributeCatalog,
+) {
 
     fun resolve(
         raw: RawAttributeRef,
@@ -43,15 +48,21 @@ class AttributeResolver(private val catalog: StandardAttributeCatalog = Standard
             }
             val classifierName = raw.name.removePrefix("classifier:").removePrefix("c:")
             if (classifierName in context.ambiguousClassifierNames) {
-                throw IllegalArgumentException(
+                throw PQLSyntaxException(
+                    Problem.InvalidUseOfClassifiers,
+                    raw.location,
                     "Classifier '$classifierName' has multiple definitions in the selected query scope",
                 )
             }
             val classifier = context.classifiers.firstOrNull { it.name == classifierName }
-                ?: throw IllegalArgumentException("Classifier '$classifierName' not found")
+                ?: throw PQLSyntaxException(
+                    Problem.InvalidUseOfClassifiers,
+                    raw.location,
+                    "Classifier '$classifierName' not found",
+                )
             if (classifier.keys.size == 1) {
                 val classifierKey = classifier.keys.single()
-                val standard = catalog.lookup(baseScope, classifierKey)
+                val standard = standardAttributes.lookup(baseScope, classifierKey)
                 if (standard != null) {
                     return ResolvedAttribute(
                         name = classifierKey,
@@ -93,7 +104,7 @@ class AttributeResolver(private val catalog: StandardAttributeCatalog = Standard
             )
         }
 
-        val standard = catalog.lookup(baseScope, raw.name)
+        val standard = standardAttributes.lookup(baseScope, raw.name)
         if (standard != null) {
             return ResolvedAttribute(
                 name = raw.name,
@@ -103,6 +114,20 @@ class AttributeResolver(private val catalog: StandardAttributeCatalog = Standard
                 xesStandardName = standard.canonicalName,
                 wasBracketed = raw.wasBracketed,
                 type = standard.type,
+                location = raw.location,
+            )
+        }
+
+        val system = systemAttributes.lookup(baseScope, raw.name)
+        if (system != null) {
+            return ResolvedAttribute(
+                name = system.name,
+                baseScope = baseScope,
+                effectiveScope = effectiveScope,
+                kind = AttributeKind.SYSTEM,
+                xesStandardName = null,
+                wasBracketed = raw.wasBracketed,
+                type = system.type,
                 location = raw.location,
             )
         }

@@ -1,9 +1,9 @@
 package com.processm.processminterpreter.infrastructure.persistence.neo4j.query.cypher
 
-import com.processm.processminterpreter.domain.log.xes.XesNestedAttributePath
+import com.processm.processminterpreter.infrastructure.persistence.neo4j.property.NestedAttributePathCodec
 import com.processm.processminterpreter.domain.pql.catalog.AttributeKind
-import com.processm.processminterpreter.domain.pql.syntax.BinaryOperator
-import com.processm.processminterpreter.domain.pql.syntax.UnaryOperator
+import com.processm.processminterpreter.domain.pql.catalog.BinaryOperator
+import com.processm.processminterpreter.domain.pql.catalog.UnaryOperator
 import com.processm.processminterpreter.domain.pql.catalog.Scope
 import com.processm.processminterpreter.domain.pql.catalog.StandardAttributeCatalog
 import com.processm.processminterpreter.domain.pql.catalog.Type
@@ -61,6 +61,16 @@ internal class CypherExpressionRenderer(
             "count" -> renderCountAggregation(e.argument, arg)
             else -> "${e.name}($arg)"
         }
+    }
+
+    fun renderTemporalDifferenceInDays(
+        later: ResolvedExpression,
+        earlier: ResolvedExpression,
+        s: CypherBuildState,
+    ): String {
+        val laterRendered = render(later, s)
+        val earlierRendered = render(earlier, s)
+        return "toFloat(duration.inSeconds($earlierRendered, $laterRendered).seconds) / 86400.0"
     }
 
     private fun renderCountAggregation(argument: ResolvedExpression, renderedArgument: String): String {
@@ -141,9 +151,7 @@ internal class CypherExpressionRenderer(
         if (!CypherAggregationInspector.isTemporalAggregation(e.left)) return null
         if (!CypherAggregationInspector.isTemporalAggregation(e.right)) return null
 
-        val left = render(e.left, s)
-        val right = render(e.right, s)
-        return "duration.between($right, $left)"
+        return renderTemporalDifferenceInDays(e.left, e.right, s)
     }
 
     private fun renderRegularBinaryOp(e: TypedBinaryOp, s: CypherBuildState): String {
@@ -215,5 +223,5 @@ internal class CypherExpressionRenderer(
     }
 
     private fun isNestedAttribute(e: ResolvedExpression): Boolean =
-        e is ResolvedAttribute && XesNestedAttributePath.parseEncoded(e.name) != null
+        e is ResolvedAttribute && NestedAttributePathCodec.parseEncoded(e.name) != null
 }

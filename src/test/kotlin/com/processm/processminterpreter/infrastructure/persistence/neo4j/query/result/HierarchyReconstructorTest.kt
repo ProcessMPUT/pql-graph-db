@@ -1,8 +1,8 @@
 package com.processm.processminterpreter.infrastructure.persistence.neo4j.query.result
 
 import com.processm.processminterpreter.domain.pql.catalog.Scope
-import com.processm.processminterpreter.domain.pql.plan.HierarchicalLimits
-import com.processm.processminterpreter.domain.pql.plan.HierarchicalOffsets
+import com.processm.processminterpreter.domain.pql.common.HierarchicalLimits
+import com.processm.processminterpreter.domain.pql.common.HierarchicalOffsets
 import com.processm.processminterpreter.infrastructure.persistence.neo4j.query.cypher.ColumnAlias
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
@@ -337,6 +337,34 @@ class HierarchyReconstructorTest {
     }
 
     @Test
+    fun `projected rows can retain hidden full log node for implicit no-select shapes`() {
+        val rows =
+            listOf(
+                mapOf(
+                    "_log_id_" to "log-1",
+                    "_log_node_" to mapOf("logId" to "log-1", "meta_3TU:language" to "eng"),
+                    "_trace_variant_" to "|A",
+                    "_grouped_event_value_" to "A",
+                ),
+            )
+
+        val logs =
+            reconstructor.reconstruct(
+                rows = rows,
+                columnAliases =
+                    mapOf(
+                        "_log_id_" to ColumnAlias("_log_id_", Scope.LOG, synthetic = true),
+                        "_trace_variant_" to ColumnAlias("_trace_variant_", Scope.TRACE, synthetic = true),
+                        "_grouped_event_value_" to ColumnAlias("event:concept:name", Scope.EVENT),
+                    ),
+            )
+
+        val log = logs.single()
+        assertEquals("eng", log.customAttributes["meta_3TU:language"])
+        assertNull(log.customAttributes["logId"], "technical log id must not leak as a custom XES attribute")
+    }
+
+    @Test
     fun `projected event wildcard does not materialize technical row columns as event attributes`() {
         val rows =
             listOf(
@@ -344,7 +372,12 @@ class HierarchyReconstructorTest {
                     "_log_id_" to "log-1",
                     "_trace_id_" to "trace-1",
                     "t_concept_name" to "T",
-                    "event" to mapOf("eventId" to "event-1", "activity" to "A", "importOrder" to 0),
+                    "event" to mapOf(
+                        "eventId" to "event-1",
+                        "activity" to "A",
+                        "importOrder" to 0,
+                        "processmEventOrder" to 3,
+                    ),
                 ),
             )
 

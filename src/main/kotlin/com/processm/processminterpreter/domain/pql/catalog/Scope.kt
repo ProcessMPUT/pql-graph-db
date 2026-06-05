@@ -23,11 +23,20 @@ enum class Scope(val shortName: String, val fullName: String) {
     override fun toString(): String = fullName
 
     companion object {
-        fun parse(s: String): Scope = when (s.lowercase()) {
+        /**
+         * Lower a scope token (short or full name, case-insensitive) to a [Scope],
+         * or null if the token is not a recognized scope. Use this instead of catching
+         * [IllegalArgumentException] from [parse] when the input may legitimately be
+         * a non-scope string (e.g. attribute names containing a `:`).
+         */
+        fun tryParse(s: String): Scope? = when (s.lowercase()) {
             "l", "log" -> LOG
             "t", "trace" -> TRACE
             "e", "event" -> EVENT
-            else -> throw IllegalArgumentException("Unknown scope: $s")
+            else -> null
         }
+
+        fun parse(s: String): Scope =
+            tryParse(s) ?: throw IllegalArgumentException("Unknown scope: $s")
     }
 }

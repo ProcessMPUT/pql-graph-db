@@ -8,9 +8,12 @@ import com.processm.processminterpreter.application.ports.QueryExecutionResult
 import com.processm.processminterpreter.application.ports.QueryPlanExecutor
 import com.processm.processminterpreter.infrastructure.persistence.neo4j.query.cypher.CypherCodegen
 import com.processm.processminterpreter.infrastructure.persistence.neo4j.query.cypher.CypherQuery
+import com.processm.processminterpreter.infrastructure.persistence.neo4j.query.cypher.SYNTHETIC_LOG_METADATA_ALIAS
+import com.processm.processminterpreter.infrastructure.persistence.neo4j.query.cypher.SYNTHETIC_LOG_NODE_ALIAS
 import com.processm.processminterpreter.infrastructure.persistence.neo4j.query.result.HierarchicalWindowing
 import com.processm.processminterpreter.infrastructure.persistence.neo4j.query.result.HierarchyReconstructor
 import com.processm.processminterpreter.infrastructure.persistence.neo4j.query.result.NodeRowHierarchyBuilder
+import com.processm.processminterpreter.infrastructure.persistence.neo4j.query.result.ProjectedRowHierarchyBuilder
 import org.neo4j.driver.Driver
 import org.neo4j.driver.Record
 import org.slf4j.LoggerFactory
@@ -59,6 +62,10 @@ class Neo4jQueryPlanExecutor(
     }
 
     private fun executeProjected(plan: LogicalPlan.Select, cypher: CypherQuery): QueryExecutionResult {
+        if (plan.materializedScopes.isNotEmpty()) {
+            return executeProjectedStreaming(plan, cypher)
+        }
+
         val rows = readProjectedRows(cypher, plan.projectedRecordKeys(cypher))
         val logs = reconstructor.reconstruct(
             rows = rows,
@@ -72,6 +79,29 @@ class Neo4jQueryPlanExecutor(
             logs = logs,
             rows = rows,
             rowCount = rows.size,
+            executedQueryDescription = cypher.cypher,
+        )
+    }
+
+    private fun executeProjectedStreaming(plan: LogicalPlan.Select, cypher: CypherQuery): QueryExecutionResult {
+        val accumulator = ProjectedRowHierarchyBuilder().accumulator(
+            columnAliases = cypher.columnAliases,
+            selectAllScopes = plan.projection.selectAll.filterValues { it }.keys,
+        )
+        val allowedKeys = plan.projectedRecordKeys(cypher)
+        val rowCount = readProjectedRows(cypher, allowedKeys) { row ->
+            accumulator.absorb(row)
+        }
+        val logs = HierarchicalWindowing.apply(
+            logs = accumulator.build(),
+            limits = plan.limits,
+            offsets = plan.offsets,
+            defaultLimits = plan.defaultLimits,
+        )
+        return QueryExecutionResult(
+            logs = logs,
+            rows = emptyList(),
+            rowCount = rowCount,
             executedQueryDescription = cypher.cypher,
         )
     }
@@ -102,15 +132,28 @@ class Neo4jQueryPlanExecutor(
         allowedKeys: Set<String>,
     ): List<Map<String, Any?>> {
         val rows = mutableListOf<Map<String, Any?>>()
+        readProjectedRows(cypher, allowedKeys) { row ->
+            rows += row
+        }
+        return rows
+    }
+
+    private fun readProjectedRows(
+        cypher: CypherQuery,
+        allowedKeys: Set<String>,
+        absorb: (Map<String, Any?>) -> Unit,
+    ): Int {
+        var rowCount = 0
         driver.session().use { session ->
             session.executeRead { tx ->
                 val result = tx.run(cypher.cypher, cypher.parameters)
                 while (result.hasNext()) {
-                    rows += result.next().toProjectedRow(allowedKeys)
+                    absorb(result.next().toProjectedRow(allowedKeys))
+                    rowCount++
                 }
             }
         }
-        return rows
+        return rowCount
     }
 
     private fun readNodeRows(
@@ -147,7 +190,7 @@ class Neo4jQueryPlanExecutor(
 
     private fun LogicalPlan.Select.projectedRecordKeys(cypher: CypherQuery): Set<String> {
         val selectAllNodeColumns = projection.selectAll.filterValues { it }.keys.map { it.nodeColumnName() }
-        return cypher.columnAliases.keys + selectAllNodeColumns
+        return cypher.columnAliases.keys + selectAllNodeColumns + SYNTHETIC_LOG_METADATA_ALIAS + SYNTHETIC_LOG_NODE_ALIAS
     }
 
     private fun Record.toProjectedRow(allowedKeys: Set<String>): Map<String, Any?> =

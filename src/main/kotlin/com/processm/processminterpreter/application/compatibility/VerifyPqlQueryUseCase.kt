@@ -10,7 +10,7 @@ import com.processm.processminterpreter.application.query.QueryResult
 import com.processm.processminterpreter.domain.log.xes.XesLog
 import com.processm.processminterpreter.domain.pql.catalog.Scope
 import com.processm.processminterpreter.domain.pql.error.PQLCompileError
-import com.processm.processminterpreter.domain.pql.plan.HierarchicalLimits
+import com.processm.processminterpreter.domain.pql.common.HierarchicalLimits
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
 
@@ -21,6 +21,9 @@ class VerifyPqlQueryUseCase(
     private val formatter: ProcessMJsonFormatter,
 ) {
     private val logger = LoggerFactory.getLogger(VerifyPqlQueryUseCase::class.java)
+    private val hoistedEventGroupBy = Regex("""(?is)\bgroup\s+by\b.*\^(?:e|event)\s*:""")
+    private val eventGroupBy = Regex("""(?is)\bgroup\s+by\b.*(?:^|[,\s])(?:e|event)\s*:""")
+    private val orderBy = Regex("""(?is)\border\s+by\b""")
 
     fun verify(request: VerifyPqlQueryRequest): VerifyPqlQueryResult {
         val localResult = executeLocal(request)
@@ -31,22 +34,7 @@ class VerifyPqlQueryUseCase(
             includeEvents = request.includeEvents,
         )
 
-        val localXesResults =
-            if (localResult.logs.isNotEmpty()) {
-                formatter.formatAsXesJson(
-                    QueryJsonProjection(
-                        logs = localResult.logs,
-                        rows = localResult.results,
-                        hasExplicitSelect = localResult.hasExplicitSelect,
-                        selectAllScopes = localResult.selectAllScopes,
-                        projectedTraceStandardAttributes = localResult.projectedTraceStandardAttributes,
-                        includeTraces = request.includeTraces,
-                        includeEvents = request.includeEvents,
-                    ),
-                )
-            } else {
-                emptyList()
-            }
+        val localXesResults = formatLocalResult(localResult, request)
 
         val details = StringBuilder()
         details.append(
@@ -56,7 +44,7 @@ class VerifyPqlQueryUseCase(
             "Remote: ${if (remoteResult.success) "Success (${remoteResult.resultCount} logs)" else "Fail: ${remoteResult.message}"}\n",
         )
 
-        val comparison = compare(localResult, remoteResult, localXesResults)
+        val comparison = compare(request, localResult, remoteResult, localXesResults)
         val match = comparison.match
 
         details.append("Comparison: ${comparison.summary}\n")
@@ -78,9 +66,30 @@ class VerifyPqlQueryUseCase(
             remoteRequestUrl = remoteResult.requestUrl,
             remoteAdaptedQuery = remoteResult.adaptedQuery,
             remoteDataStoreId = remoteResult.remoteDataStoreId,
+            comparisonStatus = comparison.status.name,
             details = details.toString(),
         )
     }
+
+    private fun formatLocalResult(
+        localResult: LocalVerificationResult,
+        request: VerifyPqlQueryRequest,
+    ): List<Map<String, Any?>> =
+        if (localResult.logs.isNotEmpty()) {
+            formatter.formatAsXesJson(
+                QueryJsonProjection(
+                    logs = localResult.logs,
+                    rows = localResult.results,
+                    hasExplicitSelect = localResult.hasExplicitSelect,
+                    selectAllScopes = localResult.selectAllScopes,
+                    projectedTraceStandardAttributes = localResult.projectedTraceStandardAttributes,
+                    includeTraces = request.includeTraces,
+                    includeEvents = request.includeEvents,
+                ),
+            )
+        } else {
+            emptyList()
+        }
 
     private fun executeLocal(request: VerifyPqlQueryRequest): LocalVerificationResult =
         try {
@@ -110,15 +119,61 @@ class VerifyPqlQueryUseCase(
         }
 
     private fun compare(
+        request: VerifyPqlQueryRequest,
         localResult: LocalVerificationResult,
         remoteResult: RemoteQueryExecutionResult,
         localResults: List<Map<String, Any?>>,
     ): ComparisonResult {
         if (localResult.success && remoteResult.success) {
-            return XESJsonComparator.compare(localResults, remoteResult.results)
+            val strictComparison = XESJsonComparator.compare(localResults, remoteResult.results)
+            if (strictComparison.match) {
+                return strictComparison
+            }
+
+            val eventOrderComparison =
+                if (canCheckUnstableGroupedEventOrder(request)) {
+                    XESJsonComparator.compareIgnoringEventOrder(localResults, remoteResult.results)
+                } else {
+                    null
+                }
+            if (eventOrderComparison?.status == ComparisonStatus.NONDETERMINISTIC_MATCH) {
+                return eventOrderComparison
+            }
+
+            val canTryCompatibilityFallback =
+                (
+                    canCheckUnstableTraceVariantWindow(request) &&
+                        XESJsonComparator.hasOnlyTraceWindowDifferences(strictComparison)
+                ) ||
+                    eventOrderComparison?.let(XESJsonComparator::hasOnlyTraceWindowDifferences) == true
+            if (!canTryCompatibilityFallback) {
+                return strictComparison
+            }
+
+            val ignoreEventOrder = eventOrderComparison != null
+            for (fallbackLimits in compatibilityFallbackLimits(request.defaultLimits, widenEvents = ignoreEventOrder)) {
+                val fallbackLocalResult = executeLocal(request.copy(defaultLimits = fallbackLimits))
+                if (!fallbackLocalResult.success) {
+                    continue
+                }
+
+                val subsetComparison = XESJsonComparator.compareRemoteTraceSubset(
+                    localLogs = fallbackLocalResult.logs,
+                    remoteJson = remoteResult.results,
+                    isProjectedQuery = fallbackLocalResult.hasExplicitSelect,
+                    projectedTraceStandardAttributes = fallbackLocalResult.projectedTraceStandardAttributes,
+                    includeEvents = request.includeEvents,
+                    ignoreEventOrder = ignoreEventOrder,
+                    allowEventSubset = ignoreEventOrder && fallbackLimits.event != request.defaultLimits.event,
+                )
+                if (subsetComparison.status == ComparisonStatus.NONDETERMINISTIC_MATCH) {
+                    return subsetComparison
+                }
+            }
+            return strictComparison
         }
         if (!localResult.success && !remoteResult.success) {
-            return compareFailures(localResult.error, remoteResult.message)
+            return compareFailures(localResult.query, localResult.error, remoteResult.message)
         }
         return ComparisonResult(
             match = false,
@@ -129,12 +184,22 @@ class VerifyPqlQueryUseCase(
         )
     }
 
+    private fun canCheckUnstableTraceVariantWindow(request: VerifyPqlQueryRequest): Boolean =
+        request.includeTraces &&
+            hoistedEventGroupBy.containsMatchIn(request.query)
+
+    private fun canCheckUnstableGroupedEventOrder(request: VerifyPqlQueryRequest): Boolean =
+        request.includeEvents &&
+            eventGroupBy.containsMatchIn(request.query) &&
+            !orderBy.containsMatchIn(request.query)
+
     private fun compareFailures(
+        query: String,
         localMessage: String?,
         remoteMessage: String?,
     ): ComparisonResult {
-        val localKind = PqlFailureKind.from(localMessage)
-        val remoteKind = PqlFailureKind.from(remoteMessage)
+        val localKind = PqlFailureKind.from(query, localMessage)
+        val remoteKind = PqlFailureKind.from(query, remoteMessage)
         if (localKind != null && localKind == remoteKind) {
             return ComparisonResult(
                 match = true,
@@ -180,10 +245,11 @@ private fun QueryResult.toLocalVerificationResult(query: String): LocalVerificat
 
 private enum class PqlFailureKind(val description: String) {
     POSITIVE_INTEGER_REQUIRED("positive integer required"),
-    SCOPE_REQUIRED("scope required");
+    SCOPE_REQUIRED("scope required"),
+    INVALID_CLASSIFIER("invalid classifier");
 
     companion object {
-        fun from(message: String?): PqlFailureKind? {
+        fun from(query: String, message: String?): PqlFailureKind? {
             val text = message ?: return null
             return when {
                 text.contains("PositiveIntegerRequired", ignoreCase = true) ||
@@ -191,9 +257,17 @@ private enum class PqlFailureKind(val description: String) {
                 text.contains("ScopeRequired", ignoreCase = true) ||
                     (text.contains("scope", ignoreCase = true) && text.contains("required", ignoreCase = true)) ->
                     SCOPE_REQUIRED
+                text.contains("InvalidUseOfClassifiers", ignoreCase = true) ||
+                    text.contains("Classifier", ignoreCase = true) && text.contains("not found", ignoreCase = true) ||
+                    isRemoteClassifierStreamAbort(query, text) -> INVALID_CLASSIFIER
                 else -> null
             }
         }
+
+        private fun isRemoteClassifierStreamAbort(query: String, message: String): Boolean =
+            query.contains(Regex("""(?i)\b(c|classifier):""")) &&
+                message.contains("Unexpected end-of-input", ignoreCase = true) &&
+                message.contains("expected close marker for Array", ignoreCase = true)
     }
 }
 
@@ -203,6 +277,27 @@ private fun requestedScopes(includeTraces: Boolean, includeEvents: Boolean): Set
         if (includeTraces || includeEvents) add(Scope.TRACE)
         if (includeEvents) add(Scope.EVENT)
     }
+
+private fun compatibilityFallbackLimits(
+    defaultLimits: HierarchicalLimits,
+    widenEvents: Boolean,
+): List<HierarchicalLimits> {
+    val traceLimit = defaultLimits.trace
+    val eventLimit = defaultLimits.event.takeIf { widenEvents }
+    if (traceLimit == null && eventLimit == null) return emptyList()
+
+    val traceFallbacks = traceLimit
+        ?.let { limit -> listOf(limit + maxOf(10, limit), limit * 5, null) }
+        ?: listOf(null)
+    val eventFallbacks = eventLimit
+        ?.let { limit -> listOf(limit + maxOf(30, limit), limit * 5, null) }
+        ?: listOf(defaultLimits.event)
+
+    return traceFallbacks
+        .flatMap { trace -> eventFallbacks.map { event -> defaultLimits.copy(trace = trace, event = event) } }
+        .filter { it.trace != defaultLimits.trace || it.event != defaultLimits.event }
+        .distinct()
+}
 
 data class VerifyPqlQueryRequest(
     val query: String,
@@ -226,5 +321,6 @@ data class VerifyPqlQueryResult(
     val remoteRequestUrl: String? = null,
     val remoteAdaptedQuery: String? = null,
     val remoteDataStoreId: String? = null,
+    val comparisonStatus: String = ComparisonStatus.MISMATCH.name,
     val details: String,
 )

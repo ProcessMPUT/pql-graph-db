@@ -1,6 +1,8 @@
 package com.processm.processminterpreter.infrastructure.processm.json
 
 import com.processm.processminterpreter.application.ports.QueryJsonProjection
+import com.processm.processminterpreter.domain.log.AttributeScope
+import com.processm.processminterpreter.domain.log.GlobalAttribute
 import com.processm.processminterpreter.domain.log.xes.XesEvent
 import com.processm.processminterpreter.domain.log.xes.XesLog
 import com.processm.processminterpreter.domain.log.xes.XesTrace
@@ -11,6 +13,7 @@ import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class XESJsonConverterTest {
     @Test
@@ -90,6 +93,33 @@ class XESJsonConverterTest {
         assertEquals(1, attributeCount(logNode, "concept:name"))
         assertEquals("teleclaims.mxml", flatAttributes(logNode)["concept:name"])
         assertFalse(flatAttributes(logNode).containsKey("lifecycle:model"))
+    }
+
+    @Test
+    fun `projected log wildcard keeps ProcessM metadata shape`() {
+        val log =
+            XesLog(
+                conceptName = "teleclaims.mxml",
+                identityId = UUID.fromString("00000000-0000-0000-0000-000000000001"),
+                lifecycleModel = "standard",
+                traceGlobals = listOf(GlobalAttribute(AttributeScope.TRACE, "concept:name", "__INVALID__")),
+                eventGlobals = listOf(GlobalAttribute(AttributeScope.EVENT, "concept:name", "__INVALID__")),
+                customAttributes = mapOf("source" to "CPN Tools simulation"),
+            )
+
+        val json = XESJsonConverter.convertToXESJson(
+            logs = listOf(log),
+            isProjectedQuery = true,
+            logSelectAll = true,
+        )
+        val logNode = json["log"].asMap()
+
+        assertTrue(logNode.containsKey("global"))
+        assertEquals("id", typeOfAttribute(logNode, "identity:id"))
+        assertEquals("00000000-0000-0000-0000-000000000001", flatAttributes(logNode)["identity:id"])
+        assertEquals("standard", flatAttributes(logNode)["lifecycle:model"])
+        assertEquals("CPN Tools simulation", flatAttributes(logNode)["source"])
+        assertFalse(flatAttributes(logNode).containsKey("concept:name"))
     }
 
     @Test
@@ -275,7 +305,7 @@ class XESJsonConverterTest {
                 "lifecycle:model" to "standard",
                 "beta" to "1.0",
             ),
-            flatAttributes(logNode),
+            flatAttributes(logNode) - "identity:id",
         )
         assertEquals(
             mapOf(
@@ -312,6 +342,56 @@ class XESJsonConverterTest {
         assertEquals("id", typeOfAttribute(logNode, "identity:id"))
         assertEquals("id", typeOfAttribute(traceNode, "identity:id"))
         assertEquals("id", typeOfAttribute(eventNode, "identity:id"))
+    }
+
+    @Test
+    fun `non-projected compatibility json synthesizes ProcessM log identity id`() {
+        val log =
+            XesLog(
+                conceptName = "Hospital_log",
+                customAttributes = mapOf("logId" to "log-1"),
+            )
+
+        val first = XESJsonConverter.convertToXESJson(listOf(log))["log"].asMap()
+        val second = XESJsonConverter.convertToXESJson(listOf(log))["log"].asMap()
+        val projected = XESJsonConverter.convertToXESJson(listOf(log), isProjectedQuery = true)["log"].asMap()
+
+        assertEquals("id", typeOfAttribute(first, "identity:id"))
+        assertEquals(flatAttributes(first)["identity:id"], flatAttributes(second)["identity:id"])
+        assertFalse(flatAttributes(projected).containsKey("identity:id"))
+    }
+
+    @Test
+    fun `formatter does not treat synthetic row keys as explicit projection`() {
+        val formatter = ProcessMXesJsonFormatter()
+        val log =
+            XesLog(
+                customAttributes = mapOf("meta_3TU:language" to "eng"),
+                traceGlobals = listOf(GlobalAttribute(AttributeScope.TRACE, "concept:name", "DEFAULT")),
+                eventGlobals = listOf(GlobalAttribute(AttributeScope.EVENT, "concept:name", "DEFAULT")),
+                traces = listOf(XesTrace(events = listOf(XesEvent(conceptName = "A")))),
+            )
+
+        val json =
+            formatter.formatAsXesJson(
+                QueryJsonProjection(
+                    logs = listOf(log),
+                    rows =
+                        listOf(
+                            mapOf(
+                                "_log_id_" to "log-1",
+                                "_trace_variant_" to "|A",
+                                "_grouped_event_value_" to "A",
+                                "_order_0" to 1,
+                            ),
+                        ),
+                    hasExplicitSelect = false,
+                ),
+            )
+
+        val logNode = json[0]["log"].asMap()
+        assertEquals("eng", flatAttributes(logNode)["meta_3TU:language"])
+        assertTrue(logNode.containsKey("global"), "implicit query must keep log globals")
     }
 
     private fun attributeCount(

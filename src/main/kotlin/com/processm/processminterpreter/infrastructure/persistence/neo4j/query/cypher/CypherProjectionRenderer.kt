@@ -1,7 +1,7 @@
 package com.processm.processminterpreter.infrastructure.persistence.neo4j.query.cypher
 
 import com.processm.processminterpreter.domain.pql.catalog.Scope
-import com.processm.processminterpreter.domain.pql.plan.OrderKey
+import com.processm.processminterpreter.domain.pql.common.OrderKey
 import com.processm.processminterpreter.domain.pql.plan.ProjectedColumn
 import com.processm.processminterpreter.domain.pql.resolved.ResolvedExpression
 
@@ -23,15 +23,16 @@ internal class CypherProjectionRenderer(
         s.cypher.append(" RETURN ").append(buildReturnColumns(s, cols).joinToString(", "))
     }
 
-    private fun buildHiddenMetadataColumns(): List<String> = listOf("log AS $SYNTHETIC_LOG_METADATA_ALIAS")
+    private fun buildHiddenMetadataColumns(): List<String> = listOf(logMetadataProjection())
 
     private fun buildReturnColumns(
         s: CypherBuildState,
         cols: List<ProjectedColumn>,
     ): List<String> =
-        buildAggregationIdentityColumns(s) +
+            buildAggregationIdentityColumns(s) +
             buildProjectionHierarchyKeyColumns(s) +
             buildImplicitMaterializationColumns(s) +
+            buildEventGroupOrderColumn(s) +
             buildHiddenMetadataColumns() +
             buildSelectAllNodeColumns(s) +
             buildUserProjectionColumns(s, cols) +
@@ -83,6 +84,13 @@ internal class CypherProjectionRenderer(
         return listOf("{} AS $SYNTHETIC_EVENT_ALIAS")
     }
 
+    private fun buildEventGroupOrderColumn(s: CypherBuildState): List<String> =
+        if (s.hasColumnAlias(SYNTHETIC_EVENT_GROUP_ORDER_ALIAS)) {
+            listOf("min(event.importOrder) AS $SYNTHETIC_EVENT_GROUP_ORDER_ALIAS")
+        } else {
+            emptyList()
+        }
+
     private fun buildHiddenOrderColumns(s: CypherBuildState): List<String> =
         s.plan.orderBy.mapIndexedNotNull { idx, key ->
             if (!CypherAggregationInspector.containsAggregation(key.expression)) return@mapIndexedNotNull null
@@ -110,6 +118,7 @@ internal class CypherProjectionRenderer(
 
         val identity = mutableListOf<String>()
         identity += logIdColumn(s)
+        logOrderColumnIfNeeded(s)?.let { identity += it }
 
         if (s.facts.hasEventScopeAggregation) {
             identity += traceIdColumn(s)
@@ -172,20 +181,24 @@ internal class CypherProjectionRenderer(
         }
 
     private fun defaultOrderTerms(s: CypherBuildState): List<String> = when {
-        s.plan.projection.columns.isEmpty() -> listOf("log.logId", "trace.importOrder", "event.importOrder")
+        s.plan.projection.columns.isEmpty() -> listOf(defaultLogOrder(s), "trace.importOrder", "event.importOrder")
         s.facts.hasAnyAggregation -> defaultAggregationOrderTerms(s)
         else -> defaultProjectionOrderTerms(s)
     }
 
     private fun defaultAggregationOrderTerms(s: CypherBuildState): List<String> =
         buildList {
-            if (s.hasColumnAlias(SYNTHETIC_LOG_ID_ALIAS)) add(SYNTHETIC_LOG_ID_ALIAS)
+            when {
+                s.hasColumnAlias(SYNTHETIC_LOG_ORDER_ALIAS) -> add(SYNTHETIC_LOG_ORDER_ALIAS)
+                s.hasColumnAlias(SYNTHETIC_LOG_ID_ALIAS) -> add(SYNTHETIC_LOG_ID_ALIAS)
+            }
             if (s.hasColumnAlias(SYNTHETIC_TRACE_ORDER_ALIAS)) add(SYNTHETIC_TRACE_ORDER_ALIAS)
+            if (s.hasColumnAlias(SYNTHETIC_EVENT_GROUP_ORDER_ALIAS)) add(SYNTHETIC_EVENT_GROUP_ORDER_ALIAS)
         }
 
     private fun defaultProjectionOrderTerms(s: CypherBuildState): List<String> =
         buildList {
-            add("log.logId")
+            add(defaultLogOrder(s))
             if (Scope.TRACE in s.facts.usedScopes || Scope.EVENT in s.facts.usedScopes) add("trace.importOrder")
             if (Scope.EVENT in s.facts.usedScopes) add("event.importOrder")
         }
@@ -203,7 +216,7 @@ internal class CypherProjectionRenderer(
         val scoped = explicit.scopedByHierarchy(s)
         return buildList {
             addAll(scoped.log)
-            add("log.logId")
+            add(defaultLogOrder(s))
             addAll(scoped.trace)
             if (Scope.TRACE in s.facts.usedScopes || Scope.EVENT in s.facts.usedScopes) {
                 add("trace.importOrder")
@@ -251,6 +264,22 @@ internal class CypherProjectionRenderer(
         )
         return "log.logId AS $SYNTHETIC_LOG_ID_ALIAS"
     }
+
+    private fun logOrderColumnIfNeeded(s: CypherBuildState): String? {
+        if (s.plan.source.dataStoreId == null) return null
+        s.registerSyntheticColumnAlias(
+            alias = SYNTHETIC_LOG_ORDER_ALIAS,
+            scope = Scope.LOG,
+        )
+        return "log.createdAt AS $SYNTHETIC_LOG_ORDER_ALIAS"
+    }
+
+    private fun defaultLogOrder(s: CypherBuildState): String =
+        if (s.plan.source.dataStoreId != null) {
+            "log.createdAt, log.logId"
+        } else {
+            "log.logId"
+        }
 
     private fun traceIdColumn(s: CypherBuildState): String {
         s.registerSyntheticColumnAlias(

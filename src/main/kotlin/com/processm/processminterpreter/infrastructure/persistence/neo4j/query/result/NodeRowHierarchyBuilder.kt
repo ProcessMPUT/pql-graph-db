@@ -2,6 +2,7 @@ package com.processm.processminterpreter.infrastructure.persistence.neo4j.query.
 
 import com.processm.processminterpreter.domain.log.xes.XesLog
 import com.processm.processminterpreter.domain.pql.catalog.Scope
+import com.processm.processminterpreter.infrastructure.persistence.neo4j.query.cypher.SYNTHETIC_GROUPED_EVENT_ALIAS
 
 internal class NodeRowHierarchyBuilder {
     fun reconstruct(
@@ -57,15 +58,16 @@ internal class NodeRowHierarchyBuilder {
             row: Map<String, Any?>,
             eventList: List<Map<String, Any?>>?,
         ) {
+            val groupedEvent = row[SYNTHETIC_GROUPED_EVENT_ALIAS] == true
             when {
-                eventList != null -> eventList.forEach { addEvent(it) }
-                row.hasNodeColumn("event") -> addEvent(row.nodeProperties("event"))
+                eventList != null -> eventList.forEach { addEvent(it, groupedEvent) }
+                row.hasNodeColumn("event") -> addEvent(row.nodeProperties("event"), groupedEvent)
             }
         }
 
-        private fun TraceBuilder.addEvent(props: Map<String, Any?>) {
+        private fun TraceBuilder.addEvent(props: Map<String, Any?>, groupedEvent: Boolean) {
             val eventBuilder = EventBuilder()
-            if (Scope.EVENT in selectedScopes) {
+            if (Scope.EVENT in selectedScopes || groupedEvent) {
                 eventBuilder.absorbNode(props)
             }
             events.add(eventBuilder)

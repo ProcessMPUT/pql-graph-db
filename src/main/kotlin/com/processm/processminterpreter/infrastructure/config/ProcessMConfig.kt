@@ -1,6 +1,6 @@
 package com.processm.processminterpreter.infrastructure.config
 
-import com.processm.processminterpreter.domain.pql.plan.HierarchicalLimits
+import com.processm.processminterpreter.domain.pql.common.HierarchicalLimits
 import org.springframework.boot.context.properties.ConfigurationProperties
 import org.springframework.context.annotation.Configuration
 

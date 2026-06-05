@@ -1,6 +1,6 @@
 package com.processm.processminterpreter.infrastructure.persistence.neo4j.query.result
 
-import com.processm.processminterpreter.domain.log.xes.XesNestedAttributePath
+import com.processm.processminterpreter.infrastructure.persistence.neo4j.property.NestedAttributePathCodec
 import com.processm.processminterpreter.domain.pql.catalog.Scope
 import com.processm.processminterpreter.infrastructure.persistence.neo4j.query.cypher.ColumnAlias
 import com.processm.processminterpreter.infrastructure.persistence.neo4j.xes.schema.Neo4jXesSchema
@@ -43,7 +43,7 @@ internal fun Map<String, Any?>.nodeAttributes(
     sequence {
         for ((physical, value) in this@nodeAttributes) {
             if (value == null) continue
-            if (XesNestedAttributePath.parseEncoded(physical) != null) continue
+            if (NestedAttributePathCodec.parseEncoded(physical) != null) continue
             if (Neo4jXesSchema.isStorageMetadata(scope, physical)) continue
             yield(
                 NodeAttributeValue(

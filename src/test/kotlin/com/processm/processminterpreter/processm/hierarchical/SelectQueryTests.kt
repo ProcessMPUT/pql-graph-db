@@ -10,7 +10,6 @@ import org.springframework.context.annotation.Import
 import java.time.Duration
 import java.time.Instant
 import java.time.ZoneOffset
-import java.util.UUID
 import kotlin.math.abs
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -156,7 +155,7 @@ class SelectQueryTests : HierarchicalTestsBase() {
         // l:* selected — all log attributes should be present
         assertEquals("JournalReview", log.conceptName, "log conceptName should be JournalReview")
         assertEquals("standard", log.lifecycleModel, "log lifecycle:model should be standard")
-        assertEquals(UUID.fromString(journalLogId), log.identityId)
+        assertNull(log.identityId, "storage logId must not leak as XES identity:id")
         // log.customAttributes from XES file
         assertTrue(
             log.customAttributes["source"].let { it is String && it == "CPN Tools" },

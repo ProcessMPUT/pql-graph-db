@@ -3,7 +3,7 @@ package com.processm.processminterpreter.application.ports
 import com.processm.processminterpreter.domain.log.xes.XesLog
 import com.processm.processminterpreter.domain.pql.catalog.Scope
 import com.processm.processminterpreter.domain.pql.plan.CandidateLogPlan
-import com.processm.processminterpreter.domain.pql.plan.HierarchicalLimits
+import com.processm.processminterpreter.domain.pql.common.HierarchicalLimits
 import com.processm.processminterpreter.domain.pql.plan.LogicalPlan
 
 interface QueryPlanExecutor {

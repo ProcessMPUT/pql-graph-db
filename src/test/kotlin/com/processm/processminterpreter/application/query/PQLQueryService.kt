@@ -1,7 +1,7 @@
 package com.processm.processminterpreter.application.query
 
 import com.processm.processminterpreter.domain.pql.error.PQLCompileError
-import com.processm.processminterpreter.domain.pql.plan.HierarchicalLimits
+import com.processm.processminterpreter.domain.pql.common.HierarchicalLimits
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
 

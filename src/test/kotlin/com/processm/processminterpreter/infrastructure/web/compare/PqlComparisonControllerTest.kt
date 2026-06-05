@@ -5,7 +5,7 @@ import com.processm.processminterpreter.application.ports.RemoteProcessMGateway
 import com.processm.processminterpreter.application.compatibility.VerifyPqlQueryRequest as VerifyPqlQueryUseCaseRequest
 import com.processm.processminterpreter.application.compatibility.VerifyPqlQueryResult
 import com.processm.processminterpreter.application.compatibility.VerifyPqlQueryUseCase
-import com.processm.processminterpreter.domain.pql.plan.HierarchicalLimits
+import com.processm.processminterpreter.domain.pql.common.HierarchicalLimits
 import com.processm.processminterpreter.infrastructure.config.ProcessMConfig
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test

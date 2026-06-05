@@ -11,6 +11,3 @@ data class RawSelectColumn(
     val alias: String? = null,
     val starAt: Scope? = null,
 )
-
-data class RawLimitSpec(val log: Long? = null, val trace: Long? = null, val event: Long? = null)
-data class RawOffsetSpec(val log: Long? = null, val trace: Long? = null, val event: Long? = null)

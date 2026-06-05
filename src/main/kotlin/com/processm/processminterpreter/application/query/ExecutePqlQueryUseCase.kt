@@ -4,7 +4,7 @@ import com.processm.processminterpreter.domain.log.xes.XesLog
 import com.processm.processminterpreter.domain.pql.catalog.AttributeKind
 import com.processm.processminterpreter.domain.pql.catalog.Scope
 import com.processm.processminterpreter.domain.pql.plan.LogicalPlan
-import com.processm.processminterpreter.domain.pql.plan.HierarchicalLimits
+import com.processm.processminterpreter.domain.pql.common.HierarchicalLimits
 import com.processm.processminterpreter.domain.pql.plan.Projection
 import com.processm.processminterpreter.domain.pql.resolved.ResolvedAttribute
 import com.processm.processminterpreter.application.ports.DeleteExecutionResult

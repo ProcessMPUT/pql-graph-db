@@ -21,6 +21,7 @@ data class PQLVerificationResponse(
     val remoteRequestUrl: String? = null,
     val remoteAdaptedQuery: String? = null,
     val remoteDataStoreId: String? = null,
+    val comparisonStatus: String = "MISMATCH",
     val details: String,
 )
 

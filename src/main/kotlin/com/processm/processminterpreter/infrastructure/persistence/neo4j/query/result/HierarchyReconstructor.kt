@@ -2,8 +2,8 @@ package com.processm.processminterpreter.infrastructure.persistence.neo4j.query.
 
 import com.processm.processminterpreter.domain.log.xes.XesLog
 import com.processm.processminterpreter.domain.pql.catalog.Scope
-import com.processm.processminterpreter.domain.pql.plan.HierarchicalLimits
-import com.processm.processminterpreter.domain.pql.plan.HierarchicalOffsets
+import com.processm.processminterpreter.domain.pql.common.HierarchicalLimits
+import com.processm.processminterpreter.domain.pql.common.HierarchicalOffsets
 import com.processm.processminterpreter.infrastructure.persistence.neo4j.query.cypher.ColumnAlias
 
 /**

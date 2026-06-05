@@ -1,7 +1,7 @@
 package com.processm.processminterpreter.infrastructure.persistence.neo4j.query.cypher
 
 import com.processm.processminterpreter.domain.pql.catalog.Scope
-import com.processm.processminterpreter.domain.pql.plan.OrderKey
+import com.processm.processminterpreter.domain.pql.common.OrderKey
 import com.processm.processminterpreter.domain.pql.plan.ProjectedColumn
 import com.processm.processminterpreter.domain.pql.resolved.Aggregation
 import com.processm.processminterpreter.domain.pql.resolved.ResolvedAttribute
@@ -42,6 +42,9 @@ internal class CypherTraceVariantGroupByRenderer(
         val traceCountColumn = traceCountColumns.singleOrNull()
         val hoistedEventCountColumns = projectionColumns.filter { it.isHoistedEventCountProjection() }
         val variantAggregationColumns = projectionColumns.filter { it.isVariantAggregationProjection() }
+        val compactLogGrouping = logColumns.isEmpty() &&
+            additionalGroupKeys.none { Scope.LOG in s.facts.scopesOf(it) }
+        val selectedAllScopes = s.plan.projection.selectAll.filterValues { it }.keys
         val supportedColumns =
             logColumns.toSet() +
                 eventSelectedColumns +
@@ -67,8 +70,10 @@ internal class CypherTraceVariantGroupByRenderer(
             implicitGroupedEventAlias = GROUPED_EVENT_VALUE_ALIAS.takeIf {
                 eventSelectedColumns.isEmpty() && projectionColumns.isEmpty()
             },
-            implicitTraceCountAlias = IMPLICIT_TRACE_COUNT_ALIAS.takeIf { traceCountColumn == null },
+            includeLogNode = Scope.LOG in selectedAllScopes || projectionColumns.isEmpty() && selectedAllScopes.isEmpty(),
+            compactLogGrouping = compactLogGrouping,
             eventAttributeOrder = traceVariantEventAttributeOrder(s, groupKey),
+            singleLogScoped = s.plan.source.logId != null,
         )
     }
 
@@ -115,7 +120,7 @@ internal class CypherTraceVariantGroupByRenderer(
             scope = Scope.LOG,
         )
         s.registerSyntheticColumnAlias(
-            alias = TRACE_VARIANT_ALIAS,
+            alias = TRACE_VARIANT_KEY_ALIAS,
             scope = Scope.TRACE,
         )
         shape.additionalGroupValues.forEach { (_, alias) ->
@@ -128,13 +133,6 @@ internal class CypherTraceVariantGroupByRenderer(
         shape.traceCountColumn?.let(s::registerProjectedColumnAlias)
         shape.hoistedEventCountColumns.forEach(s::registerProjectedColumnAlias)
         shape.variantAggregationValues.forEach { (col, _) -> s.registerProjectedColumnAlias(col) }
-        shape.implicitTraceCountAlias?.let { alias ->
-            s.registerColumnAlias(
-                alias = alias,
-                pqlExpression = "count(trace:concept:name)",
-                scope = Scope.TRACE,
-            )
-        }
         shape.selectedValues.forEach { (col, _) -> s.registerProjectedColumnAlias(col) }
         shape.implicitGroupedEventAlias?.let { alias ->
             s.registerColumnAlias(
@@ -145,11 +143,11 @@ internal class CypherTraceVariantGroupByRenderer(
             )
         }
         s.registerSyntheticColumnAlias(
-            alias = TRACE_COUNT_ALIAS,
+            alias = SYNTHETIC_NULL_EVENT_COUNT_ALIAS,
             scope = Scope.TRACE,
         )
         s.registerSyntheticColumnAlias(
-            alias = SYNTHETIC_NULL_EVENT_COUNT_ALIAS,
+            alias = SYNTHETIC_TRACE_COUNT_ALIAS,
             scope = Scope.TRACE,
         )
     }
@@ -160,6 +158,8 @@ internal class CypherTraceVariantGroupByRenderer(
     ) {
         emitPerTraceVariantCollection(s, shape)
         emitTraceVariantGrouping(s, shape)
+        emitTraceVariantWindow(s, shape)
+        emitTraceVariantLogRematch(s, shape)
         emitTraceVariantEventUnwind(s, shape)
         emitTraceVariantReturn(s, shape)
         emitTraceVariantOrder(s, shape)
@@ -170,9 +170,17 @@ internal class CypherTraceVariantGroupByRenderer(
         shape: TraceVariantShape,
     ) {
         val groupedValue = expressions.render(shape.groupKey, s)
-        s.cypher.append(" WITH log, trace, event")
+        if (shape.compactLogGrouping) {
+            s.cypher.append(" WITH log.logId AS $TRACE_VARIANT_LOG_ID_ALIAS, trace, event")
+        } else {
+            s.cypher.append(" WITH log, trace, event")
+        }
         s.cypher.append(" ORDER BY ${traceVariantEventOrder(s, shape)}")
-        s.cypher.append(" WITH log, trace")
+        if (shape.compactLogGrouping) {
+            s.cypher.append(" WITH $TRACE_VARIANT_LOG_ID_ALIAS, trace")
+        } else {
+            s.cypher.append(" WITH log, trace")
+        }
         shape.additionalGroupValues.forEach { (key, alias) ->
             s.cypher.append(", ${expressions.render(key, s)} AS $alias")
         }
@@ -183,7 +191,8 @@ internal class CypherTraceVariantGroupByRenderer(
         shape.variantAggregationValues.forEach { (col, alias) ->
             s.cypher.append(", ${expressions.renderAggregation(col.expression as Aggregation, s)} AS $alias")
         }
-        s.cypher.append(" ORDER BY log.logId, trace.importOrder")
+        val logOrder = if (shape.compactLogGrouping) TRACE_VARIANT_LOG_ID_ALIAS else "log.logId"
+        s.cypher.append(" ORDER BY $logOrder, trace.importOrder")
     }
 
     private fun emitTraceVariantGrouping(
@@ -195,13 +204,14 @@ internal class CypherTraceVariantGroupByRenderer(
 
     private fun traceVariantGroupingColumns(shape: TraceVariantShape): List<String> =
         buildList {
-            add("log")
+            if (shape.compactLogGrouping) {
+                add(TRACE_VARIANT_LOG_ID_ALIAS)
+            } else {
+                add("log")
+            }
             addAll(shape.additionalGroupValues.map { (_, alias) -> alias })
             add(TRACE_VARIANT_ALIAS)
-            add(
-                "reduce(acc = '', value IN $TRACE_VARIANT_ALIAS | acc + '|' + coalesce(toString(value), '<null>')) " +
-                    "AS $TRACE_VARIANT_KEY_ALIAS",
-            )
+            add("min(trace.importOrder) AS $TRACE_VARIANT_KEY_ALIAS")
             addAll(shape.selectedValues.map { (_, alias) -> alias })
             add("collect(trace.importOrder) AS $TRACE_GROUP_ORDER_ALIAS")
             add("count(trace) AS $TRACE_COUNT_ALIAS")
@@ -212,14 +222,76 @@ internal class CypherTraceVariantGroupByRenderer(
             )
         }
 
+    private fun emitTraceVariantWindow(
+        s: CypherBuildState,
+        shape: TraceVariantShape,
+    ) {
+        if (!shape.singleLogScoped) {
+            return
+        }
+
+        val traceLimit = CypherEffectiveLimits.trace(s)
+        val traceOffset = s.plan.offsets.trace?.coerceAtLeast(0) ?: 0
+        if (traceLimit == null && traceOffset == 0L) {
+            return
+        }
+
+        s.cypher.append(" ORDER BY ")
+            .append(traceVariantOrderTerms(s, shape).joinToString(", "))
+        if (traceOffset > 0) {
+            val offsetParam = s.bindParam(traceOffset)
+            s.cypher.append(" SKIP \$$offsetParam")
+        }
+        if (traceLimit != null) {
+            val limitParam = s.bindParam(traceLimit)
+            s.cypher.append(" LIMIT \$$limitParam")
+        }
+    }
+
+    private fun emitTraceVariantLogRematch(
+        s: CypherBuildState,
+        shape: TraceVariantShape,
+    ) {
+        if (shape.compactLogGrouping) {
+            s.cypher.append(" MATCH (log:Log {logId: $TRACE_VARIANT_LOG_ID_ALIAS})")
+        }
+    }
+
     private fun emitTraceVariantEventUnwind(
         s: CypherBuildState,
         shape: TraceVariantShape,
     ) {
         if (shape.emitsEventRows) {
             val eventValues = shape.selectedValues.firstOrNull()?.second ?: TRACE_VARIANT_ALIAS
-            s.cypher.append(" UNWIND range(0, size($eventValues) - 1) AS $EVENT_INDEX_ALIAS")
+            val eventIndexes = traceVariantEventIndexes(s, eventValues)
+            if (eventIndexes == null) {
+                s.cypher.append(" UNWIND range(0, size($eventValues) - 1) AS $EVENT_INDEX_ALIAS")
+            } else {
+                s.cypher.append(" WITH *, $eventIndexes AS $EVENT_INDEXES_ALIAS")
+                s.cypher.append(" UNWIND $EVENT_INDEXES_ALIAS AS $EVENT_INDEX_ALIAS")
+            }
         }
+    }
+
+    private fun traceVariantEventIndexes(
+        s: CypherBuildState,
+        eventValues: String,
+    ): String? {
+        val eventLimit = CypherEffectiveLimits.event(s)
+        val eventOffset = s.plan.offsets.event?.coerceAtLeast(0) ?: 0
+        if (eventLimit == null && eventOffset == 0L) {
+            return null
+        }
+
+        val startParam = s.bindParam(eventOffset)
+        val endExpression = if (eventLimit == null) {
+            "size($eventValues)"
+        } else {
+            val endParam = s.bindParam(eventOffset + eventLimit)
+            "CASE WHEN size($eventValues) < \$$endParam THEN size($eventValues) ELSE \$$endParam END"
+        }
+        return "CASE WHEN size($eventValues) <= \$$startParam THEN [] " +
+            "ELSE range(\$$startParam, $endExpression - 1) END"
     }
 
     private fun emitTraceVariantReturn(
@@ -235,7 +307,9 @@ internal class CypherTraceVariantGroupByRenderer(
     ): List<String> =
         buildList {
             add("log.logId AS $SYNTHETIC_LOG_ID_ALIAS")
-            add("$TRACE_VARIANT_KEY_ALIAS AS $TRACE_VARIANT_ALIAS")
+            add(traceVariantLogMetadataProjection(shape))
+            if (shape.includeLogNode) add(traceVariantLogNodeProjection(shape))
+            add("$TRACE_VARIANT_KEY_ALIAS AS $TRACE_VARIANT_KEY_ALIAS")
             add("size($TRACE_VARIANT_ALIAS) AS $SYNTHETIC_NULL_EVENT_COUNT_ALIAS")
             shape.additionalGroupValues.forEach { (_, alias) ->
                 add("$alias AS $alias")
@@ -255,38 +329,46 @@ internal class CypherTraceVariantGroupByRenderer(
             shape.variantAggregationValues.forEach { (col, alias) ->
                 add("$alias AS ${col.alias}")
             }
-            shape.implicitTraceCountAlias?.let { alias ->
-                add("$TRACE_COUNT_ALIAS AS $alias")
-            }
             shape.selectedValues.forEach { (col, alias) ->
                 add("$alias[$EVENT_INDEX_ALIAS] AS ${col.alias}")
             }
             shape.implicitGroupedEventAlias?.let { alias ->
                 add("$TRACE_VARIANT_ALIAS[$EVENT_INDEX_ALIAS] AS $alias")
             }
-            add("$TRACE_COUNT_ALIAS AS $TRACE_COUNT_ALIAS")
+            add("$TRACE_COUNT_ALIAS AS $SYNTHETIC_TRACE_COUNT_ALIAS")
+        }
+
+    private fun traceVariantLogMetadataProjection(shape: TraceVariantShape): String =
+        if (shape.emitsEventRows) {
+            conditionalLogMetadataProjection("$EVENT_INDEX_ALIAS = 0")
+        } else {
+            logMetadataProjection()
+        }
+
+    private fun traceVariantLogNodeProjection(shape: TraceVariantShape): String =
+        if (shape.emitsEventRows) {
+            conditionalLogNodeProjection("$EVENT_INDEX_ALIAS = 0")
+        } else {
+            logNodeProjection()
         }
 
     private fun emitTraceVariantOrder(
         s: CypherBuildState,
         shape: TraceVariantShape,
     ) {
-        if (shape.variantAggregationValues.isNotEmpty()) {
-            val order = traceVariantAggregationOrder(s, shape.variantAggregationValues)
-            s.cypher.append(" ORDER BY ${order.first} ${order.second}${shape.eventIndexOrder}")
-        } else {
-            val orderTerms = traceVariantOuterOrderTerms(s, shape).ifEmpty { listOf(TRACE_GROUP_ORDER_ALIAS) }
-            s.cypher.append(" ORDER BY ").append(orderTerms.joinToString(", ")).append(shape.eventIndexOrder)
-        }
+        s.cypher.append(" ORDER BY ")
+            .append(traceVariantOrderTerms(s, shape).joinToString(", "))
+            .append(shape.eventIndexOrder)
     }
 
     private fun traceVariantEventOrder(s: CypherBuildState, shape: TraceVariantShape): String {
         val eventAttributeOrder = shape.eventAttributeOrder
+        val logOrder = if (shape.compactLogGrouping) TRACE_VARIANT_LOG_ID_ALIAS else "log.logId"
         return if (eventAttributeOrder != null) {
             val orderValue = expressions.render(eventAttributeOrder.expression, s)
-            "log.logId, trace.importOrder, $orderValue ${eventAttributeOrder.direction.name}, event.importOrder"
+            "$logOrder, trace.importOrder, $orderValue ${eventAttributeOrder.direction.name}, event.importOrder"
         } else {
-            "log.logId, trace.importOrder, event.importOrder"
+            "$logOrder, trace.importOrder, event.importOrder"
         }
     }
 
@@ -362,6 +444,17 @@ internal class CypherTraceVariantGroupByRenderer(
             ?.second
     }
 
+    private fun traceVariantOrderTerms(
+        s: CypherBuildState,
+        shape: TraceVariantShape,
+    ): List<String> =
+        if (shape.variantAggregationValues.isNotEmpty()) {
+            val order = traceVariantAggregationOrder(s, shape.variantAggregationValues)
+            listOf("${order.first} ${order.second}")
+        } else {
+            traceVariantOuterOrderTerms(s, shape).ifEmpty { listOf(TRACE_GROUP_ORDER_ALIAS) }
+        }
+
     private fun isTraceCountAggregation(aggregation: Aggregation): Boolean {
         if (!aggregation.name.equals("count", ignoreCase = true)) return false
         val argument = aggregation.argument as? ResolvedAttribute ?: return false
@@ -377,8 +470,10 @@ internal class CypherTraceVariantGroupByRenderer(
         val hoistedEventCountColumns: List<ProjectedColumn>,
         val variantAggregationValues: List<Pair<ProjectedColumn, String>>,
         val implicitGroupedEventAlias: String?,
-        val implicitTraceCountAlias: String?,
+        val includeLogNode: Boolean,
+        val compactLogGrouping: Boolean,
         val eventAttributeOrder: OrderKey?,
+        val singleLogScoped: Boolean,
     ) {
         val emitsEventRows: Boolean
             get() = selectedValues.isNotEmpty() || implicitGroupedEventAlias != null
@@ -395,9 +490,10 @@ internal class CypherTraceVariantGroupByRenderer(
 }
 
 private const val TRACE_VARIANT_ALIAS = "_trace_variant_"
+private const val TRACE_VARIANT_LOG_ID_ALIAS = "_trace_variant_log_id_"
 private const val TRACE_VARIANT_KEY_ALIAS = "_trace_variant_key_"
 private const val TRACE_GROUP_ORDER_ALIAS = "_trace_group_order_"
 private const val TRACE_COUNT_ALIAS = "_order_0"
 private const val EVENT_INDEX_ALIAS = "_event_idx_"
+private const val EVENT_INDEXES_ALIAS = "_event_indexes_"
 private const val GROUPED_EVENT_VALUE_ALIAS = "_grouped_event_value_"
-private const val IMPLICIT_TRACE_COUNT_ALIAS = "count_trace_concept_name"

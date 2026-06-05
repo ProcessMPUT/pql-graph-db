@@ -4,12 +4,11 @@ import com.processm.processminterpreter.domain.pql.catalog.AttributeKind
 import com.processm.processminterpreter.domain.pql.catalog.Scope
 import com.processm.processminterpreter.domain.pql.catalog.StandardAttributeCatalog
 import com.processm.processminterpreter.domain.pql.catalog.Type
+import com.processm.processminterpreter.domain.pql.common.HierarchicalLimits
+import com.processm.processminterpreter.domain.pql.common.HierarchicalOffsets
 import com.processm.processminterpreter.domain.pql.plan.GroupBySpec
-import com.processm.processminterpreter.domain.pql.plan.HierarchicalLimits
-import com.processm.processminterpreter.domain.pql.plan.HierarchicalOffsets
 import com.processm.processminterpreter.domain.pql.plan.LogicalPlan
 import com.processm.processminterpreter.domain.pql.plan.LogicalSource
-import com.processm.processminterpreter.domain.pql.plan.OrderKey
 import com.processm.processminterpreter.domain.pql.plan.ProjectedColumn
 import com.processm.processminterpreter.domain.pql.plan.Projection
 import com.processm.processminterpreter.domain.pql.resolved.Aggregation
@@ -76,9 +75,9 @@ class Planner(
             projection = projection,
             filter = q.where,
             groupBy = groupBy,
-            orderBy = q.orderBy.map { OrderKey(it.expression, it.direction) },
-            limits = HierarchicalLimits(log = q.limit.log, trace = q.limit.trace, event = q.limit.event),
-            offsets = HierarchicalOffsets(log = q.offset.log, trace = q.offset.trace, event = q.offset.event),
+            orderBy = q.orderBy,
+            limits = q.limit,
+            offsets = q.offset,
             defaultLimits = defaultLimits,
             location = q.location,
         )
@@ -115,8 +114,52 @@ class Planner(
             }
             addProjectedColumn(projected, expr, col.alias, i, q.from)
         }
+        if (q.implicitAll && q.groupBy.isNotEmpty()) {
+            applyImplicitGroupByProjection(q, starScopes, projected)
+        }
         return Projection(columns = projected, selectAll = starScopes, implicitAll = q.implicitAll)
     }
+
+    private fun applyImplicitGroupByProjection(
+        q: ResolvedQuery.Select,
+        starScopes: MutableMap<Scope, Boolean>,
+        projected: MutableList<ProjectedColumn>,
+    ) {
+        q.groupBy
+            .filterIsInstance<ResolvedAttribute>()
+            .groupBy { it.effectiveScope }
+            .forEach { (groupedScope, attributes) ->
+                Scope.entries
+                    .filter { it.ordinal >= groupedScope.ordinal }
+                    .forEach(starScopes::remove)
+
+                attributes.forEach { grouped ->
+                    addImplicitGroupByAttribute(
+                        projected = projected,
+                        attr = grouped.dropHoisting(),
+                        defaultScope = q.from,
+                    )
+                }
+            }
+    }
+
+    private fun addImplicitGroupByAttribute(
+        projected: MutableList<ProjectedColumn>,
+        attr: ResolvedAttribute,
+        defaultScope: Scope,
+    ) {
+        val attributes = if (attr.kind == AttributeKind.CLASSIFIER) {
+            classifierProjectionAttributes(attr)
+        } else {
+            listOf(attr)
+        }
+        attributes.forEach { expanded ->
+            addProjectedColumn(projected, expanded, alias = null, index = projected.size, defaultScope = defaultScope)
+        }
+    }
+
+    private fun ResolvedAttribute.dropHoisting(): ResolvedAttribute =
+        if (effectiveScope == baseScope) this else copy(effectiveScope = baseScope)
 
     private fun addProjectedColumn(
         projected: MutableList<ProjectedColumn>,

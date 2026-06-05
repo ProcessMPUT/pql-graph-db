@@ -65,9 +65,5 @@ object AttributeReferenceParser {
         )
     }
 
-    private fun isKnownScopeHint(s: String): Boolean = try {
-        Scope.parse(s); true
-    } catch (e: IllegalArgumentException) {
-        false
-    }
+    private fun isKnownScopeHint(s: String): Boolean = Scope.tryParse(s) != null
 }

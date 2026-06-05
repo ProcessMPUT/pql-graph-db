@@ -31,7 +31,8 @@ internal class CypherAggregationWithRenderer(
             return
         }
 
-        val columns = buildWithColumns(s)
+        val precomputedAliases = emitTraceScopedHoistedAggregations(s)
+        val columns = buildWithColumns(s, precomputedAliases)
         if (columns.isNotEmpty()) {
             s.cypher.append(" WITH ").append(columns.joinToString(", "))
         }
@@ -53,25 +54,41 @@ internal class CypherAggregationWithRenderer(
             },
         )
 
-    private fun buildWithColumns(s: CypherBuildState): List<String> =
-        passThroughBindings(s) +
+    private fun buildWithColumns(
+        s: CypherBuildState,
+        precomputedAliases: List<String>,
+    ): List<String> =
+        passThroughBindings(s, precomputedAliases) +
             groupKeyColumns(s) +
             complexAggregationColumns(s)
 
-    private fun passThroughBindings(s: CypherBuildState): List<String> =
+    private fun passThroughBindings(
+        s: CypherBuildState,
+        precomputedAliases: List<String>,
+    ): List<String> =
         buildList {
             add("log")
             if (Scope.TRACE in s.facts.usedScopes || Scope.EVENT in s.facts.usedScopes) add("trace")
             if (Scope.EVENT in s.facts.usedScopes) add("event")
+            addAll(precomputedAliases)
         }
 
     private fun groupKeyColumns(s: CypherBuildState): List<String> =
-        s.plan.groupBy?.keys?.mapIndexed { idx, key ->
-            val alias = "_gb_$idx"
-            val rendered = expressions.render(key, s)
-            s.registerGroupByAlias(expressions.exprKey(key), alias)
-            "$rendered AS $alias"
-        } ?: emptyList()
+        buildList {
+            val groupKeys = s.plan.groupBy?.keys ?: return@buildList
+            groupKeys.forEachIndexed { idx, key ->
+                val alias = "_gb_$idx"
+                val rendered = expressions.render(key, s)
+                s.registerGroupByAlias(expressions.exprKey(key), alias)
+                add("$rendered AS $alias")
+            }
+            if (groupKeys.any { Scope.EVENT in s.facts.scopesOf(it) }) {
+                s.registerSyntheticColumnAlias(
+                    alias = SYNTHETIC_EVENT_GROUP_ORDER_ALIAS,
+                    scope = Scope.EVENT,
+                )
+            }
+        }
 
     private fun complexAggregationColumns(s: CypherBuildState): List<String> =
         buildList {
@@ -79,6 +96,53 @@ internal class CypherAggregationWithRenderer(
                 collectComplexAggregations(col.expression, s, this)
             }
         }
+
+    private fun emitTraceScopedHoistedAggregations(s: CypherBuildState): List<String> {
+        if (!needsTraceScopedHoistedPrecompute(s)) return emptyList()
+
+        val aliases = linkedMapOf<String, String>()
+        traceScopedHoistedAggregations(s).forEach { aggregation ->
+            val key = expressions.exprKey(aggregation)
+            aliases.getOrPut(key) {
+                s.complexAggregationAlias(key) ?: "_cagg_${s.nextCaggId()}".also { alias ->
+                    s.registerComplexAggregationAlias(key, alias)
+                }
+            }
+        }
+        if (aliases.isEmpty()) return emptyList()
+
+        val returnColumns = traceScopedHoistedAggregations(s)
+            .distinctBy(expressions::exprKey)
+            .joinToString(", ") { aggregation ->
+                val alias = aliases.getValue(expressions.exprKey(aggregation))
+                val rendered = s.withHoistedEventNodeVar(TRACE_AGG_EVENT_ALIAS) {
+                    expressions.renderAggregation(aggregation, s)
+                }
+                "$rendered AS $alias"
+            }
+
+        s.cypher.append(
+            " CALL { WITH trace MATCH (trace)-[:HAS_EVENT]->($TRACE_AGG_EVENT_ALIAS:Event) RETURN $returnColumns }",
+        )
+        return aliases.values.toList()
+    }
+
+    private fun needsTraceScopedHoistedPrecompute(s: CypherBuildState): Boolean {
+        val filter = s.plan.filter
+        if (filter != null && Scope.EVENT in s.facts.scopesOf(filter)) return false
+        val groupKeys = s.plan.groupBy?.keys ?: return false
+        return groupKeys.any { Scope.EVENT in s.facts.scopesOf(it) }
+    }
+
+    private fun traceScopedHoistedAggregations(s: CypherBuildState): List<Aggregation> =
+        (s.plan.projection.columns.map { it.expression } + s.plan.orderBy.map { it.expression })
+            .flatMap(CypherAggregationInspector::aggregationsIn)
+            .filter(::isTraceScopedHoistedEventAggregation)
+
+    private fun isTraceScopedHoistedEventAggregation(aggregation: Aggregation): Boolean {
+        val attribute = aggregation.argument as? ResolvedAttribute ?: return false
+        return attribute.baseScope == Scope.EVENT && attribute.effectiveScope == Scope.TRACE
+    }
 
     private fun collectComplexAggregations(
         expression: ResolvedExpression,
@@ -136,3 +200,5 @@ internal class CypherAggregationWithRenderer(
             get() = trace && !event
     }
 }
+
+private const val TRACE_AGG_EVENT_ALIAS = "_trace_agg_event"

@@ -1,7 +1,7 @@
 package com.processm.processminterpreter.domain.pql.resolved
 
-import com.processm.processminterpreter.domain.pql.syntax.BinaryOperator
-import com.processm.processminterpreter.domain.pql.syntax.UnaryOperator
+import com.processm.processminterpreter.domain.pql.catalog.BinaryOperator
+import com.processm.processminterpreter.domain.pql.catalog.UnaryOperator
 import com.processm.processminterpreter.domain.pql.catalog.Scope
 import com.processm.processminterpreter.domain.pql.catalog.SourceLocation
 import com.processm.processminterpreter.domain.pql.catalog.Type

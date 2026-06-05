@@ -1,7 +1,7 @@
 package com.processm.processminterpreter.infrastructure.persistence.neo4j.property
 
 import com.processm.processminterpreter.domain.log.xes.XesAttributeValue
-import com.processm.processminterpreter.domain.log.xes.XesNestedAttributePath
+import com.processm.processminterpreter.infrastructure.persistence.neo4j.property.NestedAttributePathCodec
 import com.processm.processminterpreter.infrastructure.persistence.neo4j.xes.metadata.XesLogMetadataCodec
 import java.time.Instant
 import java.time.LocalDateTime
@@ -41,7 +41,7 @@ object Neo4jPropertySanitizer {
             for ((childKey, childValue) in value.children) {
                 if (childValue == null) continue
                 put(
-                    XesNestedAttributePath.encodedChildKey(key, childKey),
+                    NestedAttributePathCodec.encodedChildKey(key, childKey),
                     sanitizeValue(unwrapScalar(childValue)),
                 )
             }

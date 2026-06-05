@@ -1,10 +1,12 @@
 package com.processm.processminterpreter.infrastructure.processm.json
 
 import com.processm.processminterpreter.domain.log.GlobalAttribute
+import com.processm.processminterpreter.domain.log.xes.XesAttributeValue
 import com.processm.processminterpreter.domain.log.xes.XesEvent
 import com.processm.processminterpreter.domain.log.xes.XesLog
 import com.processm.processminterpreter.domain.log.xes.XesTrace
 import org.slf4j.LoggerFactory
+import java.nio.charset.StandardCharsets
 import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
@@ -79,6 +81,7 @@ object XESJsonConverter {
     fun convertToXESJson(
         logs: List<XesLog>,
         isProjectedQuery: Boolean = false,
+        logSelectAll: Boolean = false,
         projectedTraceAttrs: Set<String> = emptySet(),
         includeTraces: Boolean = true,
         includeEvents: Boolean = true,
@@ -90,12 +93,34 @@ object XESJsonConverter {
         }
 
         val log = logs.first()
-        return mapOf("log" to convertLog(log, isProjectedQuery, projectedTraceAttrs, includeTraces, includeEvents))
+        return mapOf("log" to convertLog(log, isProjectedQuery, logSelectAll, projectedTraceAttrs, includeTraces, includeEvents))
     }
+
+    fun convertToXESJsonDocuments(
+        logs: List<XesLog>,
+        isProjectedQuery: Boolean = false,
+        logSelectAll: Boolean = false,
+        projectedTraceAttrs: Set<String> = emptySet(),
+        includeTraces: Boolean = true,
+        includeEvents: Boolean = true,
+    ): List<Map<String, Any?>> =
+        logs.map { log ->
+            mapOf(
+                "log" to convertLog(
+                    log,
+                    isProjectedQuery,
+                    logSelectAll,
+                    projectedTraceAttrs,
+                    includeTraces,
+                    includeEvents,
+                ),
+            )
+        }
 
     private fun convertLog(
         log: XesLog,
         isProjectedQuery: Boolean = false,
+        logSelectAll: Boolean = false,
         projectedTraceAttrs: Set<String> = emptySet(),
         includeTraces: Boolean = true,
         includeEvents: Boolean = true,
@@ -106,9 +131,10 @@ object XESJsonConverter {
         )
 
         appendExtensions(result, log)
-        if (!isProjectedQuery) appendGlobals(result, log)
+        if (!isProjectedQuery || logSelectAll) appendGlobals(result, log)
         appendClassifiers(result, log)
-        result.putAll(processMJsonAttributeView(logAttributes(log, isProjectedQuery)))
+        result.putAll(processMJsonAttributeView(logAttributes(log, isProjectedQuery, logSelectAll)))
+        appendLogIdentityId(result, log, isProjectedQuery, logSelectAll)
         appendTraces(result, log, isProjectedQuery, projectedTraceAttrs, includeTraces, includeEvents)
 
         return result
@@ -173,10 +199,11 @@ object XESJsonConverter {
     private fun logAttributes(
         log: XesLog,
         isProjectedQuery: Boolean,
+        logSelectAll: Boolean,
     ): Map<String, Any?> {
         val attributes = linkedMapOf<String, Any?>()
 
-        if (isProjectedQuery) {
+        if (isProjectedQuery && !logSelectAll) {
             log.conceptName
                 ?.takeIf { it != UNKNOWN_CONCEPT_NAME }
                 ?.let { attributes[ATTR_CONCEPT_NAME] = it }
@@ -191,11 +218,31 @@ object XESJsonConverter {
             }
         }
 
-        if (!isProjectedQuery && !log.customAttributes.containsKey(ATTR_IDENTITY_ID)) {
-            log.identityId?.let { attributes[ATTR_IDENTITY_ID] = it }
-        }
-
         return attributes
+    }
+
+    private fun appendLogIdentityId(
+        result: MutableMap<String, Any>,
+        log: XesLog,
+        isProjectedQuery: Boolean,
+        logSelectAll: Boolean,
+    ) {
+        if (isProjectedQuery && !logSelectAll) return
+        if (log.customAttributes.containsKey(ATTR_IDENTITY_ID)) return
+        val identityId = log.identityId ?: syntheticLogIdentityId(log)
+        result["id"] = mapOf("@key" to ATTR_IDENTITY_ID, "@value" to identityId.toString())
+    }
+
+    private fun syntheticLogIdentityId(log: XesLog): UUID {
+        val seed = buildString {
+            append("processm-json-log:")
+            append(log.conceptName ?: "")
+            append('|')
+            log.customAttributes.toSortedMap().forEach { (key, value) ->
+                append(key).append('=').append(value).append(';')
+            }
+        }
+        return UUID.nameUUIDFromBytes(seed.toByteArray(StandardCharsets.UTF_8))
     }
 
     private fun appendTraces(
@@ -330,20 +377,22 @@ object XESJsonConverter {
     private fun attributeToken(
         key: String,
         value: Any?,
-    ): AttributeToken =
-        when (value) {
+    ): AttributeToken {
+        val scalarValue = if (value is XesAttributeValue) value.value else value
+        return when (scalarValue) {
             null -> AttributeToken("string", key, "null")
-            is String -> AttributeToken("string", key, value)
-            is Int, is Long -> AttributeToken("int", key, value.toString())
-            is Float, is Double -> AttributeToken("float", key, value.toString())
-            is Boolean -> AttributeToken("boolean", key, value.toString())
-            is UUID -> AttributeToken("id", key, value.toString())
-            is Instant -> AttributeToken("date", key, formatTimestamp(value))
-            is java.time.ZonedDateTime -> AttributeToken("date", key, formatTimestamp(value.toInstant()))
+            is String -> AttributeToken("string", key, scalarValue)
+            is Int, is Long -> AttributeToken("int", key, scalarValue.toString())
+            is Float, is Double -> AttributeToken("float", key, scalarValue.toString())
+            is Boolean -> AttributeToken("boolean", key, scalarValue.toString())
+            is UUID -> AttributeToken("id", key, scalarValue.toString())
+            is Instant -> AttributeToken("date", key, formatTimestamp(scalarValue))
+            is java.time.ZonedDateTime -> AttributeToken("date", key, formatTimestamp(scalarValue.toInstant()))
             is java.time.LocalDateTime ->
-                AttributeToken("date", key, formatTimestamp(value.toInstant(ZoneOffset.UTC)))
-            else -> AttributeToken("string", key, value.toString())
+                AttributeToken("date", key, formatTimestamp(scalarValue.toInstant(ZoneOffset.UTC)))
+            else -> AttributeToken("string", key, scalarValue.toString())
         }
+    }
 
     private data class AttributeToken(
         val type: String,

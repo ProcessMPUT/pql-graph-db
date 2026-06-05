@@ -443,7 +443,7 @@ class QueryTests : HierarchicalTestsBase() {
         standardLogAssertions(log)
         assertEquals("JournalReview", log.conceptName)
         assertEquals("standard", log.lifecycleModel)
-        assertEquals(java.util.UUID.fromString(journalLogId), log.identityId)
+        assertNull(log.identityId, "storage logId must not leak as XES identity:id")
         val traces = log.traces.toList()
         assertEquals(101, traces.size, "Should have 101 groups (one per trace)")
 
@@ -678,12 +678,6 @@ class QueryTests : HierarchicalTestsBase() {
         val variants = log.traces.toList()
         assertEquals(78, variants.size, "Should have 78 unique trace-variants (order-insensitive grouping)")
 
-        // Helper: check that variants with the given count value include each expected sequence
-        // (trace.customAttributes["count(trace:concept:name)"] replaces trace.count from ProcessM)
-        fun traceCount(trace: XesTrace): Int =
-            (trace.customAttributes["count(trace:concept:name)"] as? Number)?.toInt()
-                ?: error("Missing count(trace:concept:name) for variant ${trace.events.map { it.conceptName }}")
-
         fun validate(
             validTraces: List<List<String>>,
             count: Int,
@@ -692,7 +686,7 @@ class QueryTests : HierarchicalTestsBase() {
                 assertTrue(
                     variants
                         .filter {
-                            traceCount(it) == count
+                            it.count == count
                         }.any {
                             it.events
                                 .map { e -> e.conceptName }
@@ -1114,13 +1108,9 @@ class QueryTests : HierarchicalTestsBase() {
         val log = result.first()
         assertEquals(97, log.traces.count(), "Should have 97 trace-variants")
 
-        fun traceCount(trace: XesTrace): Int =
-            (trace.customAttributes["count(trace:concept:name)"] as? Number)?.toInt()
-                ?: error("Missing count(trace:concept:name) for variant ${trace.events.map { it.conceptName }}")
-
-        assertEquals(1, log.traces.count { traceCount(it) == 3 })
-        assertEquals(2, log.traces.count { traceCount(it) == 2 })
-        assertEquals(94, log.traces.count { traceCount(it) == 1 })
+        assertEquals(1, log.traces.count { it.count == 3 })
+        assertEquals(2, log.traces.count { it.count == 2 })
+        assertEquals(94, log.traces.count { it.count == 1 })
 
         val variant1 =
             listOf("inv", "inv", "get", "get", "get", "col", "col", "dec", "dec", "inv", "inv", "get", "rej", "rej")
@@ -1136,7 +1126,7 @@ class QueryTests : HierarchicalTestsBase() {
             expectedPrefixes: List<String>,
         ): Boolean =
             log.traces
-                .filter { traceCount(it) == count }
+                .filter { it.count == count }
                 .any { trace ->
                     trace.events
                         .map { event -> event.conceptName }

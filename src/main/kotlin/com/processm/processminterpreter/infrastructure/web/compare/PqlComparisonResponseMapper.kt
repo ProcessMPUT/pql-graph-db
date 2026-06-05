@@ -18,6 +18,7 @@ class PqlComparisonResponseMapper {
             remoteRequestUrl = result.remoteRequestUrl,
             remoteAdaptedQuery = result.remoteAdaptedQuery,
             remoteDataStoreId = result.remoteDataStoreId,
+            comparisonStatus = result.comparisonStatus,
             details = result.details,
         )
 

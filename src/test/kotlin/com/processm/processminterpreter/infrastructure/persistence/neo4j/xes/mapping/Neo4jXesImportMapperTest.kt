@@ -1,7 +1,7 @@
 package com.processm.processminterpreter.infrastructure.persistence.neo4j.xes.mapping
 
 import com.processm.processminterpreter.domain.log.xes.XesAttributeValue
-import com.processm.processminterpreter.domain.log.xes.XesNestedAttributePath
+import com.processm.processminterpreter.infrastructure.persistence.neo4j.property.NestedAttributePathCodec
 import com.processm.processminterpreter.domain.log.xes.XesEvent
 import com.processm.processminterpreter.domain.log.xes.XesLog
 import com.processm.processminterpreter.domain.log.xes.XesTrace
@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Test
 import java.time.Instant
 import java.time.LocalDateTime
+import java.util.UUID
 
 class Neo4jXesImportMapperTest {
     private val mapper = Neo4jXesImportMapper()
@@ -95,6 +96,19 @@ class Neo4jXesImportMapperTest {
     }
 
     @Test
+    fun `stores log identity id separately from storage logId`() {
+        val identityId = UUID.fromString("bbf3f64f-2507-4f0b-a6f8-0113377d69e4")
+        val importedAt = LocalDateTime.parse("2026-04-24T09:00:00")
+        val log = XesLog(identityId = identityId)
+
+        val batch = mapper.toImportBatch(log, requestedLogId = "log-1", importedAt = importedAt)
+
+        assertEquals("log-1", batch.logId)
+        assertEquals(identityId.toString(), batch.logAttributes["identity:id"])
+        assertEquals(false, batch.logAttributes.containsKey("logId"))
+    }
+
+    @Test
     fun `flattens nested XES attributes for query filtering while preserving parent value`() {
         val importedAt = LocalDateTime.parse("2026-04-24T09:00:00")
         val nestedAttribute = XesAttributeValue(
@@ -107,7 +121,7 @@ class Neo4jXesImportMapperTest {
         )
 
         val batch = mapper.toImportBatch(log, requestedLogId = "log-1", importedAt = importedAt)
-        val nestedKey = XesNestedAttributePath.encodedChildKey("meta_concept:named_events_total", "haptoglobine")
+        val nestedKey = NestedAttributePathCodec.encodedChildKey("meta_concept:named_events_total", "haptoglobine")
 
         assertEquals(23, batch.logAttributes[nestedKey])
         assertNotNull(batch.logAttributes["meta_concept:named_events_total"])

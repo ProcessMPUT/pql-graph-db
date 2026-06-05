@@ -12,21 +12,9 @@ class ProcessMXesJsonFormatter : ProcessMJsonFormatter {
             return emptyList()
         }
 
-        val internalKeys = setOf("t_traceId", "l_logId")
-        val resultKeys = result.rows.firstOrNull()?.keys ?: emptySet()
-        val isProjectedQuery =
-            result.hasExplicitSelect ||
-            resultKeys.any { key ->
-                key !in internalKeys && (
-                    key.startsWith("l_") || key.startsWith("t_") || key.startsWith("e_") ||
-                        key.startsWith("log_") || key.startsWith("trace_") || key.startsWith("event_")
-                )
-            } ||
-                resultKeys.any { key ->
-                    key !in internalKeys && !key.startsWith("l_") && !key.startsWith("t_") &&
-                        !key.startsWith("e_") && key !in setOf("event", "trace", "log", "e", "t", "l")
-                }
+        val isProjectedQuery = result.hasExplicitSelect
 
+        val logSelectAll = Scope.LOG in result.selectAllScopes
         val projectedTraceAttrs =
             if (Scope.TRACE in result.selectAllScopes) {
                 setOf("concept:name", "identity:id", "cost:currency", "cost:total")
@@ -34,14 +22,13 @@ class ProcessMXesJsonFormatter : ProcessMJsonFormatter {
                 result.projectedTraceStandardAttributes
             }
 
-        return listOf(
-            XESJsonConverter.convertToXESJson(
-                logs = result.logs,
-                isProjectedQuery = isProjectedQuery,
-                projectedTraceAttrs = projectedTraceAttrs,
-                includeTraces = result.includeTraces,
-                includeEvents = result.includeEvents,
-            ),
+        return XESJsonConverter.convertToXESJsonDocuments(
+            logs = result.logs,
+            isProjectedQuery = isProjectedQuery,
+            logSelectAll = logSelectAll,
+            projectedTraceAttrs = projectedTraceAttrs,
+            includeTraces = result.includeTraces,
+            includeEvents = result.includeEvents,
         )
     }
 }

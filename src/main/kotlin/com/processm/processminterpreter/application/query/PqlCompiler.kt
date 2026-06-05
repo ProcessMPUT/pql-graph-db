@@ -1,26 +1,21 @@
 package com.processm.processminterpreter.application.query
 
-import com.processm.processminterpreter.domain.pql.semantics.AttributeResolver
-import com.processm.processminterpreter.domain.pql.semantics.Planner
-import com.processm.processminterpreter.domain.pql.semantics.ResolutionContext
-import com.processm.processminterpreter.domain.pql.semantics.Resolver
-import com.processm.processminterpreter.domain.pql.semantics.Validator
-import com.processm.processminterpreter.domain.pql.plan.CandidateLogPlan
-import com.processm.processminterpreter.domain.pql.plan.HierarchicalLimits
-import com.processm.processminterpreter.domain.pql.plan.HierarchicalOffsets
-import com.processm.processminterpreter.domain.pql.plan.LogicalPlan
 import com.processm.processminterpreter.application.ports.DataStoreRepository
 import com.processm.processminterpreter.application.ports.LogRepository
 import com.processm.processminterpreter.application.ports.PqlParser
 import com.processm.processminterpreter.domain.log.Classifier
 import com.processm.processminterpreter.domain.log.Log
-import com.processm.processminterpreter.domain.pql.syntax.RawAttributeRef
-import com.processm.processminterpreter.domain.pql.syntax.RawBinaryOp
-import com.processm.processminterpreter.domain.pql.syntax.RawExpression
-import com.processm.processminterpreter.domain.pql.syntax.RawFunctionCall
-import com.processm.processminterpreter.domain.pql.syntax.RawInList
+import com.processm.processminterpreter.domain.pql.common.HierarchicalLimits
+import com.processm.processminterpreter.domain.pql.common.HierarchicalOffsets
+import com.processm.processminterpreter.domain.pql.plan.CandidateLogPlan
+import com.processm.processminterpreter.domain.pql.plan.LogicalPlan
+import com.processm.processminterpreter.domain.pql.semantics.AttributeResolver
+import com.processm.processminterpreter.domain.pql.semantics.Planner
+import com.processm.processminterpreter.domain.pql.semantics.RawClassifierProbe
+import com.processm.processminterpreter.domain.pql.semantics.ResolutionContext
+import com.processm.processminterpreter.domain.pql.semantics.Resolver
+import com.processm.processminterpreter.domain.pql.semantics.Validator
 import com.processm.processminterpreter.domain.pql.syntax.RawQuery
-import com.processm.processminterpreter.domain.pql.syntax.RawUnaryOp
 import org.springframework.stereotype.Component
 
 /**
@@ -62,27 +57,34 @@ class PqlCompiler(
         defaultLimits: HierarchicalLimits = HierarchicalLimits(),
     ): PreparedPqlQuery {
         val raw = parser.parse(query)
+        val scopedLogs = findExplicitlyScopedLogs(logId, dataStoreId)
+        val singleDataStoreLogId = scopedLogs
+            ?.singleOrNull()
+            ?.id
+            ?.takeIf { logId == null && dataStoreId != null }
+        val effectiveLogId = logId ?: singleDataStoreLogId
+        val effectiveDataStoreId = dataStoreId.takeIf { singleDataStoreLogId == null }
 
         if (
             raw is RawQuery.Select &&
-            logId == null &&
-            raw.usesClassifierReference()
+            effectiveLogId == null &&
+            RawClassifierProbe.containsClassifier(raw)
         ) {
-            val scopedLogs = findScopedLogs(logId, dataStoreId)
-            if (scopedLogs.size <= 1) {
+            val classifierScopedLogs = scopedLogs ?: findScopedLogs(logId, dataStoreId)
+            if (classifierScopedLogs.size <= 1) {
                 return PreparedPqlQuery.Single(
                     compile(
                         raw = raw,
-                        logId = logId,
-                        dataStoreId = dataStoreId,
+                        logId = effectiveLogId,
+                        dataStoreId = effectiveDataStoreId,
                         defaultLimits = defaultLimits,
-                        scopedLogs = scopedLogs,
+                        scopedLogs = classifierScopedLogs,
                     ),
                 )
             }
             return PreparedPqlQuery.PerLogSelect(
                 raw = raw,
-                candidateLogs = buildCandidateLogPlan(raw, dataStoreId),
+                candidateLogs = buildCandidateLogPlan(raw, effectiveDataStoreId),
                 outerLogLimit = raw.limit.log,
                 outerLogOffset = raw.offset.log,
                 defaultLimits = defaultLimits,
@@ -92,9 +94,10 @@ class PqlCompiler(
         return PreparedPqlQuery.Single(
             compile(
                 raw = raw,
-                logId = logId,
-                dataStoreId = dataStoreId,
+                logId = effectiveLogId,
+                dataStoreId = effectiveDataStoreId,
                 defaultLimits = defaultLimits,
+                scopedLogs = scopedLogs,
             ),
         )
     }
@@ -180,6 +183,15 @@ class PqlCompiler(
             else -> logs.findAll()
         }
 
+    private fun findExplicitlyScopedLogs(
+        logId: String?,
+        dataStoreId: String?,
+    ): List<Log>? =
+        when {
+            logId != null || dataStoreId != null -> findScopedLogs(logId, dataStoreId)
+            else -> null
+        }
+
     private fun buildCandidateLogPlan(
         raw: RawQuery.Select,
         dataStoreId: String?,
@@ -189,7 +201,7 @@ class PqlCompiler(
             columns = emptyList(),
             implicitAll = false,
             where = raw.where,
-            orderBy = raw.orderBy.filterNot { it.expression.usesClassifierReference() },
+            orderBy = raw.orderBy.filterNot { RawClassifierProbe.containsClassifier(it.expression) },
             location = raw.location,
         )
         val candidatePlan = compile(
@@ -209,21 +221,6 @@ class PqlCompiler(
             location = candidatePlan.location,
         )
     }
-
-    private fun RawQuery.Select.usesClassifierReference(): Boolean =
-        columns.any { it.expression?.usesClassifierReference() == true } ||
-            groupBy.any { it.usesClassifierReference() } ||
-            orderBy.any { it.expression.usesClassifierReference() }
-
-    private fun RawExpression.usesClassifierReference(): Boolean =
-        when (this) {
-            is RawAttributeRef -> name.startsWith("c:") || name.startsWith("classifier:")
-            is RawBinaryOp -> left.usesClassifierReference() || right.usesClassifierReference()
-            is RawUnaryOp -> operand.usesClassifierReference()
-            is RawFunctionCall -> arguments.any { it.usesClassifierReference() }
-            is RawInList -> values.any { it.usesClassifierReference() }
-            else -> false
-        }
 
     private fun LogicalPlan.Select.withoutLogWindow(): LogicalPlan.Select =
         copy(

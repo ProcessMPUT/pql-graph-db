@@ -1,0 +1,9 @@
+[
+  {
+    "name": "JournalReview + Sepsis",
+    "localDataStoreId": "replace-local-multi-log-data-store-id",
+    "remoteDataStoreId": "replace-remote-multi-log-data-store-id",
+    "primaryLogName": "JournalReview",
+    "secondaryLogName": "Sepsis"
+  }
+]

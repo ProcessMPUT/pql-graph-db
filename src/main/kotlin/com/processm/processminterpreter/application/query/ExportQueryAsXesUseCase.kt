@@ -3,7 +3,7 @@ package com.processm.processminterpreter.application.query
 import com.processm.processminterpreter.application.ports.XesWriter
 import com.processm.processminterpreter.application.ports.XesWriteOptions
 import com.processm.processminterpreter.domain.pql.catalog.Scope
-import com.processm.processminterpreter.domain.pql.plan.HierarchicalLimits
+import com.processm.processminterpreter.domain.pql.common.HierarchicalLimits
 import org.springframework.stereotype.Component
 import java.io.OutputStream
 

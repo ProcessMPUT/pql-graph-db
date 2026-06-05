@@ -13,11 +13,11 @@ import com.processm.processminterpreter.domain.pql.syntax.RawLiteralKind
 import com.processm.processminterpreter.domain.pql.syntax.RawOrderKey
 import com.processm.processminterpreter.domain.pql.syntax.RawQuery
 import com.processm.processminterpreter.domain.pql.syntax.RawSelectColumn
-import com.processm.processminterpreter.domain.pql.syntax.OrderDirection
+import com.processm.processminterpreter.domain.pql.catalog.OrderDirection
 import com.processm.processminterpreter.domain.pql.catalog.Scope
 import com.processm.processminterpreter.domain.pql.catalog.SourceLocation
 import com.processm.processminterpreter.domain.pql.catalog.StandardAttributeCatalog
-import com.processm.processminterpreter.domain.pql.plan.HierarchicalLimits
+import com.processm.processminterpreter.domain.pql.common.HierarchicalLimits
 import com.processm.processminterpreter.domain.pql.plan.LogicalPlan
 import com.processm.processminterpreter.application.ports.DataStoreLogSummary
 import com.processm.processminterpreter.application.ports.DataStoreRepository
@@ -205,6 +205,34 @@ class ExecutePqlQueryUseCaseTest {
     }
 
     @Test
+    fun `single-log datastore is compiled as direct log source`() {
+        val parser = FakeParser(mapOf("select e:name" to rawSelect()))
+        val logs = FakeLogRepository(
+            byId = mapOf("log-1" to sampleLog("log-1", classifiers = emptyList())),
+        )
+        val dataStores = FakeDataStoreRepository(
+            logsByDataStoreId = mapOf(
+                "store-1" to listOf(
+                    DataStoreLogSummary(
+                        logId = "log-1",
+                        name = "sample",
+                        createdAt = null,
+                        updatedAt = null,
+                    ),
+                ),
+            ),
+        )
+        val executor = FakeExecutor()
+        val useCase = ExecutePqlQueryUseCase(PqlCompiler(parser, logs, dataStores), executor)
+
+        useCase.execute(ExecutePqlQueryRequest(query = "select e:name", dataStoreId = "store-1"))
+
+        val plan = executor.selectCalls.single().first
+        assertEquals("log-1", plan.source.logId)
+        assertNull(plan.source.dataStoreId)
+    }
+
+    @Test
     fun `execute routes DELETE plans through executeDelete and returns empty logs`() {
         val parser = FakeParser(mapOf("delete from event" to rawDelete()))
         val executor = FakeExecutor(
@@ -364,8 +392,8 @@ class ExecutePqlQueryUseCaseTest {
                     ),
                 ),
             ),
-            limit = com.processm.processminterpreter.domain.pql.syntax.RawLimitSpec(log = 1),
-            offset = com.processm.processminterpreter.domain.pql.syntax.RawOffsetSpec(log = 1),
+            limit = com.processm.processminterpreter.domain.pql.common.HierarchicalLimits(log = 1),
+            offset = com.processm.processminterpreter.domain.pql.common.HierarchicalOffsets(log = 1),
             location = SourceLocation.UNKNOWN,
         )
         val parser = FakeParser(mapOf("select c:Activity" to classifierQuery))
@@ -388,11 +416,12 @@ class ExecutePqlQueryUseCaseTest {
 
             override fun execute(plan: LogicalPlan.Select, options: ExecutionOptions): QueryExecutionResult {
                 selectCalls += plan
+                val planLogId = requireNotNull(plan.source.logId)
                 return QueryExecutionResult(
-                    logs = listOf(sampleXesLog(plan.source.logId!!)),
+                    logs = listOf(sampleXesLog(planLogId)),
                     rows = emptyList(),
                     rowCount = 1,
-                    executedQueryDescription = plan.source.logId!!,
+                    executedQueryDescription = planLogId,
                 )
             }
 
@@ -453,7 +482,7 @@ class ExecutePqlQueryUseCaseTest {
                 ),
             ),
             where = RawBinaryOp(
-                op = com.processm.processminterpreter.domain.pql.syntax.BinaryOperator.EQ,
+                op = com.processm.processminterpreter.domain.pql.catalog.BinaryOperator.EQ,
                 left = RawAttributeRef(
                     rawText = "l:name",
                     hoisting = 0,

@@ -2,7 +2,7 @@ package com.processm.processminterpreter.infrastructure.persistence.neo4j.query.
 
 import com.processm.processminterpreter.domain.pql.catalog.Scope
 import com.processm.processminterpreter.domain.pql.plan.ProjectedColumn
-import com.processm.processminterpreter.domain.pql.syntax.BinaryOperator
+import com.processm.processminterpreter.domain.pql.catalog.BinaryOperator
 import com.processm.processminterpreter.domain.pql.resolved.Aggregation
 import com.processm.processminterpreter.domain.pql.resolved.ResolvedExpression
 import com.processm.processminterpreter.domain.pql.resolved.TypedBinaryOp
@@ -109,6 +109,10 @@ internal class CypherTraceGroupAggregateRenderer(
             alias = SYNTHETIC_LOG_ID_ALIAS,
             scope = Scope.LOG,
         )
+        s.registerSyntheticColumnAlias(
+            alias = SYNTHETIC_NULL_EVENT_COUNT_ALIAS,
+            scope = Scope.TRACE,
+        )
         groupCase.groupAliases.forEachIndexed { idx, _ ->
             s.registerSyntheticColumnAlias(
                 alias = traceGroupOutputAlias(idx),
@@ -135,8 +139,11 @@ internal class CypherTraceGroupAggregateRenderer(
     ): List<String> =
         buildList {
             add("log.logId AS $SYNTHETIC_LOG_ID_ALIAS")
+            add(logMetadataProjection())
             groupCase.logAliases.forEach { add("${expressions.render(it.expression, s)} AS ${it.alias}") }
             groupCase.groupAliases.forEach { add("${expressions.render(it.expression, s)} AS ${it.alias}") }
+            add("min(trace.importOrder) AS $TRACE_GROUP_ORDER_ALIAS")
+            add("count(event) AS $SYNTHETIC_NULL_EVENT_COUNT_ALIAS")
             groupCase.aggregateAliases.forEach { add("${expressions.renderAggregation(it.aggregation, s)} AS ${it.alias}") }
         }
 
@@ -146,6 +153,8 @@ internal class CypherTraceGroupAggregateRenderer(
     ): List<String> =
         buildList {
             add(SYNTHETIC_LOG_ID_ALIAS)
+            add(SYNTHETIC_LOG_METADATA_ALIAS)
+            add(SYNTHETIC_NULL_EVENT_COUNT_ALIAS)
             groupCase.groupAliases.forEachIndexed { idx, groupAlias ->
                 add("${groupAlias.alias} AS ${traceGroupOutputAlias(idx)}")
             }
@@ -169,11 +178,11 @@ internal class CypherTraceGroupAggregateRenderer(
         groupCase: TraceGroupAggregateCase,
     ): List<String> =
         if (s.plan.orderBy.isEmpty()) {
-            groupCase.groupAliases.map { it.alias }
+            listOf(TRACE_GROUP_ORDER_ALIAS) + groupCase.groupAliases.map { it.alias }
         } else {
             s.plan.orderBy.map { key ->
                 "${renderOrderExpression(key.expression, s)} ${key.direction.name}"
-            }
+            } + groupCase.groupAliases.map { it.alias }
         }
 
     private fun renderOrderExpression(
@@ -197,9 +206,7 @@ internal class CypherTraceGroupAggregateRenderer(
         if (!CypherAggregationInspector.isTemporalAggregation(binary.left)) return null
         if (!CypherAggregationInspector.isTemporalAggregation(binary.right)) return null
 
-        val left = expressions.render(binary.left, s)
-        val right = expressions.render(binary.right, s)
-        return "duration.inSeconds($right, $left).seconds"
+        return expressions.renderTemporalDifferenceInDays(binary.left, binary.right, s)
     }
 
     private fun bindExpressionAliases(
@@ -262,3 +269,5 @@ internal class CypherTraceGroupAggregateRenderer(
 
     private fun traceGroupOutputAlias(index: Int): String = "_trace_group_$index"
 }
+
+private const val TRACE_GROUP_ORDER_ALIAS = "_trace_group_order_"

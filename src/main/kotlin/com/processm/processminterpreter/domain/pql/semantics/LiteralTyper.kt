@@ -21,14 +21,14 @@ import java.util.UUID
  * Parses a [RawLiteral]'s source text into a typed value.
  *
  * Output:
- *  - STRING   → ([String], [Type.STRING])
- *  - NUMBER   → ([Double]; [Type.NUMBER])
- *  - DATETIME → ([LocalDateTime] in UTC; [Type.DATETIME])
- *  - BOOLEAN  → ([Boolean]; [Type.BOOLEAN])
- *  - NULL     → (null; [Type.NULL])
- *  - UUID     → ([UUID]; [Type.ID])
+ *  - STRING   -> ([String], [Type.STRING])
+ *  - NUMBER   -> ([Double]; [Type.NUMBER])
+ *  - DATETIME -> ([LocalDateTime] in UTC; [Type.DATETIME])
+ *  - BOOLEAN  -> ([Boolean]; [Type.BOOLEAN])
+ *  - NULL     -> (null; [Type.NULL])
+ *  - UUID     -> ([UUID]; [Type.ID])
  *
- * Throws [PQLSyntaxException] with [Problem.SyntaxError] on malformed literals.
+ * Throws [PQLSyntaxException] with literal-specific [Problem] values on malformed literals.
  */
 object LiteralTyper {
 
@@ -81,7 +81,7 @@ object LiteralTyper {
             val value = s.toDouble()
             ParsedLiteral(value, Type.NUMBER, value.toString())
         } catch (e: NumberFormatException) {
-            throw PQLSyntaxException(Problem.SyntaxError, loc, "Invalid numeric literal: $text")
+            throw PQLSyntaxException(Problem.InvalidNumber, loc, "Invalid numeric literal: $text")
         }
     }
 
@@ -91,7 +91,7 @@ object LiteralTyper {
         parseLocalDateTime(stripped)?.let { return it }
         parseLocalDate(stripped)?.let { return it.atStartOfDay() }
         parseYearMonth(stripped)?.let { return it.atDay(1).atStartOfDay() }
-        throw PQLSyntaxException(Problem.SyntaxError, loc, "Invalid datetime literal: $text")
+        throw PQLSyntaxException(Problem.InvalidDateTime, loc, "Invalid datetime literal: $text")
     }
 
     private fun parseOffsetDateTime(text: String): LocalDateTime? =
@@ -128,7 +128,7 @@ object LiteralTyper {
         when (text.lowercase()) {
             "true" -> true
             "false" -> false
-            else -> throw PQLSyntaxException(Problem.SyntaxError, loc, "Invalid boolean literal: $text")
+            else -> throw PQLSyntaxException(Problem.InvalidBoolean, loc, "Invalid boolean literal: $text")
         }
 
     private fun parseUuid(text: String, loc: SourceLocation): UUID {
@@ -136,22 +136,14 @@ object LiteralTyper {
         return try {
             UUID.fromString(stripped)
         } catch (e: IllegalArgumentException) {
-            throw PQLSyntaxException(Problem.SyntaxError, loc, "Invalid UUID literal: $text")
+            throw PQLSyntaxException(Problem.InvalidUUID, loc, "Invalid UUID literal: $text")
         }
     }
 
     private fun stripScope(text: String): ScopedLiteralText {
         val idx = text.indexOf(':')
         if (idx <= 0) return ScopedLiteralText(null, text)
-
-        val prefix = text.substring(0, idx)
-        val scope =
-            when (prefix.lowercase()) {
-                "l", "log" -> Scope.LOG
-                "t", "trace" -> Scope.TRACE
-                "e", "event" -> Scope.EVENT
-                else -> return ScopedLiteralText(null, text)
-            }
+        val scope = Scope.tryParse(text.substring(0, idx)) ?: return ScopedLiteralText(null, text)
         return ScopedLiteralText(scope, text.substring(idx + 1))
     }
 

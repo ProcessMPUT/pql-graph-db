@@ -62,3 +62,4 @@ tmp/
 *.py
 !scripts/init-processm-datastores.py
 scripts/verify-compatibility.cases.local.json
+scripts/verify-compatibility.multi-log.cases.local.json

@@ -26,6 +26,12 @@ class PhysicalAttributeMapperTest {
         wasBracketed = true, type = Type.STRING, location = loc,
     )
 
+    private fun system(scope: Scope, name: String) = ResolvedAttribute(
+        name = name, baseScope = scope, effectiveScope = scope,
+        kind = AttributeKind.SYSTEM, xesStandardName = null,
+        wasBracketed = false, type = Type.ID, location = loc,
+    )
+
     @Test
     fun `event concept_name maps to event dot activity`() {
         val ref = mapper.map(std(Scope.EVENT, "concept:name"), "event")
@@ -70,6 +76,22 @@ class PhysicalAttributeMapperTest {
     }
 
     @Test
+    fun `log identity_id maps to XES identity property`() {
+        val ref = mapper.map(std(Scope.LOG, "identity:id"), "log")
+        assertEquals("identity:id", ref.property)
+        assertTrue(ref.requiresBackticks)
+        assertEquals("log.`identity:id`", ref.toCypher())
+    }
+
+    @Test
+    fun `logId system attribute maps to physical logId property`() {
+        val ref = mapper.map(system(Scope.LOG, "logId"), "log")
+        assertEquals("logId", ref.property)
+        assertFalse(ref.requiresBackticks)
+        assertEquals("log.logId", ref.toCypher())
+    }
+
+    @Test
     fun `event time_timestamp maps to timestamp`() {
         val ref = mapper.map(std(Scope.EVENT, "time:timestamp"), "event")
         assertEquals("timestamp", ref.property)
@@ -91,7 +113,7 @@ class PhysicalAttributeMapperTest {
 
     @Test
     fun `unknown standard attribute falls through to xes name`() {
-        // e.g. time:timestamp at LOG scope is not in our table — fallback to xes name
+        // e.g. time:timestamp at LOG scope is not in our table - fallback to xes name
         val ref = mapper.map(std(Scope.LOG, "time:timestamp"), "log")
         assertEquals("time:timestamp", ref.property)
         assertTrue(ref.requiresBackticks)

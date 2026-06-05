@@ -2,6 +2,8 @@ package com.processm.processminterpreter.domain.pql.syntax
 
 import com.processm.processminterpreter.domain.pql.catalog.Scope
 import com.processm.processminterpreter.domain.pql.catalog.SourceLocation
+import com.processm.processminterpreter.domain.pql.common.HierarchicalLimits
+import com.processm.processminterpreter.domain.pql.common.HierarchicalOffsets
 
 /**
  * Top-level PQL AST. Sealed: the two valid top-level shapes are SELECT and DELETE.
@@ -18,8 +20,8 @@ sealed interface RawQuery {
         val where: RawExpression? = null,
         val groupBy: List<RawExpression> = emptyList(),
         val orderBy: List<RawOrderKey> = emptyList(),
-        val limit: RawLimitSpec = RawLimitSpec(),
-        val offset: RawOffsetSpec = RawOffsetSpec(),
+        val limit: HierarchicalLimits = HierarchicalLimits(),
+        val offset: HierarchicalOffsets = HierarchicalOffsets(),
         override val location: SourceLocation,
     ) : RawQuery
 

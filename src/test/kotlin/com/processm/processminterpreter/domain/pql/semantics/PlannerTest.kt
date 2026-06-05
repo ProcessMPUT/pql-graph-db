@@ -1,15 +1,15 @@
 package com.processm.processminterpreter.domain.pql.semantics
 
-import com.processm.processminterpreter.domain.pql.syntax.OrderDirection
+import com.processm.processminterpreter.domain.pql.catalog.OrderDirection
 import com.processm.processminterpreter.domain.pql.catalog.AttributeKind
 import com.processm.processminterpreter.domain.pql.catalog.Scope
 import com.processm.processminterpreter.domain.pql.catalog.SourceLocation
 import com.processm.processminterpreter.domain.pql.catalog.Type
 import com.processm.processminterpreter.domain.pql.plan.LogicalPlan
 import com.processm.processminterpreter.domain.pql.resolved.Aggregation
-import com.processm.processminterpreter.domain.pql.resolved.LimitSpec
+import com.processm.processminterpreter.domain.pql.common.HierarchicalLimits
 import com.processm.processminterpreter.domain.pql.resolved.ResolvedAttribute
-import com.processm.processminterpreter.domain.pql.resolved.ResolvedOrderKey
+import com.processm.processminterpreter.domain.pql.common.OrderKey
 import com.processm.processminterpreter.domain.pql.resolved.ResolvedQuery
 import com.processm.processminterpreter.domain.pql.resolved.ResolvedSelectColumn
 import com.processm.processminterpreter.domain.pql.resolved.ValidatedQuery
@@ -29,12 +29,18 @@ class PlannerTest {
         wasBracketed = false, type = Type.STRING, location = loc,
     )
 
+    private fun hoistedAttr(base: Scope, effective: Scope, canonical: String) = ResolvedAttribute(
+        name = canonical, baseScope = base, effectiveScope = effective,
+        kind = AttributeKind.STANDARD, xesStandardName = canonical,
+        wasBracketed = false, type = Type.STRING, location = loc,
+    )
+
     private fun validated(
         from: Scope = Scope.EVENT,
         columns: List<ResolvedSelectColumn>,
         groupBy: List<com.processm.processminterpreter.domain.pql.resolved.ResolvedExpression> = emptyList(),
-        orderBy: List<ResolvedOrderKey> = emptyList(),
-        limit: LimitSpec = LimitSpec(),
+        orderBy: List<OrderKey> = emptyList(),
+        limit: HierarchicalLimits = HierarchicalLimits(),
         implicitAll: Boolean = false,
     ) = ValidatedQuery(
         ResolvedQuery.Select(
@@ -85,6 +91,25 @@ class PlannerTest {
     }
 
     @Test
+    fun `implicit select all with hoisted group by keeps only upper wildcard scopes`() {
+        val hoistedEventName = hoistedAttr(Scope.EVENT, Scope.TRACE, "concept:name")
+        val q = validated(
+            columns = Scope.entries.map { ResolvedSelectColumn(expression = null, starAt = it) },
+            groupBy = listOf(hoistedEventName),
+            implicitAll = true,
+        )
+
+        val plan = planner.plan(q) as LogicalPlan.Select
+
+        assertTrue(plan.projection.implicitAll)
+        assertEquals(setOf(Scope.LOG), plan.projection.selectAll.filterValues { it }.keys)
+        assertEquals(1, plan.projection.columns.size)
+        val projected = plan.projection.columns.single()
+        assertEquals(Scope.EVENT, projected.scope)
+        assertEquals(Scope.EVENT, (projected.expression as ResolvedAttribute).effectiveScope)
+    }
+
+    @Test
     fun `group by is preserved and hasAggregation is false without aggregates`() {
         val name = attr(Scope.EVENT, "concept:name")
         val q = validated(
@@ -124,7 +149,7 @@ class PlannerTest {
         val name = attr(Scope.EVENT, "concept:name")
         val q = validated(
             columns = listOf(ResolvedSelectColumn(expression = name)),
-            orderBy = listOf(ResolvedOrderKey(name, OrderDirection.DESC)),
+            orderBy = listOf(OrderKey(name, OrderDirection.DESC)),
         )
         val plan = planner.plan(q) as LogicalPlan.Select
         assertEquals(OrderDirection.DESC, plan.orderBy.single().direction)

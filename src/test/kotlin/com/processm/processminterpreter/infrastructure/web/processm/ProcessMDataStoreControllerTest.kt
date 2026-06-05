@@ -14,7 +14,7 @@ import com.processm.processminterpreter.domain.datastore.DataStore
 import com.processm.processminterpreter.application.ports.LogImportResult
 import com.processm.processminterpreter.application.ports.QueryJsonProjection
 import com.processm.processminterpreter.application.ports.ProcessMJsonFormatter
-import com.processm.processminterpreter.domain.pql.plan.HierarchicalLimits
+import com.processm.processminterpreter.domain.pql.common.HierarchicalLimits
 import com.processm.processminterpreter.infrastructure.config.ProcessMConfig
 import com.processm.processminterpreter.infrastructure.web.processm.dto.ProcessMDataStoreRequest
 import org.junit.jupiter.api.Test

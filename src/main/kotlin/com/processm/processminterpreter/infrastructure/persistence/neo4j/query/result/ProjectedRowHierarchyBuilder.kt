@@ -5,7 +5,9 @@ import com.processm.processminterpreter.domain.pql.catalog.Scope
 import com.processm.processminterpreter.infrastructure.persistence.neo4j.query.cypher.ColumnAlias
 import com.processm.processminterpreter.infrastructure.persistence.neo4j.query.cypher.SYNTHETIC_EVENT_ALIAS
 import com.processm.processminterpreter.infrastructure.persistence.neo4j.query.cypher.SYNTHETIC_LOG_METADATA_ALIAS
+import com.processm.processminterpreter.infrastructure.persistence.neo4j.query.cypher.SYNTHETIC_LOG_NODE_ALIAS
 import com.processm.processminterpreter.infrastructure.persistence.neo4j.query.cypher.SYNTHETIC_NULL_EVENT_COUNT_ALIAS
+import com.processm.processminterpreter.infrastructure.persistence.neo4j.query.cypher.SYNTHETIC_TRACE_COUNT_ALIAS
 
 internal class ProjectedRowHierarchyBuilder {
     fun reconstruct(
@@ -13,15 +15,20 @@ internal class ProjectedRowHierarchyBuilder {
         columnAliases: Map<String, ColumnAlias>,
         selectAllScopes: Set<Scope> = emptySet(),
     ): List<XesLog> {
-        val accumulator = Accumulator(
-            aliases = ProjectedAliases(columnAliases),
-            selectAllScopes = selectAllScopes,
-        )
+        val accumulator = accumulator(columnAliases, selectAllScopes)
         rows.forEach(accumulator::absorb)
         return accumulator.build()
     }
 
-    private class Accumulator(
+    fun accumulator(
+        columnAliases: Map<String, ColumnAlias>,
+        selectAllScopes: Set<Scope> = emptySet(),
+    ): Accumulator = Accumulator(
+        aliases = ProjectedAliases(columnAliases),
+        selectAllScopes = selectAllScopes,
+    )
+
+    class Accumulator(
         private val aliases: ProjectedAliases,
         private val selectAllScopes: Set<Scope>,
     ) {
@@ -31,6 +38,7 @@ internal class ProjectedRowHierarchyBuilder {
         fun absorb(row: Map<String, Any?>) {
             val logBuilder = absorbLog(row)
             val traceBuilder = absorbTrace(row, logBuilder)
+            traceBuilder.absorbTraceCount(row)
             traceBuilder.absorbNullEventCount(row)
             traceBuilder.absorbEvent(row)
         }
@@ -39,6 +47,7 @@ internal class ProjectedRowHierarchyBuilder {
             val logKey = row.keyFor(aliases.log)
             val logBuilder = logs.getOrPut(logKey) { LogBuilder() }
             logBuilder.absorbMetadataNode(row.nodeProperties(SYNTHETIC_LOG_METADATA_ALIAS))
+            logBuilder.absorbNode(row.nodeProperties(SYNTHETIC_LOG_NODE_ALIAS))
             if (Scope.LOG in selectAllScopes) logBuilder.absorbNode(row.nodeProperties("log"))
             logBuilder.absorb(row, aliases.logAbsorb)
             return logBuilder
@@ -58,6 +67,11 @@ internal class ProjectedRowHierarchyBuilder {
             nullEventCount = maxOf(nullEventCount, count.toInt())
         }
 
+        private fun TraceBuilder.absorbTraceCount(row: Map<String, Any?>) {
+            val groupedCount = row[SYNTHETIC_TRACE_COUNT_ALIAS] as? Number ?: return
+            count = maxOf(count, groupedCount.toInt())
+        }
+
         private fun TraceBuilder.absorbEvent(row: Map<String, Any?>) {
             if (!aliases.shouldMaterializeEvent(row, hasUserEventProjection)) return
             val eventBuilder = EventBuilder()
@@ -74,7 +88,7 @@ internal class ProjectedRowHierarchyBuilder {
             if (aliases.isEmpty()) SYNTHETIC_KEY else aliases.keys.associateWith { this[it] }
     }
 
-    private class ProjectedAliases(columnAliases: Map<String, ColumnAlias>) {
+    class ProjectedAliases(columnAliases: Map<String, ColumnAlias>) {
         val log = columnAliases.filterValues { it.scope == Scope.LOG }
         val trace = columnAliases.filterValues { it.scope == Scope.TRACE }
         val event = columnAliases.filterValues { it.scope == Scope.EVENT }

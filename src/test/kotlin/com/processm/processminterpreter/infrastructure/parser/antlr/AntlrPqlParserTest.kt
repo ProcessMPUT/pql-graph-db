@@ -1,7 +1,7 @@
 package com.processm.processminterpreter.infrastructure.parser.antlr
 
-import com.processm.processminterpreter.domain.pql.syntax.BinaryOperator
-import com.processm.processminterpreter.domain.pql.syntax.OrderDirection
+import com.processm.processminterpreter.domain.pql.catalog.BinaryOperator
+import com.processm.processminterpreter.domain.pql.catalog.OrderDirection
 import com.processm.processminterpreter.domain.pql.syntax.RawAttributeRef
 import com.processm.processminterpreter.domain.pql.syntax.RawBinaryOp
 import com.processm.processminterpreter.domain.pql.syntax.RawFunctionCall
@@ -10,7 +10,7 @@ import com.processm.processminterpreter.domain.pql.syntax.RawLiteral
 import com.processm.processminterpreter.domain.pql.syntax.RawLiteralKind
 import com.processm.processminterpreter.domain.pql.syntax.RawQuery
 import com.processm.processminterpreter.domain.pql.syntax.RawUnaryOp
-import com.processm.processminterpreter.domain.pql.syntax.UnaryOperator
+import com.processm.processminterpreter.domain.pql.catalog.UnaryOperator
 import com.processm.processminterpreter.domain.pql.catalog.Scope
 import com.processm.processminterpreter.domain.pql.error.PQLSyntaxException
 import com.processm.processminterpreter.domain.pql.error.Problem

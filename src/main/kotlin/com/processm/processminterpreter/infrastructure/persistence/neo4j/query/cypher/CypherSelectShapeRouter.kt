@@ -14,7 +14,8 @@ internal class CypherSelectShapeRouter(
     private val aggregateOrderBy = CypherAggregateOrderByRenderer(expressions)
 
     fun emitPreMatchShapeIfNeeded(s: CypherBuildState): Boolean =
-        eventGroupByOnly.emitLimitedBeforeMatchIfNeeded(s)
+        aggregateOrderBy.emitPreMatchIfNeeded(s) ||
+            eventGroupByOnly.emitLimitedBeforeMatchIfNeeded(s)
 
     fun emitPostMatchShapeIfNeeded(s: CypherBuildState): Boolean =
         aggregatePlaceholders.emitIfNeeded(s) ||

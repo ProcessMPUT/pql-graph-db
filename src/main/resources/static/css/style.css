@@ -833,6 +833,12 @@ textarea {
     border: 1px solid rgba(244, 67, 54, 0.3);
 }
 
+.match-info {
+    background: rgba(255, 193, 7, 0.18);
+    color: #ffc107;
+    border: 1px solid rgba(255, 193, 7, 0.35);
+}
+
 /* Comparison details coloring */
 .comparison-details div {
     padding: 1px 0;

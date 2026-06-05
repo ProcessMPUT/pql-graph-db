@@ -27,6 +27,7 @@ data class PropertyRef(
  *  - hybrid columns written via `SET node += attributes` that keep XES colons
  *    (`trace.`cost:total``, `event.`cost:currency``),
  *  - pure custom attributes stored with their raw PQL name.
+ *  - system attributes (`l:logId`) exposed by the query model.
  *
  * Pure data, no Neo4j session access. Safe to unit-test against any plan.
  *
@@ -39,6 +40,7 @@ class PhysicalAttributeMapper {
             AttributeKind.STANDARD -> neo4jPropertyFor(attr.effectiveScope, attr.xesStandardName ?: attr.name)
             AttributeKind.CUSTOM -> attr.name
             AttributeKind.CLASSIFIER -> attr.name
+            AttributeKind.SYSTEM -> attr.name
         }
         return PropertyRef(
             nodeVar = nodeVar,

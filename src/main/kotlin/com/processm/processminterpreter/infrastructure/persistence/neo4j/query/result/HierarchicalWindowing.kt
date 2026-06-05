@@ -1,8 +1,8 @@
 package com.processm.processminterpreter.infrastructure.persistence.neo4j.query.result
 
 import com.processm.processminterpreter.domain.log.xes.XesLog
-import com.processm.processminterpreter.domain.pql.plan.HierarchicalLimits
-import com.processm.processminterpreter.domain.pql.plan.HierarchicalOffsets
+import com.processm.processminterpreter.domain.pql.common.HierarchicalLimits
+import com.processm.processminterpreter.domain.pql.common.HierarchicalOffsets
 
 internal object HierarchicalWindowing {
     fun apply(

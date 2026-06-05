@@ -898,7 +898,9 @@ if (verifyButtonNew) {
             const data = await response.json();
             renderVerificationResult(data);
 
-            if (data.match) {
+            if (data.comparisonStatus === 'NONDETERMINISTIC_MATCH') {
+                showToast('Verification info: unstable ProcessM trace-variant ordering', 'warning');
+            } else if (data.match) {
                 showToast('Verification successful: Results Match', 'success');
             } else {
                 showToast('Verification mismatch', 'error');
@@ -917,6 +919,9 @@ function formatComparisonDetails(details) {
     if (!details) return '';
     return details.split('\n').map(line => {
         const escaped = line.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        if (/NONDETERMINISTIC_MATCH/i.test(line)) {
+            return `<div class="diff-header">${escaped}</div>`;
+        }
         // MATCH line (green)
         if (/MATCH/i.test(line) && !/MISMATCH/i.test(line)) {
             return `<div class="diff-match">${escaped}</div>`;
@@ -945,8 +950,9 @@ function formatComparisonDetails(details) {
 }
 
 function renderVerificationResult(data) {
-    const matchClass = data.match ? 'match-success' : 'match-fail';
-    const matchText = data.match ? 'MATCH' : 'MISMATCH';
+    const nondeterministic = data.comparisonStatus === 'NONDETERMINISTIC_MATCH';
+    const matchClass = nondeterministic ? 'match-info' : (data.match ? 'match-success' : 'match-fail');
+    const matchText = nondeterministic ? 'NONDETERMINISTIC' : (data.match ? 'MATCH' : 'MISMATCH');
 
     const html = `
         <div class="verification-box">

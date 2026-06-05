@@ -95,6 +95,18 @@ class AttributeResolverTest {
     }
 
     @Test
+    fun `logId resolves as system attribute at log scope`() {
+        val r = resolver.resolve(ref("logId", scopeHint = "l"), defaultScope = Scope.EVENT)
+
+        assertEquals(AttributeKind.SYSTEM, r.kind)
+        assertEquals(Scope.LOG, r.baseScope)
+        assertEquals(Scope.LOG, r.effectiveScope)
+        assertEquals("logId", r.name)
+        assertNull(r.xesStandardName)
+        assertEquals(Type.ID, r.type)
+    }
+
+    @Test
     fun `classifier reference preserves CLASSIFIER kind`() {
         val r = resolver.resolve(
             ref("c:Activity"),

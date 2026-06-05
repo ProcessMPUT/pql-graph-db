@@ -74,6 +74,7 @@ internal class CypherAggregatePlaceholderHierarchyRenderer(
             .append(", _placeholder_trace, _placeholder_event")
         val returnColumns = buildList {
             add("log.logId AS $SYNTHETIC_LOG_ID_ALIAS")
+            add(logMetadataProjection())
             add("_placeholder_trace.traceId AS $SYNTHETIC_TRACE_ID_ALIAS")
             add("_placeholder_trace.importOrder AS $SYNTHETIC_TRACE_ORDER_ALIAS")
             add("{} AS $SYNTHETIC_EVENT_ALIAS")
@@ -140,7 +141,7 @@ internal class CypherAggregatePlaceholderHierarchyRenderer(
             .append(", _placeholder_trace, count(_placeholder_event) AS _trace_event_count_")
         val returnColumns = buildList {
             add("log.logId AS $SYNTHETIC_LOG_ID_ALIAS")
-            add("log AS $SYNTHETIC_LOG_METADATA_ALIAS")
+            add(logMetadataProjection())
             add("max(_trace_event_count_) AS $SYNTHETIC_NULL_EVENT_COUNT_ALIAS")
             addAll(placeholderCase.aggregateColumns.map { it.alias })
         }

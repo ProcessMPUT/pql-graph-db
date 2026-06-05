@@ -1,22 +1,16 @@
 package com.processm.processminterpreter.domain.pql.resolved
 
-import com.processm.processminterpreter.domain.pql.syntax.OrderDirection
 import com.processm.processminterpreter.domain.pql.catalog.Scope
 import com.processm.processminterpreter.domain.pql.catalog.SourceLocation
+import com.processm.processminterpreter.domain.pql.common.HierarchicalLimits
+import com.processm.processminterpreter.domain.pql.common.HierarchicalOffsets
+import com.processm.processminterpreter.domain.pql.common.OrderKey
 
 data class ResolvedSelectColumn(
     val expression: ResolvedExpression?,
     val alias: String? = null,
     val starAt: Scope? = null,
 )
-
-data class ResolvedOrderKey(
-    val expression: ResolvedExpression,
-    val direction: OrderDirection,
-)
-
-data class LimitSpec(val log: Long? = null, val trace: Long? = null, val event: Long? = null)
-data class OffsetSpec(val log: Long? = null, val trace: Long? = null, val event: Long? = null)
 
 /**
  * Query after the Resolver phase: names classified, types inferred, hoisting materialized.
@@ -32,9 +26,9 @@ sealed interface ResolvedQuery {
         val implicitAll: Boolean = false,
         val where: ResolvedExpression? = null,
         val groupBy: List<ResolvedExpression> = emptyList(),
-        val orderBy: List<ResolvedOrderKey> = emptyList(),
-        val limit: LimitSpec = LimitSpec(),
-        val offset: OffsetSpec = OffsetSpec(),
+        val orderBy: List<OrderKey> = emptyList(),
+        val limit: HierarchicalLimits = HierarchicalLimits(),
+        val offset: HierarchicalOffsets = HierarchicalOffsets(),
         override val location: SourceLocation,
     ) : ResolvedQuery
 

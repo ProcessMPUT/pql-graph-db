@@ -66,6 +66,11 @@ class StandardAttributeCatalogTest {
     }
 
     @Test
+    fun `logId is not an XES standard attribute`() {
+        assertNull(StandardAttributeCatalog.lookup(Scope.LOG, "logId"))
+    }
+
+    @Test
     fun `classifier prefix detection`() {
         assertTrue(StandardAttributeCatalog.isClassifier("c:Activity"))
         assertTrue(StandardAttributeCatalog.isClassifier("classifier:Resource"))

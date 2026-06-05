@@ -3,17 +3,22 @@ package com.processm.processminterpreter.application.compatibility
 private val XES_ATTRIBUTE_TYPES = setOf("string", "date", "float", "int", "boolean", "id")
 
 internal data class XesJsonAttribute(
+    val type: String,
     val key: String,
     val value: String,
 )
 
 internal data class XesJsonNode(
     val attributes: List<XesJsonAttribute>,
+    val metadata: Map<String, String> = emptyMap(),
     val traces: List<XesJsonNode> = emptyList(),
     val events: List<XesJsonNode> = emptyList(),
     val rawEventCount: Int = events.size,
 ) {
-    fun attributesByKey(): Map<String, String> =
+    fun attributesByKey(): Map<String, XesJsonAttribute> =
+        attributes.associateBy { attribute -> attribute.key }
+
+    fun attributeValuesByKey(): Map<String, String> =
         attributes.associate { attribute -> attribute.key to attribute.value }
 
     fun attributeCounts(): Map<String, Int> =
@@ -21,21 +26,21 @@ internal data class XesJsonNode(
 }
 
 internal object XesJsonTreeReader {
-    fun readLog(json: List<Map<String, Any?>>): XesJsonNode? {
-        if (json.isEmpty()) {
-            return null
-        }
+    fun readLog(json: List<Map<String, Any?>>): XesJsonNode? =
+        readLogs(json).firstOrNull()
 
-        val first = json.first()
-        val rawLog = first["log"].asObjectMap() ?: first
-        return readNode(rawLog)
-    }
+    fun readLogs(json: List<Map<String, Any?>>): List<XesJsonNode> =
+        json.map { item ->
+            val rawLog = item["log"].asObjectMap() ?: item
+            readNode(rawLog)
+        }
 
     private fun readNode(raw: Map<String, Any?>): XesJsonNode {
         val traces = readChildren(raw, "trace")
         val events = readChildren(raw, "event")
         return XesJsonNode(
             attributes = readAttributes(raw),
+            metadata = readMetadata(raw),
             traces = traces.nodes,
             events = events.nodes,
             rawEventCount = events.rawCount,
@@ -77,11 +82,32 @@ internal object XesJsonTreeReader {
                 for (item in raw.asObjectMaps()) {
                     val key = item["@key"]?.toString() ?: continue
                     val value = item["@value"]?.toString() ?: continue
-                    add(XesJsonAttribute(key = key, value = value))
+                    add(XesJsonAttribute(type = type, key = key, value = value))
                 }
             }
         }
+
+    private fun readMetadata(node: Map<String, Any?>): Map<String, String> =
+        buildMap {
+            for ((key, value) in node) {
+                if (key in XES_ATTRIBUTE_TYPES || key in XES_CHILD_KEYS) continue
+                put(key, normalizeMetadataValue(value))
+            }
+        }
 }
+
+private fun normalizeMetadataValue(value: Any?): String =
+    when (value) {
+        null -> "null"
+        is List<*> -> value.map(::normalizeMetadataValue).sorted().joinToString(prefix = "[", postfix = "]")
+        is Map<*, *> -> value.stringKeyMap()
+            .entries
+            .sortedBy { it.key }
+            .joinToString(prefix = "{", postfix = "}") { (key, nestedValue) ->
+                "$key=${normalizeMetadataValue(nestedValue)}"
+            }
+        else -> value.toString()
+    }
 
 private data class ChildNodes(
     val nodes: List<XesJsonNode>,
@@ -97,6 +123,8 @@ private data class ChildNodes(
         fun empty(): ChildNodes = ChildNodes(nodes = emptyList(), rawCount = 0)
     }
 }
+
+private val XES_CHILD_KEYS = setOf("trace", "event")
 
 private fun Any?.asObjectMap(): Map<String, Any?>? =
     (this as? Map<*, *>)?.stringKeyMap()

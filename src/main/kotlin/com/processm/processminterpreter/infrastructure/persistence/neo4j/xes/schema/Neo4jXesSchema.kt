@@ -40,7 +40,7 @@ object Neo4jXesSchema {
         StandardAttributeCatalog.CONCEPT_NAME to "name",
         StandardAttributeCatalog.COST_TOTAL to "cost_total",
         StandardAttributeCatalog.COST_CURRENCY to "cost_currency",
-        StandardAttributeCatalog.IDENTITY_ID to "logId",
+        StandardAttributeCatalog.IDENTITY_ID to StandardAttributeCatalog.IDENTITY_ID,
         StandardAttributeCatalog.XES_VERSION to "xes_version",
         StandardAttributeCatalog.XES_FEATURES to "xes_features",
     )
@@ -80,7 +80,8 @@ object Neo4jXesSchema {
             logMetadataProperty(physicalName) != null
 
     fun isStorageMetadata(scope: Scope, physicalName: String): Boolean =
-        physicalName in storageMetadataKeys(scope)
+        physicalName in storageMetadataKeys(scope) ||
+            physicalName.startsWith(PROCESSM_INTERNAL_ATTRIBUTE_PREFIX)
 
     private fun storageMetadataKeys(scope: Scope): Set<String> =
         when (scope) {
@@ -91,6 +92,7 @@ object Neo4jXesSchema {
 
     private val logStorageMetadataKeys: Set<String> =
         setOf(
+            "logId",
             "createdAt",
             "updatedAt",
             LOG_CLASSIFIERS_PROPERTY,
@@ -100,6 +102,13 @@ object Neo4jXesSchema {
         )
     private val traceStorageMetadataKeys: Set<String> = setOf("createdAt", "updatedAt", "importOrder")
     private val eventStorageMetadataKeys: Set<String> = setOf("createdAt", "updatedAt", "importOrder")
+
+    /*
+     * ProcessM-internal helper attributes can appear in imported logs and are useful
+     * for storage/query ordering, but they are not XES attributes and must not be
+     * materialized in PQL/XES results.
+     */
+    private const val PROCESSM_INTERNAL_ATTRIBUTE_PREFIX = "processm"
 
     private val inverseEventProps: Map<String, String> = eventPhysicalName.entries.associate { (k, v) -> v to k }
     private val inverseTraceProps: Map<String, String> = tracePhysicalName.entries.associate { (k, v) -> v to k }

@@ -14,12 +14,18 @@ DATASETS = [
     ("teleclaims", "teleclaims.xes.gz"),
 ]
 
+MULTI_LOG_DATASETS = [
+    ("JournalReview + Sepsis", ["JournalReview.xes.gz", "Sepsis.xes.gz"]),
+]
+
 
 BASE_URL = os.environ.get("PROCESSM_URL", "http://processm:2080/api").rstrip("/")
 EMAIL = os.environ.get("PROCESSM_LOGIN", "admin@example.com")
 PASSWORD = os.environ.get("PROCESSM_PASSWORD", "Admin1234")
 ORG = os.environ.get("PROCESSM_ORG", "TestOrg")
 XES_DIR = os.environ.get("XES_DIR", "/xes")
+IMPORT_TIMEOUT_SECONDS = int(os.environ.get("PROCESSM_IMPORT_TIMEOUT_SECONDS", "600"))
+POLL_INTERVAL_SECONDS = int(os.environ.get("PROCESSM_IMPORT_POLL_INTERVAL_SECONDS", "5"))
 
 
 def decode_json(body):
@@ -171,14 +177,89 @@ def ensure_dataset(token, data_store_name, filename):
     if status not in range(200, 300):
         raise RuntimeError(f"Upload {filename} failed ({status}): {response}")
     print(f"Upload OK ({status}): {response}")
+    wait_for_uploaded_log(token, data_store_id, data_store_name)
+
+
+def ensure_multi_log_dataset(token, data_store_name, filenames):
+    data_store_id = ensure_data_store(token, data_store_name)
+    existing_logs = list_logs(token, data_store_id)
+    if len(existing_logs) >= len(filenames):
+        print(f'Data store "{data_store_name}" already has {len(existing_logs)} log(s), skipping uploads.')
+        return
+
+    if existing_logs:
+        print(
+            f'Data store "{data_store_name}" has {len(existing_logs)} log(s), '
+            "expected a clean multi-log store; delete it before reinitializing to avoid duplicates.",
+        )
+        return
+
+    for filename in filenames:
+        file_path = os.path.join(XES_DIR, filename)
+        if not os.path.isfile(file_path):
+            raise RuntimeError(f"Missing XES file: {file_path}")
+
+        print(f'Uploading {filename} to multi-log data store "{data_store_name}"...')
+        response, status = multipart_upload(token, data_store_id, file_path, filename)
+        if status not in range(200, 300):
+            raise RuntimeError(f"Upload {filename} failed ({status}): {response}")
+        print(f"Upload OK ({status}): {response}")
+
+    wait_for_log_count(token, data_store_id, data_store_name, len(filenames))
+
+
+def wait_for_uploaded_log(token, data_store_id, data_store_name):
+    deadline = time.time() + IMPORT_TIMEOUT_SECONDS
+    while time.time() < deadline:
+        logs = list_logs(token, data_store_id)
+        if logs:
+            print(f'Data store "{data_store_name}" is ready with {len(logs)} log(s).')
+            return
+        print(f'Data store "{data_store_name}" upload accepted, waiting for log materialization...')
+        time.sleep(POLL_INTERVAL_SECONDS)
+    raise RuntimeError(
+        f'Data store "{data_store_name}" still has no logs after {IMPORT_TIMEOUT_SECONDS}s',
+    )
+
+
+def wait_for_log_count(token, data_store_id, data_store_name, expected_count):
+    deadline = time.time() + IMPORT_TIMEOUT_SECONDS
+    while time.time() < deadline:
+        logs = list_logs(token, data_store_id)
+        if len(logs) >= expected_count:
+            print(f'Data store "{data_store_name}" is ready with {len(logs)} log(s).')
+            return
+        print(
+            f'Data store "{data_store_name}" has {len(logs)}/{expected_count} log(s), '
+            "waiting for materialization...",
+        )
+        time.sleep(POLL_INTERVAL_SECONDS)
+    raise RuntimeError(
+        f'Data store "{data_store_name}" has fewer than {expected_count} logs after {IMPORT_TIMEOUT_SECONDS}s',
+    )
 
 
 def main():
     wait_for_processm()
     token = ensure_user()
 
+    failures = []
     for data_store_name, filename in DATASETS:
-        ensure_dataset(token, data_store_name, filename)
+        try:
+            ensure_dataset(token, data_store_name, filename)
+        except Exception as error:
+            failures.append(f"{data_store_name}/{filename}: {error}")
+            print(f"Dataset init failed for {data_store_name}/{filename}: {error}")
+
+    for data_store_name, filenames in MULTI_LOG_DATASETS:
+        try:
+            ensure_multi_log_dataset(token, data_store_name, filenames)
+        except Exception as error:
+            failures.append(f"{data_store_name}/{','.join(filenames)}: {error}")
+            print(f"Multi-log dataset init failed for {data_store_name}/{','.join(filenames)}: {error}")
+
+    if failures:
+        raise RuntimeError("Some dataset initializations failed: " + "; ".join(failures))
 
     print("ProcessM datastore init complete.")
 

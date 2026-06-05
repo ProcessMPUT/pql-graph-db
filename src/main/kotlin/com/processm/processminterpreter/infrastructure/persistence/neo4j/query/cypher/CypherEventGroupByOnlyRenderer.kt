@@ -3,7 +3,7 @@ package com.processm.processminterpreter.infrastructure.persistence.neo4j.query.
 import com.processm.processminterpreter.domain.pql.catalog.AttributeKind
 import com.processm.processminterpreter.domain.pql.catalog.Scope
 import com.processm.processminterpreter.domain.pql.resolved.ResolvedAttribute
-import com.processm.processminterpreter.domain.pql.syntax.OrderDirection
+import com.processm.processminterpreter.domain.pql.catalog.OrderDirection
 
 /**
  * Handles bare event grouping, e.g. `GROUP BY e:name`, where ProcessM preserves
@@ -36,7 +36,7 @@ internal class CypherEventGroupByOnlyRenderer(
     }
 
     private fun eventGroupByOnlyCase(s: CypherBuildState): EventGroupByOnlyCase? {
-        if (s.plan.projection.columns.isNotEmpty()) return null
+        if (s.plan.projection.columns.isNotEmpty() && !s.plan.projection.implicitAll) return null
         if (s.facts.hasAnyAggregation) return null
 
         val groupByKeys = s.plan.groupBy?.keys ?: return null
@@ -79,7 +79,7 @@ internal class CypherEventGroupByOnlyRenderer(
             groupByCase.groupAliases.joinToString(", ") { (attr, alias) ->
                 "${cypherMapKey(expressions.propertyRef(attr, s))}: $alias"
             }
-        s.cypher.append(" RETURN log, trace, {$eventMap} AS event")
+        s.cypher.append(" RETURN log, trace, {$eventMap} AS event, true AS $SYNTHETIC_GROUPED_EVENT_ALIAS")
         s.cypher.append(" ORDER BY log.logId, trace.importOrder, ${eventGroupOrderColumns(groupByCase)}")
     }
 
@@ -139,7 +139,7 @@ internal class CypherEventGroupByOnlyRenderer(
         groupByCase.orderAliases.indices.forEach { idx ->
             s.cypher.append(", _event_order_$idx")
         }
-        s.cypher.append(", _group_first_event_order_")
+        s.cypher.append(", _group_first_event_order_, true AS $SYNTHETIC_GROUPED_EVENT_ALIAS")
 
         s.cypher.append(" ORDER BY log.logId, trace.importOrder, ${eventGroupOuterOrderColumns(groupByCase)}")
     }

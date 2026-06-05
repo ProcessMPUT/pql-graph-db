@@ -30,12 +30,23 @@ class Validator {
     fun validate(q: ResolvedQuery): ValidatedQuery {
         when (q) {
             is ResolvedQuery.Select -> {
+                q.where?.let { checkNoAggregationInWhere(it) }
                 checkMixedScopes(q)
                 checkGroupBy(q)
             }
-            is ResolvedQuery.Delete -> Unit // nothing scope-level to validate on DELETE for now
+            is ResolvedQuery.Delete -> q.where?.let { checkNoAggregationInWhere(it) }
         }
         return ValidatedQuery(q)
+    }
+
+    private fun checkNoAggregationInWhere(expr: ResolvedExpression) {
+        for (aggregation in collectAggregations(expr)) {
+            throw PQLSyntaxException(
+                Problem.AggregationFunctionInWhere,
+                aggregation.location,
+                "Aggregation function '${aggregation.name}' is not allowed in WHERE",
+            )
+        }
     }
 
     private fun checkMixedScopes(q: ResolvedQuery.Select) {

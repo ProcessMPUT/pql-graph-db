@@ -18,12 +18,11 @@ internal class CypherNodeHierarchyRenderer(
         if (!canReturnTraceOnlyNodeHierarchy(s)) return false
         val filter = s.plan.filter ?: return false
 
-        CypherMatchEmitter.emitLog(s)
+        emitFilteredTraceMatch(s, filter)
+        s.cypher.append(" WITH DISTINCT log")
         s.cypher.append(" RETURN 0 AS _kind, log.logId AS _logKey, 0 AS _traceOrder, properties(log) AS log, null AS trace")
         s.cypher.append(" UNION ALL ")
-        CypherMatchEmitter.emitLog(s)
-        s.cypher.append("-[:CONTAINS]->(trace:Trace)")
-        s.cypher.append(" WHERE ").append(filterRenderer.renderWithHoisting(filter, s))
+        emitFilteredTraceMatch(s, filter)
         s.cypher.append(
             " RETURN 1 AS _kind, log.logId AS _logKey, trace.importOrder AS _traceOrder, null AS log, properties(trace) AS trace",
         )
@@ -81,6 +80,7 @@ internal class CypherNodeHierarchyRenderer(
     private fun emitSimpleLimitedNodeHierarchyIfNeeded(s: CypherBuildState): Boolean {
         if (s.plan.projection.columns.isNotEmpty()) return false
         if (s.facts.hasAnyAggregation) return false
+        if (limitedHierarchyMatcher.emitSplitRowsIfNeeded(s)) return true
         if (!limitedHierarchyMatcher.emitIfNeeded(s)) return false
         s.cypher.append(" RETURN log, trace, event ORDER BY ").append(limitedHierarchyMatcher.returnOrder(s))
         return true
