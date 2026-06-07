@@ -207,6 +207,9 @@ internal class CypherProjectionRenderer(
         val explicit = renderedExplicitOrderTerms(s)
 
         if (s.facts.hasAnyAggregation) {
+            if (groupsAtEventScope(s)) {
+                return explicitEventGroupAggregationOrderTerms(s, explicit)
+            }
             return buildList {
                 addAll(explicit.map { it.rendered })
                 addAll(defaultAggregationOrderTerms(s))
@@ -224,6 +227,23 @@ internal class CypherProjectionRenderer(
             addAll(scoped.event)
         }.distinct()
     }
+
+    private fun explicitEventGroupAggregationOrderTerms(
+        s: CypherBuildState,
+        explicit: List<RenderedOrderKey>,
+    ): List<String> =
+        buildList {
+            when {
+                s.hasColumnAlias(SYNTHETIC_LOG_ORDER_ALIAS) -> add(SYNTHETIC_LOG_ORDER_ALIAS)
+                s.hasColumnAlias(SYNTHETIC_LOG_ID_ALIAS) -> add(SYNTHETIC_LOG_ID_ALIAS)
+            }
+            if (s.hasColumnAlias(SYNTHETIC_TRACE_ORDER_ALIAS)) add(SYNTHETIC_TRACE_ORDER_ALIAS)
+            addAll(explicit.map { it.rendered })
+            if (s.hasColumnAlias(SYNTHETIC_EVENT_GROUP_ORDER_ALIAS)) add(SYNTHETIC_EVENT_GROUP_ORDER_ALIAS)
+        }.distinct()
+
+    private fun groupsAtEventScope(s: CypherBuildState): Boolean =
+        s.plan.groupBy?.keys?.any { Scope.EVENT in s.facts.scopesOf(it) } == true
 
     private fun renderedExplicitOrderTerms(s: CypherBuildState): List<RenderedOrderKey> =
         s.plan.orderBy.map { key ->

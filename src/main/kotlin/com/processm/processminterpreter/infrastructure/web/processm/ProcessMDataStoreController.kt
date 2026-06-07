@@ -136,6 +136,7 @@ class ProcessMDataStoreController(
                     rows = result.rows,
                     hasExplicitSelect = result.hasExplicitSelect,
                     selectAllScopes = result.selectAllScopes,
+                    projectedLogAttributes = result.projectedLogAttributes,
                     projectedTraceStandardAttributes = result.projectedTraceStandardAttributes,
                     includeTraces = resolvedIncludeTraces,
                     includeEvents = resolvedIncludeEvents,

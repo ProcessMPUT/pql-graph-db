@@ -26,6 +26,7 @@ class ProcessMXesJsonFormatter : ProcessMJsonFormatter {
             logs = result.logs,
             isProjectedQuery = isProjectedQuery,
             logSelectAll = logSelectAll,
+            projectedLogAttrs = result.projectedLogAttributes,
             projectedTraceAttrs = projectedTraceAttrs,
             includeTraces = result.includeTraces,
             includeEvents = result.includeEvents,

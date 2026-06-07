@@ -96,6 +96,36 @@ class XESJsonConverterTest {
     }
 
     @Test
+    fun `projected log description is preserved as XES attribute`() {
+        val log =
+            XesLog(
+                customAttributes = mapOf("description" to "Simulated process"),
+            )
+
+        val json = XESJsonConverter.convertToXESJson(
+            logs = listOf(log),
+            isProjectedQuery = true,
+            projectedLogAttrs = setOf("description"),
+        )
+        val logNode = json["log"].asMap()
+
+        assertEquals("Simulated process", flatAttributes(logNode)["description"])
+    }
+
+    @Test
+    fun `implicit hierarchy does not emit ProcessM filtered log description`() {
+        val log =
+            XesLog(
+                customAttributes = mapOf("description" to "Simulated process"),
+            )
+
+        val json = XESJsonConverter.convertToXESJson(listOf(log))
+        val logNode = json["log"].asMap()
+
+        assertFalse(flatAttributes(logNode).containsKey("description"))
+    }
+
+    @Test
     fun `projected log wildcard keeps ProcessM metadata shape`() {
         val log =
             XesLog(
@@ -104,7 +134,11 @@ class XESJsonConverterTest {
                 lifecycleModel = "standard",
                 traceGlobals = listOf(GlobalAttribute(AttributeScope.TRACE, "concept:name", "__INVALID__")),
                 eventGlobals = listOf(GlobalAttribute(AttributeScope.EVENT, "concept:name", "__INVALID__")),
-                customAttributes = mapOf("source" to "CPN Tools simulation"),
+                customAttributes =
+                    mapOf(
+                        "source" to "CPN Tools simulation",
+                        "description" to "Simulated process",
+                    ),
             )
 
         val json = XESJsonConverter.convertToXESJson(
@@ -120,6 +154,7 @@ class XESJsonConverterTest {
         assertEquals("standard", flatAttributes(logNode)["lifecycle:model"])
         assertEquals("CPN Tools simulation", flatAttributes(logNode)["source"])
         assertFalse(flatAttributes(logNode).containsKey("concept:name"))
+        assertFalse(flatAttributes(logNode).containsKey("description"))
     }
 
     @Test

@@ -512,6 +512,33 @@ class CypherCodegenTest {
     }
 
     @Test
+    fun `event grouped aggregation order keeps trace window before event ordering`() {
+        val name = stdAttr(Scope.EVENT, "concept:name")
+        val count = Aggregation("count", name, Type.NUMBER, loc)
+
+        val q = codegen.generate(
+            selectPlanFull(
+                columns = listOf(
+                    ProjectedColumn(name, alias = "e_concept_name", scope = Scope.EVENT),
+                    ProjectedColumn(count, alias = "count_e_concept_name", scope = Scope.EVENT),
+                ),
+                groupBy = GroupBySpec(keys = listOf(name), hasAggregation = true),
+                orderBy = listOf(
+                    OrderKey(count, OrderDirection.DESC),
+                    OrderKey(name, OrderDirection.ASC),
+                ),
+            ),
+        )
+
+        assertTrue(
+            q.cypher.contains(
+                "ORDER BY _log_id_, _trace_order_, count_e_concept_name DESC, _gb_0 ASC, _event_group_order_",
+            ),
+            q.cypher,
+        )
+    }
+
+    @Test
     fun `bare event classifier GROUP BY returns grouped event map without original event node`() {
         val resourceClassifier = ResolvedAttribute(
             name = "Resource",
@@ -1175,7 +1202,7 @@ class CypherCodegenTest {
         val c = q.cypher
         // The aggregate must be ordered by its SELECT alias, not by the raw aggregate
         // expression — Cypher would otherwise re-evaluate the aggregate and complain.
-        assertTrue(c.contains("ORDER BY cnt DESC"), "expected ORDER BY cnt DESC: $c")
+        assertTrue(c.contains("ORDER BY _log_id_, _trace_order_, cnt DESC"), "expected ORDER BY cnt alias: $c")
     }
 
     @Test

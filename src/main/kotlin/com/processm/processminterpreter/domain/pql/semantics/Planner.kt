@@ -236,12 +236,20 @@ class Planner(
      */
     private fun deriveAlias(expr: ResolvedExpression, index: Int): String = when (expr) {
         is ResolvedAttribute -> {
-            val base = (expr.xesStandardName ?: expr.name).replace(':', '_')
+            val base = safeColumnAlias((expr.xesStandardName ?: expr.name).replace(':', '_'))
             "${scopePrefix(expr.effectiveScope)}_$base"
         }
         is Aggregation -> "${expr.name}_${index}"
         is ScalarFunction -> "${expr.name}_${index}"
         else -> "col_$index"
+    }
+
+    private fun safeColumnAlias(value: String): String {
+        val sanitized = value.map { char ->
+            if (char.isLetterOrDigit() || char == '_') char else '_'
+        }.joinToString("")
+
+        return sanitized.trim('_').ifBlank { "attr" }
     }
 
     private fun scopePrefix(scope: Scope): String = when (scope) {

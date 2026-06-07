@@ -29,6 +29,12 @@ class PlannerTest {
         wasBracketed = false, type = Type.STRING, location = loc,
     )
 
+    private fun customAttr(scope: Scope, name: String) = ResolvedAttribute(
+        name = name, baseScope = scope, effectiveScope = scope,
+        kind = AttributeKind.CUSTOM, xesStandardName = null,
+        wasBracketed = true, type = Type.STRING, location = loc,
+    )
+
     private fun hoistedAttr(base: Scope, effective: Scope, canonical: String) = ResolvedAttribute(
         name = canonical, baseScope = base, effectiveScope = effective,
         kind = AttributeKind.STANDARD, xesStandardName = canonical,
@@ -64,6 +70,19 @@ class PlannerTest {
         // `select l:name, t:name, e:name` don't collide on a single Cypher column.
         assertEquals("e_concept_name", plan.projection.columns[0].alias)
         assertEquals(Scope.EVENT, plan.projection.columns[0].scope)
+    }
+
+    @Test
+    fun `custom attribute aliases are safe Cypher identifiers`() {
+        val q = validated(columns = listOf(
+            ResolvedSelectColumn(expression = customAttr(Scope.TRACE, "Specialism code")),
+            ResolvedSelectColumn(expression = customAttr(Scope.EVENT, "call centre")),
+        ))
+
+        val plan = planner.plan(q) as LogicalPlan.Select
+
+        assertEquals("t_Specialism_code", plan.projection.columns[0].alias)
+        assertEquals("e_call_centre", plan.projection.columns[1].alias)
     }
 
     @Test

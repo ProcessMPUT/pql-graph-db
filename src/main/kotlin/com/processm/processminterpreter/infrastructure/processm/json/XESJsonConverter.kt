@@ -38,13 +38,13 @@ object XESJsonConverter {
 
     private val LOG_INTERNAL_ATTRIBUTES =
         setOf(
-            "description",
             "traceGlobals",
             "eventGlobals",
             "extensions",
             "classifiers",
             "dataStoreId",
             "logId",
+            "description",
             ATTR_CONCEPT_NAME,
             ATTR_LIFECYCLE_MODEL,
             ATTR_IDENTITY_ID,
@@ -82,6 +82,7 @@ object XESJsonConverter {
         logs: List<XesLog>,
         isProjectedQuery: Boolean = false,
         logSelectAll: Boolean = false,
+        projectedLogAttrs: Set<String> = emptySet(),
         projectedTraceAttrs: Set<String> = emptySet(),
         includeTraces: Boolean = true,
         includeEvents: Boolean = true,
@@ -93,13 +94,24 @@ object XESJsonConverter {
         }
 
         val log = logs.first()
-        return mapOf("log" to convertLog(log, isProjectedQuery, logSelectAll, projectedTraceAttrs, includeTraces, includeEvents))
+        return mapOf(
+            "log" to convertLog(
+                log,
+                isProjectedQuery,
+                logSelectAll,
+                projectedLogAttrs,
+                projectedTraceAttrs,
+                includeTraces,
+                includeEvents,
+            ),
+        )
     }
 
     fun convertToXESJsonDocuments(
         logs: List<XesLog>,
         isProjectedQuery: Boolean = false,
         logSelectAll: Boolean = false,
+        projectedLogAttrs: Set<String> = emptySet(),
         projectedTraceAttrs: Set<String> = emptySet(),
         includeTraces: Boolean = true,
         includeEvents: Boolean = true,
@@ -110,6 +122,7 @@ object XESJsonConverter {
                     log,
                     isProjectedQuery,
                     logSelectAll,
+                    projectedLogAttrs,
                     projectedTraceAttrs,
                     includeTraces,
                     includeEvents,
@@ -121,6 +134,7 @@ object XESJsonConverter {
         log: XesLog,
         isProjectedQuery: Boolean = false,
         logSelectAll: Boolean = false,
+        projectedLogAttrs: Set<String> = emptySet(),
         projectedTraceAttrs: Set<String> = emptySet(),
         includeTraces: Boolean = true,
         includeEvents: Boolean = true,
@@ -133,7 +147,9 @@ object XESJsonConverter {
         appendExtensions(result, log)
         if (!isProjectedQuery || logSelectAll) appendGlobals(result, log)
         appendClassifiers(result, log)
-        result.putAll(processMJsonAttributeView(logAttributes(log, isProjectedQuery, logSelectAll)))
+        result.putAll(
+            processMJsonAttributeView(logAttributes(log, isProjectedQuery, logSelectAll, projectedLogAttrs)),
+        )
         appendLogIdentityId(result, log, isProjectedQuery, logSelectAll)
         appendTraces(result, log, isProjectedQuery, projectedTraceAttrs, includeTraces, includeEvents)
 
@@ -200,6 +216,7 @@ object XESJsonConverter {
         log: XesLog,
         isProjectedQuery: Boolean,
         logSelectAll: Boolean,
+        projectedLogAttrs: Set<String>,
     ): Map<String, Any?> {
         val attributes = linkedMapOf<String, Any?>()
 
@@ -213,13 +230,24 @@ object XESJsonConverter {
 
         logger.debug("convertLog - log.customAttributes keys: {}", log.customAttributes.keys)
         log.customAttributes.forEach { (key, value) ->
-            if (key !in LOG_INTERNAL_ATTRIBUTES) {
+            if (
+                key !in LOG_INTERNAL_ATTRIBUTES ||
+                shouldEmitProjectedLogAttribute(key, isProjectedQuery, logSelectAll, projectedLogAttrs)
+            ) {
                 attributes[key] = value
             }
         }
 
         return attributes
     }
+
+    private fun shouldEmitProjectedLogAttribute(
+        key: String,
+        isProjectedQuery: Boolean,
+        logSelectAll: Boolean,
+        projectedLogAttrs: Set<String>,
+    ): Boolean =
+        isProjectedQuery && !logSelectAll && key in projectedLogAttrs
 
     private fun appendLogIdentityId(
         result: MutableMap<String, Any>,

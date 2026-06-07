@@ -8,6 +8,7 @@ data class QueryJsonProjection(
     val rows: List<Map<String, Any?>> = emptyList(),
     val hasExplicitSelect: Boolean = false,
     val selectAllScopes: Set<Scope> = emptySet(),
+    val projectedLogAttributes: Set<String> = emptySet(),
     val projectedTraceStandardAttributes: Set<String> = emptySet(),
     val includeTraces: Boolean = true,
     val includeEvents: Boolean = true,

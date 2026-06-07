@@ -74,7 +74,8 @@ private fun xesNameOf(pqlExpression: String): String? {
 private fun customAttributeKey(col: String, alias: ColumnAlias): String {
     val pql = alias.pqlExpression
     if (pql.isBlank() || pql.startsWith("_")) return col
-    return pql
+    val stripped = stripScopePrefix(pql) ?: return pql
+    return if (isSimpleProjectedAttribute(stripped)) stripped else pql
 }
 
 private fun Map<*, *>.stringKeyMap(): Map<String, Any?> =
@@ -92,6 +93,11 @@ private fun stripScopePrefix(pql: String): String? {
 
 private val SCOPE_PREFIXES: Set<String> = setOf("l", "t", "e", "log", "trace", "event")
 
+private fun isSimpleProjectedAttribute(value: String): Boolean =
+    !value.isProjectedLiteralName() &&
+        !value.contains('(') &&
+        !PROJECTED_EXPRESSION_OPERATOR.containsMatchIn(value)
+
 private fun String.isProjectedLiteralName(): Boolean =
     this == "null" ||
         this == "true" ||
@@ -100,3 +106,4 @@ private fun String.isProjectedLiteralName(): Boolean =
         matches(NUMBER_LITERAL_NAME)
 
 private val NUMBER_LITERAL_NAME = Regex("""-?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][+-]?\d+)?""")
+private val PROJECTED_EXPRESSION_OPERATOR = Regex("""\s(?:\+|-|\*|/|%|=|<>|!=|<|>|<=|>=)\s""")

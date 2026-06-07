@@ -82,6 +82,7 @@ class VerifyPqlQueryUseCase(
                     rows = localResult.results,
                     hasExplicitSelect = localResult.hasExplicitSelect,
                     selectAllScopes = localResult.selectAllScopes,
+                    projectedLogAttributes = localResult.projectedLogAttributes,
                     projectedTraceStandardAttributes = localResult.projectedTraceStandardAttributes,
                     includeTraces = request.includeTraces,
                     includeEvents = request.includeEvents,
@@ -228,6 +229,7 @@ private data class LocalVerificationResult(
     val resultCount: Int = 0,
     val hasExplicitSelect: Boolean = false,
     val selectAllScopes: Set<Scope> = emptySet(),
+    val projectedLogAttributes: Set<String> = emptySet(),
     val projectedTraceStandardAttributes: Set<String> = emptySet(),
 )
 
@@ -240,6 +242,7 @@ private fun QueryResult.toLocalVerificationResult(query: String): LocalVerificat
         resultCount = rowCount,
         hasExplicitSelect = hasExplicitSelect,
         selectAllScopes = selectAllScopes,
+        projectedLogAttributes = projectedLogAttributes,
         projectedTraceStandardAttributes = projectedTraceStandardAttributes,
     )
 

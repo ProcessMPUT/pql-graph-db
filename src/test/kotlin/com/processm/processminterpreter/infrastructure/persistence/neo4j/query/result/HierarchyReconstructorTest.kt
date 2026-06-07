@@ -267,6 +267,70 @@ class HierarchyReconstructorTest {
     }
 
     @Test
+    fun `projected custom attributes keep original key without scope prefix`() {
+        val rows = listOf(
+            mapOf(
+                "_log_id_" to "L",
+                "_trace_id_" to "T",
+                "t_Specialism_code" to "CARD",
+                "e_call_centre" to "Brisbane",
+            ),
+        )
+
+        val logs = reconstructor.reconstruct(
+            rows,
+            mapOf(
+                "_log_id_" to ColumnAlias("_log_id_", Scope.LOG, synthetic = true),
+                "_trace_id_" to ColumnAlias("_trace_id_", Scope.TRACE, synthetic = true),
+                "t_Specialism_code" to ColumnAlias("trace:Specialism code", Scope.TRACE),
+                "e_call_centre" to ColumnAlias("event:call centre", Scope.EVENT),
+            ),
+        )
+
+        val trace = logs.single().traces.single()
+        assertEquals("CARD", trace.customAttributes["Specialism code"])
+        assertNull(trace.customAttributes["trace:Specialism code"])
+        val event = trace.events.single()
+        assertEquals("Brisbane", event.customAttributes["call centre"])
+        assertNull(event.customAttributes["event:call centre"])
+    }
+
+    @Test
+    fun `projected expression keys keep ProcessM scope prefixes`() {
+        val rows = listOf(
+            mapOf(
+                "_log_id_" to "L",
+                "_trace_id_" to "T",
+                "min_0" to "Hospital log",
+                "sum_0" to null,
+                "literal_0" to "2020-03-12T00:00:00Z",
+            ),
+        )
+
+        val logs = reconstructor.reconstruct(
+            rows,
+            mapOf(
+                "_log_id_" to ColumnAlias("_log_id_", Scope.LOG, synthetic = true),
+                "_trace_id_" to ColumnAlias("_trace_id_", Scope.TRACE, synthetic = true),
+                "min_0" to ColumnAlias("trace:min(log:concept:name)", Scope.TRACE),
+                "sum_0" to ColumnAlias(
+                    pqlExpression = "event:cost:total + trace:cost:total",
+                    scope = Scope.EVENT,
+                    materializeNull = true,
+                ),
+                "literal_0" to ColumnAlias("log:D2020-03-12T00:00:00Z", Scope.LOG),
+            ),
+        )
+
+        val log = logs.single()
+        assertEquals("2020-03-12T00:00:00Z", log.customAttributes["log:D2020-03-12T00:00:00Z"])
+        val trace = log.traces.single()
+        assertEquals("Hospital log", trace.customAttributes["trace:min(log:concept:name)"])
+        val event = trace.events.single()
+        assertTrue(event.customAttributes.containsKey("event:cost:total + trace:cost:total"))
+    }
+
+    @Test
     fun `aggregation-only query produces synthetic single-log single-trace wrapper`() {
         // No LOG/TRACE aliases, just an aggregate column. The reconstructor keys the
         // aggregation value by its PQL surface text (`count(event:concept:name)`) —

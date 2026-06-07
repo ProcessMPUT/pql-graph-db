@@ -91,6 +91,7 @@ class PqlResponseMapper(
                     rows = result.rows,
                     hasExplicitSelect = result.hasExplicitSelect,
                     selectAllScopes = result.selectAllScopes,
+                    projectedLogAttributes = result.projectedLogAttributes,
                     projectedTraceStandardAttributes = result.projectedTraceStandardAttributes,
                 ),
             )

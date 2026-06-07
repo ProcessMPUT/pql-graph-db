@@ -1,7 +1,7 @@
 param(
     [string]$BaseUrl = "http://localhost:8080",
     [string]$CasesPath = (Join-Path $PSScriptRoot "verify-compatibility.cases.local.json"),
-    [ValidateSet("dropdown", "matrix")]
+    [ValidateSet("dropdown", "matrix", "discovery")]
     [string]$QuerySource = "dropdown",
     [ValidateSet("quick", "extended")]
     [string]$Profile = "extended",
@@ -10,6 +10,7 @@ param(
     [int]$TimeoutSec = 420,
     [switch]$SaveFullSnapshots,
     [switch]$SkipFailureSnapshots,
+    [switch]$MeasurePayloadSize,
     [switch]$IncludeMultiLogChecks,
     [string]$MultiLogCasesPath = (Join-Path $PSScriptRoot "verify-compatibility.multi-log.cases.local.json")
 )
@@ -31,10 +32,10 @@ if ($cases.Count -eq 0) {
     throw "Compatibility cases file is empty: $CasesPath"
 }
 
-$queries = if ($QuerySource -eq "dropdown") {
-    @(Get-ProcessMCompareDropdownQueries -IndexHtmlPath $IndexHtmlPath)
-} else {
-    @(Get-ProcessMCompatibilityQueries -Profile $Profile)
+$queries = switch ($QuerySource) {
+    "dropdown" { @(Get-ProcessMCompareDropdownQueries -IndexHtmlPath $IndexHtmlPath) }
+    "matrix" { @(Get-ProcessMCompatibilityQueries -Profile $Profile) }
+    "discovery" { @(Get-ProcessMDiscoveryQueries) }
 }
 
 $multiLogCases = @()
@@ -49,7 +50,12 @@ if ($IncludeMultiLogChecks) {
         throw "Multi-log compatibility cases file is empty: $MultiLogCasesPath"
     }
 
-    $multiLogQueries = @(Get-ProcessMMultiLogCompatibilityQueries)
+    $multiLogQueries =
+        if ($QuerySource -eq "discovery") {
+            @(Get-ProcessMMultiLogDiscoveryQueries)
+        } else {
+            @(Get-ProcessMMultiLogCompatibilityQueries)
+        }
 }
 $runId = Get-Date -Format "yyyyMMdd-HHmmss"
 $outputDirectory = Join-Path $OutputRoot $runId
@@ -201,6 +207,112 @@ function Save-FullSnapshot {
     }
 }
 
+function Measure-JsonPayload {
+    param(
+        [hashtable]$Request,
+        [pscustomobject]$FallbackSnapshot = $null
+    )
+
+    $snapshot =
+        if ($null -ne $FallbackSnapshot) {
+            $FallbackSnapshot
+        } else {
+            Invoke-VerifyEndpoint -Request $Request -Format "full"
+        }
+
+    $localJson = Convert-PayloadToJson -Value (Get-PropertyValue -Value $snapshot -Name "localResults")
+    $remoteJson = Convert-PayloadToJson -Value (Get-PropertyValue -Value $snapshot -Name "remoteResults")
+
+    $localLines = Count-JsonLines -Json $localJson
+    $remoteLines = Count-JsonLines -Json $remoteJson
+    $localBytes = [System.Text.Encoding]::UTF8.GetByteCount($localJson)
+    $remoteBytes = [System.Text.Encoding]::UTF8.GetByteCount($remoteJson)
+    $lineDelta = [math]::Abs($localLines - $remoteLines)
+    $byteDelta = [math]::Abs($localBytes - $remoteBytes)
+
+    $lineDeltaPercent = Get-DeltaPercent -Delta $lineDelta -Left $localLines -Right $remoteLines
+    $byteDeltaPercent = Get-DeltaPercent -Delta $byteDelta -Left $localBytes -Right $remoteBytes
+
+    return [pscustomobject]@{
+        LocalJsonLines = $localLines
+        RemoteJsonLines = $remoteLines
+        LineDelta = $lineDelta
+        LineDeltaPercent = $lineDeltaPercent
+        LocalJsonBytes = $localBytes
+        RemoteJsonBytes = $remoteBytes
+        ByteDelta = $byteDelta
+        ByteDeltaPercent = $byteDeltaPercent
+        PayloadWarning = Get-PayloadWarning -LineDeltaPercent $lineDeltaPercent -ByteDeltaPercent $byteDeltaPercent
+    }
+}
+
+function Convert-PayloadToJson {
+    param([object]$Value)
+
+    if ($null -eq $Value) {
+        return "null"
+    }
+
+    $json = $Value | ConvertTo-Json -Depth 100
+    if ($null -eq $json) {
+        return "null"
+    }
+
+    return [string]$json
+}
+
+function Count-JsonLines {
+    param([string]$Json)
+
+    if ([string]::IsNullOrEmpty($Json)) {
+        return 0
+    }
+
+    return (($Json -split "`r?`n").Count)
+}
+
+function Get-DeltaPercent {
+    param(
+        [int]$Delta,
+        [int]$Left,
+        [int]$Right
+    )
+
+    $baseline = [math]::Max($Left, $Right)
+    if ($baseline -le 0) {
+        return 0.0
+    }
+
+    return [math]::Round(($Delta / $baseline) * 100.0, 2)
+}
+
+function Get-PayloadWarning {
+    param(
+        [double]$LineDeltaPercent,
+        [double]$ByteDeltaPercent
+    )
+
+    if ($LineDeltaPercent -gt 20.0 -or $ByteDeltaPercent -gt 20.0) {
+        return "payload-size-delta"
+    }
+
+    return ""
+}
+
+function Empty-PayloadMeasurement {
+    return [pscustomobject]@{
+        LocalJsonLines = $null
+        RemoteJsonLines = $null
+        LineDelta = $null
+        LineDeltaPercent = $null
+        LocalJsonBytes = $null
+        RemoteJsonBytes = $null
+        ByteDelta = $null
+        ByteDeltaPercent = $null
+        PayloadWarning = ""
+    }
+}
+
 function Invoke-CompatibilityCheck {
     param(
         [pscustomobject]$Case,
@@ -217,6 +329,7 @@ function Invoke-CompatibilityCheck {
 
     $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     $snapshotPath = ""
+    $payload = Empty-PayloadMeasurement
 
     try {
         $response = Invoke-VerifyEndpoint -Request $request -Format "light"
@@ -237,6 +350,9 @@ function Invoke-CompatibilityCheck {
         if ($SaveFullSnapshots -or (($status -in @("MISMATCH", "ERROR")) -and -not $SkipFailureSnapshots)) {
             $snapshotPath = Save-FullSnapshot -Case $Case -Query $Query -Request $request
         }
+        if ($MeasurePayloadSize) {
+            $payload = Measure-JsonPayload -Request $request
+        }
 
         return [pscustomobject]@{
             Log = $Case.name
@@ -253,6 +369,15 @@ function Invoke-CompatibilityCheck {
             LocalSuccess = Get-PropertyValue -Value $response -Name "localSuccess"
             RemoteSuccess = Get-PropertyValue -Value $response -Name "remoteSuccess"
             Match = Get-PropertyValue -Value $response -Name "match"
+            LocalJsonLines = $payload.LocalJsonLines
+            RemoteJsonLines = $payload.RemoteJsonLines
+            LineDelta = $payload.LineDelta
+            LineDeltaPercent = $payload.LineDeltaPercent
+            LocalJsonBytes = $payload.LocalJsonBytes
+            RemoteJsonBytes = $payload.RemoteJsonBytes
+            ByteDelta = $payload.ByteDelta
+            ByteDeltaPercent = $payload.ByteDeltaPercent
+            PayloadWarning = $payload.PayloadWarning
             SnapshotPath = $snapshotPath
         }
     } catch {
@@ -276,6 +401,15 @@ function Invoke-CompatibilityCheck {
             LocalSuccess = $false
             RemoteSuccess = $false
             Match = $false
+            LocalJsonLines = $payload.LocalJsonLines
+            RemoteJsonLines = $payload.RemoteJsonLines
+            LineDelta = $payload.LineDelta
+            LineDeltaPercent = $payload.LineDeltaPercent
+            LocalJsonBytes = $payload.LocalJsonBytes
+            RemoteJsonBytes = $payload.RemoteJsonBytes
+            ByteDelta = $payload.ByteDelta
+            ByteDeltaPercent = $payload.ByteDeltaPercent
+            PayloadWarning = $payload.PayloadWarning
             SnapshotPath = $snapshotPath
         }
     }
@@ -317,6 +451,7 @@ $strictProblems = @($results | Where-Object { $_.Status -in @("MISMATCH", "ERROR
 $informational = @($results | Where-Object { $_.Status -eq "INFO" })
 $matches = @($results | Where-Object { $_.Status -eq "MATCH" })
 $accepted = @($results | Where-Object { $_.Status -in @("MATCH", "INFO") })
+$payloadWarnings = @($results | Where-Object { -not [string]::IsNullOrWhiteSpace($_.PayloadWarning) })
 
 $jsonPath = Join-Path $outputDirectory "results.json"
 $csvPath = Join-Path $outputDirectory "results.csv"
@@ -333,6 +468,8 @@ $markdown += "- Base URL: $BaseUrl"
 $markdown += "- Query source: $QuerySource"
 if ($QuerySource -eq "dropdown") {
     $markdown += "- Dropdown source file: $IndexHtmlPath"
+} elseif ($QuerySource -eq "discovery") {
+    $markdown += "- Discovery query set: Get-ProcessMDiscoveryQueries"
 } else {
     $markdown += "- Matrix profile: $Profile"
 }
@@ -350,6 +487,12 @@ $markdown += "- Matches: $($matches.Count)"
 $markdown += "- Accepted compatibility checks: $($accepted.Count)"
 $markdown += "- Strict problems: $($strictProblems.Count)"
 $markdown += "- Informational mismatches: $($informational.Count)"
+if ($MeasurePayloadSize) {
+    $markdown += "- Payload size measurement: enabled"
+    $markdown += "- Payload warnings: $($payloadWarnings.Count)"
+} else {
+    $markdown += "- Payload size measurement: disabled"
+}
 $markdown += ""
 
 if ($strictProblems.Count -eq 0) {
@@ -389,15 +532,22 @@ foreach ($query in $queries) {
 $markdown += ""
 $markdown += "## Results"
 $markdown += ""
-$markdown += "| Log | Query | Status | Seconds | Details | Snapshot |"
-$markdown += "|---|---|---:|---:|---|---|"
+$markdown += "| Log | Query | Status | Seconds | Local lines | Remote lines | Line delta | Local bytes | Remote bytes | Byte delta | Payload warning | Details | Snapshot |"
+$markdown += "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|"
 foreach ($result in $results) {
     $snapshot = if ([string]::IsNullOrWhiteSpace($result.SnapshotPath)) { "" } else { $result.SnapshotPath }
-    $markdown += "| {0} | {1} | {2} | {3} | {4} | {5} |" -f `
+    $markdown += "| {0} | {1} | {2} | {3} | {4} | {5} | {6} | {7} | {8} | {9} | {10} | {11} | {12} |" -f `
         (Format-MarkdownTableCell $result.Log), `
         (Format-MarkdownTableCell $result.Query), `
         (Format-MarkdownTableCell $result.Status), `
         (Format-MarkdownTableCell $result.Seconds), `
+        (Format-MarkdownTableCell $result.LocalJsonLines), `
+        (Format-MarkdownTableCell $result.RemoteJsonLines), `
+        (Format-MarkdownTableCell $result.LineDelta), `
+        (Format-MarkdownTableCell $result.LocalJsonBytes), `
+        (Format-MarkdownTableCell $result.RemoteJsonBytes), `
+        (Format-MarkdownTableCell $result.ByteDelta), `
+        (Format-MarkdownTableCell $result.PayloadWarning), `
         (Format-MarkdownTableCell $result.Details), `
         (Format-MarkdownTableCell $snapshot)
 }
@@ -428,6 +578,9 @@ Write-Host "  Matches: $($matches.Count)"
 Write-Host "  Accepted compatibility checks: $($accepted.Count)"
 Write-Host "  Strict problems: $($strictProblems.Count)"
 Write-Host "  Informational mismatches: $($informational.Count)"
+if ($MeasurePayloadSize) {
+    Write-Host "  Payload warnings: $($payloadWarnings.Count)"
+}
 
 if ($strictProblems.Count -gt 0) {
     exit 1

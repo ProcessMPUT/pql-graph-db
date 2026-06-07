@@ -82,6 +82,9 @@ open class ExecutePqlQueryUseCase(
                     },
                     hasExplicitSelect = plans.any { it.projection.hasExplicitSelect() },
                     selectAllScopes = plans.flatMap { it.projection.selectedAllScopes() }.toSet(),
+                    projectedLogAttributes = plans
+                        .flatMap { it.projection.projectedLogAttributes() }
+                        .toSet(),
                     projectedTraceStandardAttributes = plans
                         .flatMap { it.projection.projectedTraceStandardAttributes() }
                         .toSet(),
@@ -98,6 +101,7 @@ open class ExecutePqlQueryUseCase(
             executedQueryDescription = executedQueryDescription,
             hasExplicitSelect = projection.hasExplicitSelect(),
             selectAllScopes = projection.selectedAllScopes(),
+            projectedLogAttributes = projection.projectedLogAttributes(),
             projectedTraceStandardAttributes = projection.projectedTraceStandardAttributes(),
         )
 
@@ -144,6 +148,7 @@ data class QueryResult(
     val executedQueryDescription: String = "",
     val hasExplicitSelect: Boolean = false,
     val selectAllScopes: Set<Scope> = emptySet(),
+    val projectedLogAttributes: Set<String> = emptySet(),
     val projectedTraceStandardAttributes: Set<String> = emptySet(),
 )
 
@@ -152,6 +157,19 @@ private fun Projection.hasExplicitSelect(): Boolean =
 
 private fun Projection.selectedAllScopes(): Set<Scope> =
     selectAll.filterValues { it }.keys
+
+private fun Projection.projectedLogAttributes(): Set<String> =
+    columns.mapNotNull { column ->
+        val attribute = column.expression as? ResolvedAttribute ?: return@mapNotNull null
+        attribute.takeIf { column.scope == Scope.LOG }?.let { it.xesStandardName ?: stripLogScopePrefix(it.name) }
+    }.toSet()
+
+private fun stripLogScopePrefix(name: String): String =
+    when {
+        name.startsWith("l:") -> name.removePrefix("l:")
+        name.startsWith("log:") -> name.removePrefix("log:")
+        else -> name
+    }
 
 private fun Projection.projectedTraceStandardAttributes(): Set<String> =
     columns.mapNotNull { column ->
