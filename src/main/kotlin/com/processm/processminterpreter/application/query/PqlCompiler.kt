@@ -57,18 +57,19 @@ class PqlCompiler(
         defaultLimits: HierarchicalLimits = HierarchicalLimits(),
     ): PreparedPqlQuery {
         val raw = parser.parse(query)
-        val scopedLogs = findExplicitlyScopedLogs(logId, dataStoreId)
-        val singleDataStoreLogId = scopedLogs
+        val usesClassifier = raw is RawQuery.Select && RawClassifierProbe.containsClassifier(raw)
+        val scopedLogIds = findExplicitlyScopedLogIds(logId, dataStoreId)
+        val singleDataStoreLogId = scopedLogIds
             ?.singleOrNull()
-            ?.id
             ?.takeIf { logId == null && dataStoreId != null }
         val effectiveLogId = logId ?: singleDataStoreLogId
         val effectiveDataStoreId = dataStoreId.takeIf { singleDataStoreLogId == null }
+        val scopedLogs = if (usesClassifier) scopedLogIds?.mapNotNull(logs::findById) else emptyList()
 
         if (
             raw is RawQuery.Select &&
             effectiveLogId == null &&
-            RawClassifierProbe.containsClassifier(raw)
+            usesClassifier
         ) {
             val classifierScopedLogs = scopedLogs ?: findScopedLogs(logId, dataStoreId)
             if (classifierScopedLogs.size <= 1) {
@@ -183,12 +184,13 @@ class PqlCompiler(
             else -> logs.findAll()
         }
 
-    private fun findExplicitlyScopedLogs(
+    private fun findExplicitlyScopedLogIds(
         logId: String?,
         dataStoreId: String?,
-    ): List<Log>? =
+    ): List<String>? =
         when {
-            logId != null || dataStoreId != null -> findScopedLogs(logId, dataStoreId)
+            logId != null -> listOf(logId)
+            dataStoreId != null -> dataStores.findLogSummaries(dataStoreId).map { it.logId }
             else -> null
         }
 

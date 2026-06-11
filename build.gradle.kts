@@ -65,11 +65,34 @@ tasks.generateGrammarSource {
     arguments = arguments + listOf("-visitor", "-no-listener")
 }
 
+val benchmarkSourceSet = sourceSets.create("benchmark") {
+    java {
+        setSrcDirs(listOf("src/benchmark/kotlin"))
+    }
+    resources {
+        setSrcDirs(listOf("src/benchmark/resources"))
+    }
+    compileClasspath += sourceSets["main"].output
+    runtimeClasspath += output + compileClasspath
+}
+
+configurations.named(benchmarkSourceSet.implementationConfigurationName) {
+    extendsFrom(configurations["implementation"])
+}
+
+configurations.named(benchmarkSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom(configurations["runtimeOnly"])
+}
+
 sourceSets {
     main {
         java {
             srcDirs("build/generated-src/antlr/main")
         }
+    }
+    test {
+        compileClasspath += benchmarkSourceSet.output
+        runtimeClasspath += benchmarkSourceSet.output
     }
 }
 
@@ -78,10 +101,39 @@ tasks.named("compileKotlin") {
     dependsOn("generateGrammarSource")
 }
 
+tasks.named("compileBenchmarkKotlin") {
+    dependsOn("classes")
+}
+
 // Gradle 8 strict mode: compileTestKotlin reads from generated antlr/test output dir
 // even when there's no test grammar, so make the dependency explicit.
 tasks.named("compileTestKotlin") {
     dependsOn("generateTestGrammarSource")
+    dependsOn("compileBenchmarkKotlin")
+}
+
+tasks.register<JavaExec>("runBenchmarkSmoke") {
+    group = "benchmark"
+    description = "Runs the small black-box benchmark profile against local and reference ProcessM APIs."
+    classpath = benchmarkSourceSet.runtimeClasspath
+    mainClass.set("com.processm.processminterpreter.benchmark.BenchmarkRunnerKt")
+    args("smoke")
+}
+
+tasks.register<JavaExec>("runBenchmarkFull") {
+    group = "benchmark"
+    description = "Runs the full black-box benchmark profile for thesis measurements."
+    classpath = benchmarkSourceSet.runtimeClasspath
+    mainClass.set("com.processm.processminterpreter.benchmark.BenchmarkRunnerKt")
+    args("full")
+}
+
+tasks.register<JavaExec>("runBenchmarkCleanup") {
+    group = "benchmark"
+    description = "Deletes benchmark datastores with the bench- prefix from local and reference ProcessM APIs."
+    classpath = benchmarkSourceSet.runtimeClasspath
+    mainClass.set("com.processm.processminterpreter.benchmark.BenchmarkRunnerKt")
+    args("cleanup")
 }
 
 tasks.withType<Test> {

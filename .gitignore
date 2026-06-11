@@ -60,6 +60,10 @@ tmp/
 *.txt
 *.log
 *.py
+__pycache__/
+*.pyc
 !scripts/init-processm-datastores.py
+!scripts/benchmarks/
+!scripts/benchmarks/*.py
 scripts/verify-compatibility.cases.local.json
 scripts/verify-compatibility.multi-log.cases.local.json

@@ -1,0 +1,26 @@
+[
+  {
+    "label": "hierarchyWindow",
+    "query": "limit l:1, t:10, e:20"
+  },
+  {
+    "label": "eventNameFilter",
+    "query": "where e:name is not null limit l:1, t:10, e:20"
+  },
+  {
+    "label": "timestampNameOrder",
+    "query": "order by e:timestamp, e:name limit l:1, t:10, e:20"
+  },
+  {
+    "label": "eventNameGroup",
+    "query": "group by e:name order by e:name limit l:1, t:10, e:20"
+  },
+  {
+    "label": "timestampAggregates",
+    "query": "select min(e:timestamp), max(e:timestamp), count(e:name)"
+  },
+  {
+    "label": "customAttributesProjection",
+    "query": "select [e:attr_1], [e:attr_5] limit l:1, t:10, e:20"
+  }
+]

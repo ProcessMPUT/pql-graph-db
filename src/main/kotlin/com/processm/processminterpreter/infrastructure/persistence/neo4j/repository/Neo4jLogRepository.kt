@@ -32,7 +32,10 @@ import org.springframework.stereotype.Repository
  * store heterogeneous lists of maps directly as a property.
  */
 @Repository
-class Neo4jLogRepository(private val driver: Driver) : LogRepository {
+class Neo4jLogRepository(
+    private val driver: Driver,
+    private val dataStoreReadCache: Neo4jDataStoreReadCache,
+) : LogRepository {
 
     override fun save(log: Log): Log {
         driver.session().use { session ->
@@ -43,6 +46,7 @@ class Neo4jLogRepository(private val driver: Driver) : LogRepository {
                 ).consume()
             }
         }
+        dataStoreReadCache.invalidateLog(log.id)
         return log
     }
 
@@ -176,6 +180,7 @@ class Neo4jLogRepository(private val driver: Driver) : LogRepository {
                     .consume()
             }
         }
+        dataStoreReadCache.invalidateLog(id)
         return true
     }
 
@@ -194,6 +199,7 @@ class Neo4jLogRepository(private val driver: Driver) : LogRepository {
                 ).consume()
             }
         }
+        dataStoreReadCache.invalidateLog(id)
         return true
     }
 

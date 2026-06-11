@@ -40,16 +40,15 @@ class IntegrationTest : BaseInterpreterTest() {
         val countQuery = "select count(e:name)"
         val countResult = executeDataStoreQuery(countQuery, defaultTraceLimit = -1)
 
-        if (!countResult.success) {
-            println("Count query failed: ${countResult.error}")
-        }
-        assertTrue(countResult.success, "Count query should succeed")
-        // ProcessM groups event-level aggregation per trace implicitly
-        assertEquals(traceCount, countResult.results.size, "Should have one result per trace")
-        val totalEvents = countResult.results.sumOf { row ->
-            val countValue = row.entries.first { (key, _) -> key.startsWith("count") }.value as Number
-            countValue.toInt()
-        }
+        assertTrue(countResult.success, "Count query should succeed: ${countResult.error}")
+        assertEquals(1, countResult.logs.size, "Should return one log")
+        val countTraces = countResult.logs.single().traces
+        assertEquals(traceCount, countTraces.size, "Should have one result per trace")
+        val totalEvents =
+            countTraces.sumOf { trace ->
+                assertEquals(1, trace.events.size, "Each trace should contain one aggregation event")
+                (trace.events.single().customAttributes["count(event:concept:name)"] as Number).toInt()
+            }
         assertEquals(
             traceCount * eventsPerTrace,
             totalEvents,
@@ -61,23 +60,22 @@ class IntegrationTest : BaseInterpreterTest() {
         val groupQuery = "select t:name, count(e:name) group by t:name order by t:name"
         val groupResult = executeDataStoreQuery(groupQuery, defaultTraceLimit = -1)
 
-        if (!groupResult.success) {
-            println("Group query failed: ${groupResult.error}")
+        assertTrue(groupResult.success, "Group query should succeed: ${groupResult.error}")
+        assertEquals(1, groupResult.logs.size, "Should return one log")
+        val groupedTraces = groupResult.logs.single().traces
+        assertEquals(traceCount, groupedTraces.size, "Should have one result per trace")
+        assertEquals(
+            (1..traceCount).map { "Case $it" }.sorted(),
+            groupedTraces.map { it.conceptName },
+            "Traces should be ordered by concept:name",
+        )
+        groupedTraces.forEach { trace ->
+            assertEquals(1, trace.events.size, "Each grouped trace should contain one aggregation event")
+            assertEquals(
+                eventsPerTrace,
+                (trace.events.single().customAttributes["count(event:concept:name)"] as Number).toInt(),
+                "Each grouped trace should contain the expected event count",
+            )
         }
-        assertTrue(groupResult.success, "Group query should succeed")
-        assertEquals(traceCount, groupResult.results.size, "Should have one result per trace")
-
-        val firstTrace = groupResult.results[0]
-        // Depending on map key naming (e.g. t_caseId or trace.caseId), check values
-        // The current implementation returns map keys based on alias or property name
-        // Let's just check that we have results and they look reasonable
-        assertTrue(firstTrace.values.any { it == "Case 1" }, "Should contain Case 1")
-
-        val countValue = firstTrace.values.find { it is Number }
-        if (countValue == null) {
-            println("First trace values: ${firstTrace.values}")
-            println("First trace types: ${firstTrace.values.map { it?.javaClass?.name }}")
-        }
-        assertTrue(firstTrace.values.any { (it as? Number)?.toInt() == eventsPerTrace }, "Should have correct event count per trace")
     }
 }

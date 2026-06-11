@@ -295,7 +295,7 @@ class ExecutePqlQueryUseCaseTest {
     }
 
     @Test
-    fun `buildContext hits the log repository when logId is provided`() {
+    fun `non-classifier query carries logId without loading log metadata`() {
         val classifiers = listOf(Classifier("Event Name", listOf("concept:name")))
         val parser = FakeParser(mapOf("select e:name" to rawSelect()))
         val executor = FakeExecutor()
@@ -304,7 +304,7 @@ class ExecutePqlQueryUseCaseTest {
 
         useCase.execute(ExecutePqlQueryRequest(query = "select e:name", logId = "log-1"))
 
-        assertEquals(listOf("log-1"), repo.findByIdCalls)
+        assertTrue(repo.findByIdCalls.isEmpty(), "plain queries should not load classifier metadata")
         // Plan must carry the logId down into the LogicalSource.
         assertEquals("log-1", executor.selectCalls.single().first.source.logId)
     }
@@ -323,8 +323,7 @@ class ExecutePqlQueryUseCaseTest {
     }
 
     @Test
-    fun `missing log from repository falls back to empty classifier list`() {
-        // findById returns null — resolver must still work with empty classifier list.
+    fun `plain query does not require the log to exist during compilation`() {
         val parser = FakeParser(mapOf("select e:name" to rawSelect()))
         val executor = FakeExecutor(
             selectResult = QueryExecutionResult(listOf(sampleXesLog()), emptyList(), 0, ""),
@@ -334,7 +333,8 @@ class ExecutePqlQueryUseCaseTest {
 
         val result = useCase.execute(ExecutePqlQueryRequest(query = "select e:name", logId = "nope"))
         assertEquals(1, result.logs.size)
-        assertEquals(listOf("nope"), repo.findByIdCalls)
+        assertTrue(repo.findByIdCalls.isEmpty(), "plain queries should not load classifier metadata")
+        assertEquals("nope", executor.selectCalls.single().first.source.logId)
     }
     @Test
     fun `buildContext loads classifier metadata for logs attached to a data store`() {

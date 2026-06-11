@@ -21,9 +21,10 @@ import com.processm.processminterpreter.domain.pql.syntax.RawUnaryOp
  */
 object RawClassifierProbe {
 
-    /** True iff any column, GROUP BY key, or ORDER BY key references a classifier. */
+    /** True iff any SELECT query expression references a classifier. */
     fun containsClassifier(query: RawQuery.Select): Boolean =
         query.columns.any { it.expression?.let { e -> containsClassifier(e) } == true } ||
+            query.where?.let { containsClassifier(it) } == true ||
             query.groupBy.any { containsClassifier(it) } ||
             query.orderBy.any { containsClassifier(it.expression) }
 

@@ -169,9 +169,7 @@ class ValidatePqlQueryUseCaseTest {
 
     @Test
     fun `logId is forwarded to the repository for classifier lookup`() {
-        // Smoke test — the validator itself doesn't consult classifiers for a
-        // plain query, but we want to prove the resolution context is built.
-        val parser = FakeParser(result = rawSelect(listOf(attr("name"))))
+        val parser = FakeParser(result = rawSelect(listOf(attr("c:Event Name", scope = null))))
         val repo = object : LogRepository by FakeLogRepository() {
             var lastLookup: String? = null
             override fun findById(id: String): Log? {
@@ -185,7 +183,7 @@ class ValidatePqlQueryUseCaseTest {
         }
         val useCase = ValidatePqlQueryUseCase(PqlCompiler(parser, repo, FakeDataStoreRepository()))
 
-        val r = useCase.validate(ValidatePqlQueryRequest(query = "select e:name", logId = "log-1"))
+        val r = useCase.validate(ValidatePqlQueryRequest(query = "select [e:c:Event Name]", logId = "log-1"))
 
         assertTrue(r.valid)
         assertEquals("log-1", repo.lastLookup)

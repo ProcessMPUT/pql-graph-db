@@ -11,6 +11,7 @@ import com.processm.processminterpreter.infrastructure.parser.antlr.AstBuilder
 import com.processm.processminterpreter.infrastructure.persistence.neo4j.query.cypher.CypherCodegen
 import com.processm.processminterpreter.infrastructure.persistence.neo4j.query.CypherTypeMapper
 import com.processm.processminterpreter.infrastructure.persistence.neo4j.query.result.HierarchyReconstructor
+import com.processm.processminterpreter.infrastructure.persistence.neo4j.repository.Neo4jDataStoreReadCache
 import com.processm.processminterpreter.infrastructure.persistence.neo4j.repository.Neo4jDataStoreRepository
 import com.processm.processminterpreter.infrastructure.persistence.neo4j.repository.Neo4jLogRepository
 import com.processm.processminterpreter.infrastructure.persistence.neo4j.query.Neo4jQueryPlanExecutor
@@ -68,8 +69,9 @@ abstract class BaseInterpreterTest {
             typeMapper = CypherTypeMapper(),
             reconstructor = HierarchyReconstructor(),
         )
-        val logs = Neo4jLogRepository(driver)
-        dataStores = Neo4jDataStoreRepository(driver)
+        val dataStoreReadCache = Neo4jDataStoreReadCache()
+        val logs = Neo4jLogRepository(driver, dataStoreReadCache)
+        dataStores = Neo4jDataStoreRepository(driver, dataStoreReadCache)
         val compiler = PqlCompiler(parser, logs, dataStores)
         val executeUseCase = ExecutePqlQueryUseCase(compiler, executor)
         val validateUseCase = ValidatePqlQueryUseCase(compiler)

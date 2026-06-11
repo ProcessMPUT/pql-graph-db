@@ -1,17 +1,19 @@
 package com.processm.processminterpreter.infrastructure.persistence.neo4j.repository
 
-import com.processm.processminterpreter.domain.datastore.DataStore
 import com.processm.processminterpreter.application.datastore.DataStoreNotFoundException
 import com.processm.processminterpreter.application.ports.DataStoreLogSummary
 import com.processm.processminterpreter.application.ports.DataStoreRepository
+import com.processm.processminterpreter.domain.datastore.DataStore
 import org.neo4j.driver.Driver
 import org.neo4j.driver.types.Node
 import org.springframework.stereotype.Repository
 import java.time.LocalDateTime
 
 @Repository
-class Neo4jDataStoreRepository(private val driver: Driver) : DataStoreRepository {
-
+class Neo4jDataStoreRepository(
+    private val driver: Driver,
+    private val cache: Neo4jDataStoreReadCache,
+) : DataStoreRepository {
     override fun save(dataStore: DataStore): DataStore {
         driver.session().use { session ->
             session.executeWrite { tx ->
@@ -31,17 +33,23 @@ class Neo4jDataStoreRepository(private val driver: Driver) : DataStoreRepository
                 ).consume()
             }
         }
+        cache.putDataStore(dataStore)
+        cache.invalidateLogSummaries(dataStore.id)
         return dataStore
     }
 
     override fun findById(id: String): DataStore? =
-        driver.session().use { session ->
+        cache.getDataStore(id) ?: driver.session().use { session ->
             session.executeRead { tx ->
                 val result = tx.run(
                     "MATCH (ds:DataStore {dataStoreId: \$dataStoreId}) RETURN ds",
                     mapOf("dataStoreId" to id),
                 )
-                if (result.hasNext()) toDomain(result.single()["ds"].asNode()) else null
+                if (result.hasNext()) {
+                    toDomain(result.single()["ds"].asNode()).also(cache::putDataStore)
+                } else {
+                    null
+                }
             }
         }
 
@@ -54,7 +62,7 @@ class Neo4jDataStoreRepository(private val driver: Driver) : DataStoreRepository
         }
 
     override fun findLogSummaries(dataStoreId: String): List<DataStoreLogSummary> =
-        driver.session().use { session ->
+        cache.getLogSummaries(dataStoreId) ?: driver.session().use { session ->
             session.executeRead { tx ->
                 tx.run(
                     """
@@ -73,7 +81,7 @@ class Neo4jDataStoreRepository(private val driver: Driver) : DataStoreRepository
                         createdAt = record["createdAt"].takeUnless { it.isNull }?.asLocalDateTime(),
                         updatedAt = record["updatedAt"].takeUnless { it.isNull }?.asLocalDateTime(),
                     )
-                }
+                }.also { cache.putLogSummaries(dataStoreId, it) }
             }
         }
 
@@ -98,6 +106,7 @@ class Neo4jDataStoreRepository(private val driver: Driver) : DataStoreRepository
                 ).consume()
             }
         }
+        cache.invalidateDataStore(id)
         return true
     }
 
@@ -124,6 +133,7 @@ class Neo4jDataStoreRepository(private val driver: Driver) : DataStoreRepository
                 ).consume()
             }
         }
+        cache.invalidateLogSummaries(dataStoreId)
     }
 
     private fun toDomain(node: Node): DataStore {
