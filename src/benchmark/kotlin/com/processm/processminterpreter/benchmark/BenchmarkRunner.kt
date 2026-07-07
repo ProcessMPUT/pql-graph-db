@@ -58,9 +58,14 @@ fun main(args: Array<String>) {
     val cleanup = mutableListOf<DataStoreCleanupResult>()
     val createdDataStores = mutableListOf<CreatedDataStoreHandle>()
     val importedHandles = mutableListOf<ImportedDatasetHandle>()
+    val memorySampler = MemorySampler(memorySources(settings, systems))
     var fatalError: Throwable? = null
 
     try {
+        memorySampler.start()
+        println("Sampling idle memory baseline for ${settings.profile.idleBaselineSeconds}s")
+        memorySampler.sampleBlocking(MEMORY_PHASE_IDLE, settings.profile.idleBaselineSeconds)
+
         datasets.forEach { dataset ->
             systems.forEach { system ->
                 val client = clients.getValue(system)
@@ -116,43 +121,37 @@ fun main(args: Array<String>) {
             }
         }
 
-        importedHandles.forEach { handle ->
-            val client = clients.getValue(handle.system)
-            config.queries.forEach { query ->
-                println("[${handle.system.name}] Query ${query.label} on ${handle.dataset.name}")
-                repeat(settings.profile.warmups) {
-                    runCatching { client.executeQuery(handle.dataStoreId, query.query) }
+        // Query phase (methodology 5.4): per (dataset, query) pair, one recorded cold
+        // execution per system first, then interleaved warmups, then interleaved
+        // measured repetitions (local, reference, local, reference, ...).
+        memorySampler.setPhase(MEMORY_PHASE_QUERIES)
+        val measuredQueries = config.queries
+        datasets.forEach { dataset ->
+            val handles = importedHandles.filter { it.dataset.name == dataset.name }
+            if (handles.isEmpty()) return@forEach
+            measuredQueries.forEach { query ->
+                println("Query ${query.label} on ${dataset.name} [${handles.joinToString(",") { it.system.name }}]")
+                val plan = buildQueryExecutionPlan(
+                    systemCount = handles.size,
+                    warmups = settings.profile.warmups,
+                    repetitions = settings.profile.repetitions,
+                )
+                val pairSamples = mutableListOf<QueryBenchmarkResult>()
+                plan.forEach { step ->
+                    val handle = handles[step.systemIndex]
+                    val client = clients.getValue(handle.system)
+                    when (step.kind) {
+                        QueryStepKind.WARMUP -> runCatching { client.executeQuery(handle.dataStoreId, query.query) }
+                        QueryStepKind.COLD ->
+                            pairSamples += recordedQuerySample(client, handle, query.label, query.query, step.run, QUERY_PHASE_COLD)
+                        QueryStepKind.MEASURED ->
+                            pairSamples += recordedQuerySample(client, handle, query.label, query.query, step.run, QUERY_PHASE_WARM)
+                    }
                 }
-                repeat(settings.profile.repetitions) { runIndex ->
-                    val result = runCatching { client.executeQuery(handle.dataStoreId, query.query) }
-                    queries += result.fold(
-                        onSuccess = {
-                            QueryBenchmarkResult(
-                                system = handle.system.name,
-                                datasetName = handle.dataset.name,
-                                queryLabel = query.label,
-                                run = runIndex + 1,
-                                seconds = it.seconds,
-                                status = "OK",
-                                responseBytes = it.responseBytes,
-                            )
-                        },
-                        onFailure = {
-                            QueryBenchmarkResult(
-                                system = handle.system.name,
-                                datasetName = handle.dataset.name,
-                                queryLabel = query.label,
-                                run = runIndex + 1,
-                                seconds = 0.0,
-                                status = "ERROR",
-                                responseBytes = 0,
-                                details = it.message.orEmpty(),
-                            )
-                        },
-                    )
-                }
+                queries += applyResponseCountParity(pairSamples)
             }
         }
+        memorySampler.setPhase(null)
 
         importedHandles
             .filter { it.system.name == "local" }
@@ -185,6 +184,7 @@ fun main(args: Array<String>) {
     } catch (error: Throwable) {
         fatalError = error
     } finally {
+        memorySampler.stop()
         cleanup += cleanupCreatedDataStores(settings, createdDataStores, clients)
     }
 
@@ -198,17 +198,93 @@ fun main(args: Array<String>) {
         storage = storage,
         roundtrips = roundtrips,
         cleanup = cleanup,
+        memorySamples = memorySampler.samples(),
+        memorySummaries = memorySampler.summaries(),
+    )
+    // Thesis artifacts (METODOLOGIA §6): generated at the end of every run from the
+    // in-memory records, never by re-reading the CSVs written above.
+    ThesisReportWriter(outputDirectory).write(
+        runId = runId,
+        settings = settings,
+        datasets = datasets,
+        imports = imports,
+        queries = queries,
+        storage = storage,
+        roundtrips = roundtrips,
+        memorySummaries = memorySampler.summaries(),
     )
 
     println("Benchmark report written to $outputDirectory")
     fatalError?.let { throw it }
+    val mismatches = queries.count { it.status == QUERY_STATUS_MISMATCH }
+    if (mismatches > 0) {
+        println("WARNING: $mismatches query sample(s) invalidated by response-count MISMATCH. See query-results.csv")
+    }
     val strictErrors = imports.count { it.status != "OK" } +
-        queries.count { it.status != "OK" } +
+        queries.count { it.status == "ERROR" } +
         roundtrips.count { it.status == "ERROR" }
     if (strictErrors > 0) {
         error("Benchmark finished with $strictErrors infrastructure/runtime error(s). See $outputDirectory")
     }
 }
+
+private fun recordedQuerySample(
+    client: BenchmarkHttpClient,
+    handle: ImportedDatasetHandle,
+    queryLabel: String,
+    pql: String,
+    run: Int,
+    phase: String,
+): QueryBenchmarkResult =
+    runCatching { client.executeQuery(handle.dataStoreId, pql) }.fold(
+        onSuccess = {
+            QueryBenchmarkResult(
+                system = handle.system.name,
+                datasetName = handle.dataset.name,
+                queryLabel = queryLabel,
+                run = run,
+                seconds = it.seconds,
+                status = "OK",
+                responseBytes = it.responseBytes,
+                phase = phase,
+                logCount = it.counts.logs,
+                traceCount = it.counts.traces,
+                eventCount = it.counts.events,
+            )
+        },
+        onFailure = {
+            QueryBenchmarkResult(
+                system = handle.system.name,
+                datasetName = handle.dataset.name,
+                queryLabel = queryLabel,
+                run = run,
+                seconds = 0.0,
+                status = "ERROR",
+                responseBytes = 0,
+                phase = phase,
+                details = it.message.orEmpty(),
+            )
+        },
+    )
+
+
+private fun memorySources(
+    settings: BenchmarkSettings,
+    systems: List<BenchmarkSystem>,
+): List<MemorySampler.MemorySource> =
+    buildList {
+        add(DockerStatsMemorySource(systems.map { it.storage.container }.toSet()))
+        if (systems.any { it.name == "local" }) {
+            val port = runCatching { java.net.URI(settings.localApi).port }.getOrNull().takeIf { it != null && it > 0 } ?: 8080
+            val pid = LocalAppPidResolver.resolve(port)
+            if (pid != null) {
+                println("Sampling local JVM RSS for PID $pid (port $port)")
+                add(WindowsProcessMemorySource("local-jvm", pid))
+            } else {
+                println("WARNING: could not resolve local application PID on port $port; local-jvm memory will not be sampled")
+            }
+        }
+    }
 
 private fun runCleanup(settings: BenchmarkSettings, outputDirectory: Path) {
     outputDirectory.createDirectories()
@@ -250,13 +326,23 @@ private fun benchmarkSystems(settings: BenchmarkSettings): List<BenchmarkSystem>
                 container = "processm-neo4j",
                 path = "/data",
                 sizeCommand = "total=0; for f in \$(find /data/databases /data/transactions -type f 2>/dev/null); do size=\$(stat -c %s \"\$f\" 2>/dev/null || echo 0); total=\$((total + size)); done; echo \$total",
-                flushCommand = "cypher-shell -u neo4j -p password123 'CALL db.checkpoint()'",
+                // Neo4j community exposes no manual checkpoint procedure (a
+                // `CALL db.checkpoint()` here failed silently for months) —
+                // sizes reflect naturally checkpointed state. Attributable
+                // local per-dataset deltas come from the sequential probe in
+                // scripts/benchmarks/measure-storage-scaling.ps1 instead.
             ),
         ),
         BenchmarkSystem(
             name = "reference",
             apiBase = settings.referenceApi,
-            storage = StorageProbe(container = "processm-server", path = "/var/lib/postgresql/data"),
+            storage = StorageProbe(
+                container = "processm-server",
+                path = "/var/lib/postgresql/data",
+                // Same pre-measurement flush semantics as the Neo4j checkpoint above,
+                // so neither system reports un-checkpointed WAL/page state as disk size.
+                flushCommand = "psql -U postgres -c 'CHECKPOINT;'",
+            ),
         ),
     ).filter { settings.systemFilter.isEmpty() || it.name in settings.systemFilter }
 

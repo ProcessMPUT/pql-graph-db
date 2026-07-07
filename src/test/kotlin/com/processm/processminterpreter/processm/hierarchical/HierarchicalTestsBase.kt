@@ -1,10 +1,10 @@
 package com.processm.processminterpreter.processm.hierarchical
 
-import com.processm.processminterpreter.application.query.DataStorePqlQueryResult
-import com.processm.processminterpreter.application.query.PQLQueryService
-import com.processm.processminterpreter.domain.log.xes.XesEvent
-import com.processm.processminterpreter.domain.log.xes.XesLog
-import com.processm.processminterpreter.domain.log.xes.XesTrace
+import com.processm.processminterpreter.pql.DataStorePqlQueryResult
+import com.processm.processminterpreter.pql.LegacyQueryTestFacade
+import com.processm.processminterpreter.xes.model.XesEvent
+import com.processm.processminterpreter.xes.model.XesLog
+import com.processm.processminterpreter.xes.model.XesTrace
 import com.processm.processminterpreter.processm.TestDataLoader
 import com.processm.processminterpreter.processm.TestDataLoader.Companion.PROCESSM_COMPAT_DATA_STORE_ID
 import org.neo4j.driver.Driver
@@ -24,7 +24,7 @@ import kotlin.test.assertTrue
  */
 abstract class HierarchicalTestsBase {
     @Autowired
-    protected lateinit var pqlQueryService: PQLQueryService
+    protected lateinit var pqlQueryService: LegacyQueryTestFacade
 
     @Autowired
     protected lateinit var testDataLoader: TestDataLoader

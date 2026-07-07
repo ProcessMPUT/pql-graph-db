@@ -1,9 +1,9 @@
 package com.processm.processminterpreter.processm.log
 
-import com.processm.processminterpreter.domain.log.AttributeScope
-import com.processm.processminterpreter.domain.log.xes.XesAttributeValue
-import com.processm.processminterpreter.infrastructure.xes.XESParseException
-import com.processm.processminterpreter.infrastructure.xes.XESParser
+import com.processm.processminterpreter.xes.model.AttributeScope
+import com.processm.processminterpreter.xes.model.XesAttributeValue
+import com.processm.processminterpreter.xes.io.XESParseException
+import com.processm.processminterpreter.xes.io.XESParser
 import org.junit.jupiter.api.Disabled
 import org.junit.jupiter.api.Test
 import java.time.Instant

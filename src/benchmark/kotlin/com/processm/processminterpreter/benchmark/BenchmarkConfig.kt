@@ -8,9 +8,15 @@ import kotlin.io.path.Path
 enum class BenchmarkProfile(
     val warmups: Int,
     val repetitions: Int,
+    /**
+     * Idle memory-baseline sampling window before imports (methodology 5.2).
+     * FULL uses the methodology-mandated 60 s; SMOKE keeps a short window so the
+     * pipeline smoke test stays fast (smoke results are never thesis evidence).
+     */
+    val idleBaselineSeconds: Int,
 ) {
-    SMOKE(warmups = 1, repetitions = 3),
-    FULL(warmups = 3, repetitions = 10),
+    SMOKE(warmups = 1, repetitions = 3, idleBaselineSeconds = 5),
+    FULL(warmups = 3, repetitions = 30, idleBaselineSeconds = 60),
 }
 
 enum class DatasetType {
@@ -29,6 +35,7 @@ data class BenchmarkDatasetSpec(
     val resourcePath: String? = null,
 )
 
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class BenchmarkQuerySpec(
     val label: String,
     val query: String,

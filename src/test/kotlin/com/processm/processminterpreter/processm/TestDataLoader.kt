@@ -1,8 +1,8 @@
 package com.processm.processminterpreter.processm
 
-import com.processm.processminterpreter.application.ports.DataStoreRepository
-import com.processm.processminterpreter.domain.datastore.DataStore
-import com.processm.processminterpreter.infrastructure.xes.XESLoader
+import com.processm.processminterpreter.xes.DataStoreRepository
+import com.processm.processminterpreter.xes.datastore.DataStore
+import com.processm.processminterpreter.xes.io.XESLoader
 import org.neo4j.driver.Driver
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
@@ -52,8 +52,8 @@ class TestDataLoader {
             logger.info("Loading JournalReview-extra.xes test data with logId: $customLogId...")
 
             val stream =
-                javaClass.getResourceAsStream("/JournalReview-extra.xes")
-                    ?: throw RuntimeException("Cannot find JournalReview-extra.xes in test resources")
+                javaClass.getResourceAsStream("/logs/JournalReview-extra.xes.gz")
+                    ?: throw RuntimeException("Cannot find logs/JournalReview-extra.xes.gz on the classpath")
 
             stream.use {
                 try {
@@ -113,7 +113,7 @@ class TestDataLoader {
 
                 logger.info("Loading Hospital.xes test data...")
                 val stream =
-                    javaClass.getResourceAsStream("/logs/Hospital_log.xes")
+                    javaClass.getResourceAsStream("/logs/Hospital_log.xes.gz")
                         ?: return null // Hospital log not available
 
                 stream.use {
@@ -149,7 +149,7 @@ class TestDataLoader {
 
                 logger.info("Loading BPI Challenge 2013 log...")
                 val stream =
-                    javaClass.getResourceAsStream("/bpi_challenge_2013_open_problems.xes")
+                    javaClass.getResourceAsStream("/logs/bpi_challenge_2013_open_problems.xes.gz")
                         ?: return null
 
                 stream.use {

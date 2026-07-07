@@ -1,15 +1,15 @@
 package com.processm.processminterpreter.processm.log
 
 import com.processm.processminterpreter.TestcontainersConfiguration
-import com.processm.processminterpreter.application.query.ExecutePqlQueryRequest
-import com.processm.processminterpreter.application.query.ExecutePqlQueryUseCase
-import com.processm.processminterpreter.domain.log.xes.XesEvent
-import com.processm.processminterpreter.domain.log.xes.XesLog
-import com.processm.processminterpreter.domain.log.xes.XesTrace
-import com.processm.processminterpreter.application.ports.XesWriteOptions
-import com.processm.processminterpreter.application.ports.XesWriter
-import com.processm.processminterpreter.infrastructure.xes.XESLoader
-import com.processm.processminterpreter.infrastructure.xes.OpenXesReader
+import com.processm.processminterpreter.pql.ExecutePqlQueryRequest
+import com.processm.processminterpreter.pql.PqlQueryService
+import com.processm.processminterpreter.xes.model.XesEvent
+import com.processm.processminterpreter.xes.model.XesLog
+import com.processm.processminterpreter.xes.model.XesTrace
+import com.processm.processminterpreter.xes.io.XesWriteOptions
+import com.processm.processminterpreter.xes.io.OpenXesWriter
+import com.processm.processminterpreter.xes.io.XESLoader
+import com.processm.processminterpreter.xes.io.OpenXesReader
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -35,10 +35,10 @@ class TeleclaimsRoundTripTest {
     private lateinit var loader: XESLoader
 
     @Autowired
-    private lateinit var executeQuery: ExecutePqlQueryUseCase
+    private lateinit var executeQuery: PqlQueryService
 
     @Autowired
-    private lateinit var writer: XesWriter
+    private lateinit var writer: OpenXesWriter
 
     @Autowired
     private lateinit var reader: OpenXesReader

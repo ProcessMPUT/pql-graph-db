@@ -1,9 +1,9 @@
 package com.processm.processminterpreter.processm.log
 
-import com.processm.processminterpreter.application.ports.XesWriteOptions
-import com.processm.processminterpreter.domain.log.xes.XesLog
-import com.processm.processminterpreter.infrastructure.xes.OpenXesWriter
-import com.processm.processminterpreter.infrastructure.xes.XESParser
+import com.processm.processminterpreter.xes.io.XesWriteOptions
+import com.processm.processminterpreter.xes.model.XesLog
+import com.processm.processminterpreter.xes.io.OpenXesWriter
+import com.processm.processminterpreter.xes.io.XESParser
 import org.junit.jupiter.api.Disabled
 import org.junit.jupiter.api.Test
 import java.io.ByteArrayOutputStream

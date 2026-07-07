@@ -39,6 +39,38 @@ class CanonicalXesComparatorTest {
         assertTrue(parsed.duplicateKeys.any { it.contains("attr_1") })
     }
 
+    @Test
+    fun `comparator treats numerically equal floats and ints as equal`() {
+        // Hospital_log carries floats like value="0.0020" that a parse -> emit
+        // roundtrip reformats to "0.002" -- same XES value, different text.
+        val expected = CanonicalXesParser.parse(
+            xesWithEventAttributes(
+                """
+                <float key="ratio" value="0.0020"/>
+                <int key="count" value="007"/>
+                """.trimIndent(),
+            ),
+        )
+        val actual = CanonicalXesParser.parse(
+            xesWithEventAttributes(
+                """
+                <float key="ratio" value="0.002"/>
+                <int key="count" value="7"/>
+                """.trimIndent(),
+            ),
+        )
+
+        assertTrue(CanonicalXesComparator.compare(expected, actual).isEmpty())
+    }
+
+    @Test
+    fun `comparator still rejects numerically different floats`() {
+        val expected = CanonicalXesParser.parse(xesWithEventAttributes("""<float key="ratio" value="0.002"/>"""))
+        val actual = CanonicalXesParser.parse(xesWithEventAttributes("""<float key="ratio" value="0.003"/>"""))
+
+        assertFalse(CanonicalXesComparator.compare(expected, actual).isEmpty())
+    }
+
     private fun xesWithEventAttributes(attributes: String): ByteArray =
         """
         <?xml version="1.0" encoding="UTF-8" ?>

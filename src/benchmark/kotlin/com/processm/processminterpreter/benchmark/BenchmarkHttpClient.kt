@@ -120,6 +120,7 @@ class BenchmarkHttpClient(
     ): TimedQueryResult {
         var statusCode = 0
         var bytes = 0L
+        var body = ""
         val seconds = measureSeconds {
             val encodedQuery = URLEncoder.encode(query, StandardCharsets.UTF_8)
             val response = sendAuthorized(
@@ -130,12 +131,16 @@ class BenchmarkHttpClient(
                     .build(),
             )
             statusCode = response.statusCode()
-            bytes = response.body().toByteArray(StandardCharsets.UTF_8).size.toLong()
+            body = response.body()
+            bytes = body.toByteArray(StandardCharsets.UTF_8).size.toLong()
             require(statusCode in 200..299) {
-                "Query failed ($statusCode): ${response.body().take(500)}"
+                "Query failed ($statusCode): ${body.take(500)}"
             }
         }
-        return TimedQueryResult(seconds = seconds, statusCode = statusCode, responseBytes = bytes)
+        // Response-count parsing happens outside the timed interval so Q4 parity
+        // bookkeeping does not inflate the measured end-to-end latency.
+        val counts = XesJsonCounting.count(body)
+        return TimedQueryResult(seconds = seconds, statusCode = statusCode, responseBytes = bytes, counts = counts)
     }
 
     fun exportXesZip(dataStoreId: String): ByteArray {
@@ -260,6 +265,7 @@ data class TimedQueryResult(
     val seconds: Double,
     val statusCode: Int,
     val responseBytes: Long,
+    val counts: XesJsonCounts = XesJsonCounts.EMPTY,
 )
 
 data class RemoteDataStore(

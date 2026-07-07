@@ -8,12 +8,24 @@
     "query": "where e:name is not null limit l:1, t:10, e:20"
   },
   {
+    "label": "customAttrFilter",
+    "query": "where [e:attr_1] is not null limit l:1, t:10, e:20"
+  },
+  {
     "label": "timestampNameOrder",
     "query": "order by e:timestamp, e:name limit l:1, t:10, e:20"
   },
   {
     "label": "eventNameGroup",
     "query": "group by e:name order by e:name limit l:1, t:10, e:20"
+  },
+  {
+    "label": "hoistedGroup",
+    "query": "group by ^e:name order by count(t:name) desc"
+  },
+  {
+    "label": "hoistedWhere",
+    "query": "where ^e:name is not null limit l:1, t:10, e:20"
   },
   {
     "label": "timestampAggregates",

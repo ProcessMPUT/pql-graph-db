@@ -127,12 +127,20 @@ object CanonicalXesParser {
         type: String,
         value: String,
     ): String =
-        if (type == "date" && value.isNotBlank()) {
-            runCatching {
-                DateTimeFormatter.ISO_INSTANT.format(OffsetDateTime.parse(value).toInstant())
-            }.getOrDefault(value)
-        } else {
-            value
+        when (type) {
+            "date" -> if (value.isBlank()) {
+                value
+            } else {
+                runCatching {
+                    DateTimeFormatter.ISO_INSTANT.format(OffsetDateTime.parse(value).toInstant())
+                }.getOrDefault(value)
+            }
+            // Numeric values compare by semantic value, not source text:
+            // "0.0020" and "0.002" are the same XES float (Hospital_log has
+            // trailing-zero floats that a parse -> emit roundtrip reformats).
+            "float" -> value.toDoubleOrNull()?.toString() ?: value
+            "int" -> value.toLongOrNull()?.toString() ?: value
+            else -> value
         }
 
     private fun childElements(

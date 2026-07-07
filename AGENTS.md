@@ -29,24 +29,33 @@ reference semantics or test assertions are needed.
 
 ## Architecture
 
-- `domain`: XES and PQL concepts, semantics, validation, resolved models, and
-  logical plans. It must not depend on Spring, HTTP, Neo4j, ANTLR, or JSON.
-- `application`: use cases and ports. It orchestrates domain operations and
-  defines contracts required from external adapters.
-- `infrastructure`: Spring wiring, web endpoints, ANTLR parsing, Neo4j
-  persistence/query execution, XML IO, and remote ProcessM integration.
+Package-by-feature under `com.processm.processminterpreter` (the former
+`domain`/`application`/`infrastructure` layering was intentionally removed):
+
+- `pql`: the whole PQL feature — unified AST (`pql.ast.PqlExpression` /
+  `PqlQuery`: parser emits surface nodes, the resolver rewrites them in place
+  into resolved nodes), catalog, semantics (`Resolver`/`Validator`/`Planner`,
+  constructed internally by `PqlCompiler`), logical plans, ANTLR adapter
+  (`pql.parser`), Cypher code generation (`pql.cypher`), and `PqlQueryService`
+  (execute / validate / export-as-XES / metadata).
+- `neo4j`: persistence adapters — repositories, XES import writing, schema,
+  `Neo4jQueryPlanExecutor`, hierarchy reconstruction (`neo4j.query.result`).
+- `xes`: log/datastore model and services (`LogService`, `DataStoreService`),
+  XES XML IO (`xes.io`).
+- `processm`: remote ProcessM client, XES-JSON formatting/conversion
+  (`processm.json`), comparison/verification (`processm.compat`).
+- `web`: REST controllers and DTOs. The REST contract is a compatibility
+  invariant — do not reshape mappings or DTOs casually.
 - `src/benchmark`: black-box thesis benchmark source set.
-- `src/test/.../processm`: semantic tests ported from original ProcessM.
+- `src/test/.../processm`: semantic tests ported from original ProcessM
+  (test-source package, distinct from the main `processm` feature package).
 - `scripts`: operational, compatibility, initialization, and reporting tools.
 
-Dependencies point inward:
-
-```text
-infrastructure -> application -> domain
-```
-
-Do not introduce infrastructure types into application or domain to avoid
-writing a mapper or defining an explicit port.
+Interfaces exist only at real substitution boundaries: `LogRepository`,
+`DataStoreRepository` (Neo4j, faked in tests) and `RemoteProcessMGateway`
+(HTTP). Everything else is a concrete class — do not reintroduce
+single-implementation ports or layer ceremony. One top-level type per file;
+sealed hierarchies keep variants nested in the sealed parent.
 
 ## Change Discipline
 

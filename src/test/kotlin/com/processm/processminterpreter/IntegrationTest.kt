@@ -1,10 +1,10 @@
 package com.processm.processminterpreter
 
-import com.processm.processminterpreter.domain.pql.interpreter.BaseInterpreterTest
-import com.processm.processminterpreter.infrastructure.persistence.neo4j.xes.Neo4jXesLogWriter
-import com.processm.processminterpreter.infrastructure.xes.XESLoader
-import com.processm.processminterpreter.infrastructure.xes.XESParser
-import com.processm.processminterpreter.infrastructure.xes.OpenXesReader
+import com.processm.processminterpreter.pql.interpreter.BaseInterpreterTest
+import com.processm.processminterpreter.neo4j.xes.Neo4jXesLogWriter
+import com.processm.processminterpreter.xes.io.XESLoader
+import com.processm.processminterpreter.xes.io.XESParser
+import com.processm.processminterpreter.xes.io.OpenXesReader
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach

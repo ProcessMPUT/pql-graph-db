@@ -1,6 +1,6 @@
 package com.processm.processminterpreter.processm.log
 
-import com.processm.processminterpreter.infrastructure.xes.XESParser
+import com.processm.processminterpreter.xes.io.XESParser
 import org.junit.jupiter.api.Disabled
 import org.junit.jupiter.api.Test
 import java.time.Instant

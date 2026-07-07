@@ -43,13 +43,41 @@ Stworzenie **standalone REST component** dla ProcessM, który:
 
 ## Architektura
 
-System składa się z następujących komponentów:
-- **Neo4j Database** - graf baza danych do przechowywania logów XES
-- **Spring Boot Application** - REST API dla operacji CRUD i wykonywania zapytań PQL
-- **PQL Parser** - parser języka zapytań PQL (integracja z ProcessM, ANTLR4)
-- **Query Model** - obiektowa reprezentacja zapytań PQL → Cypher (Visitor Pattern)
-- **XES Loader** - moduł do ładowania plików XES do Neo4j
-- **XES Writer** - moduł do eksportu wyników zapytań do formatu XES (zgodność z IEEE 1849-2016)
+Kod jest zorganizowany **wg funkcji (package-by-feature)**, nie warstwowo.
+Każdy pakiet skupia jeden obszar odpowiedzialności:
+
+- **`pql`** — cała obsługa języka PQL: ujednolicone AST (`pql.ast`), katalog
+  atrybutów/funkcji (`pql.catalog`, `pql.semantics`), plan logiczny
+  (`pql.plan`), adapter ANTLR (`pql.parser`), generacja Cypher (`pql.cypher`)
+  oraz `PqlQueryService` (wykonanie / walidacja / eksport / metadane).
+- **`neo4j`** — dostęp do bazy: repozytoria, import XES, schemat,
+  `Neo4jQueryPlanExecutor`, rekonstrukcja hierarchii wyników (`neo4j.query.result`).
+- **`xes`** — model logu/datastore i usługi (`LogService`, `DataStoreService`),
+  wejście/wyjście XES XML (`xes.io`).
+- **`processm`** — klient zdalnego ProcessM, formatowanie XES-JSON (`processm.json`),
+  porównywanie/weryfikacja zgodności (`processm.compat`).
+- **`web`** — kontrolery REST i DTO (kontrakt API).
+
+Potok wykonania zapytania (bez wzorca Visitor — to zwykłe fazy kompilatora):
+
+```
+PQL string
+  -> AntlrPqlParser        (pql.parser)      surface AST (PqlExpression / PqlQuery)
+  -> Resolver              (pql.semantics)   nazwy, typy, hoisting w miejscu
+  -> Validator             (pql.semantics)   reguły semantyczne (parytet z ProcessM)
+  -> Planner               (pql.semantics)   plan logiczny (LogicalPlan)
+  -> CypherCodegen         (pql.cypher)      parametryzowany Cypher
+  -> Neo4jQueryPlanExecutor(neo4j.query)     wykonanie na Neo4j
+  -> HierarchyReconstructor(neo4j.query.result) wynik jako zagnieżdżony XesLog
+```
+
+Interfejsy (porty) istnieją tylko na realnych granicach podmiany:
+`LogRepository`, `DataStoreRepository` (Neo4j) i `RemoteProcessMGateway` (HTTP).
+Reszta to konkretne klasy — bez ceremonii warstwowej.
+
+> **Źródło prawdy o architekturze i regułach zmian to `AGENTS.md`** (w root oraz
+> per-obszar: `scripts/AGENTS.md`, `src/benchmark/AGENTS.md`). Metodologia
+> testów wydajnościowych: `src/benchmark/METODOLOGIA.md`.
 
 ## Model danych Neo4j
 
@@ -76,8 +104,8 @@ Relationships:
 ### 1. Uruchomienie Neo4j
 
 ```bash
-# Uruchomienie Neo4j z docker-compose
-docker-compose up -d neo4j
+# Uruchomienie całego środowiska: Neo4j + referencyjny ProcessM + seed danych
+docker-compose up -d
 
 # Sprawdzenie statusu
 docker-compose ps
@@ -170,10 +198,8 @@ POST /api/query/execute?format=json
 Content-Type: application/json
 # Parametr format: "json" (domyślnie) lub "xes" — XES jako JSON structure
 {
-  "query": "SELECT e:name, e:timestamp FROM event WHERE e:name = 'Task A'",
-  "logId": "log-123",
-  "timeout": 30000,
-  "maxResults": 1000
+  "query": "select e:name, e:timestamp where e:name = 'Task A'",
+  "logId": "log-123"
 }
 
 POST /api/query/execute-xes
@@ -181,13 +207,13 @@ Content-Type: application/json
 # Parametry: compress (domyślnie: false — gzip), logName (domyślnie: "Query Result Log")
 # Zwraca wyniki jako plik XES XML do pobrania (Content-Disposition: attachment)
 {
-  "query": "SELECT e:name, e:timestamp FROM event",
+  "query": "select e:name, e:timestamp",
   "logId": "log-123"
 }
 
 POST /api/query/validate
 Content-Type: application/json
-{ "query": "SELECT e:name FROM event" }
+{ "query": "select e:name" }
 # Walidacja składni PQL bez wykonywania
 
 GET /api/query/statistics
@@ -201,7 +227,7 @@ Content-Type: application/json
 # Parametry: format ("full" domyślnie lub "light")
 # Porównuje wyniki z ProcessM (wymaga skonfigurowanego serwera ProcessM)
 {
-  "query": "SELECT e:name FROM event",
+  "query": "select e:name",
   "logId": "log-123",
   "logName": "My Log",
   "includeTraces": true,
@@ -211,25 +237,34 @@ Content-Type: application/json
 
 ## Przykłady PQL
 
+PQL nie ma klauzuli `FROM` — zakres (log/trace/event) wynika z prefiksu atrybutu
+(`l:` / `t:` / `e:`). Limity są hierarchiczne (`l:` / `t:` / `e:`).
+
 ### Podstawowe
 ```sql
--- Wybierz wszystkie atrybuty zdarzeń gdzie aktywność to 'Task A'
-SELECT * FROM event WHERE concept:name = 'Task A'
+-- Nazwy zdarzeń z okna hierarchii: 1 log, 10 śladów, 20 zdarzeń
+select e:name limit l:1, t:10, e:20
 
--- Wybierz ID śladu i liczbę zdarzeń
-SELECT t:caseId, count(e:eventId) GROUP BY t:caseId
+-- Liczba śladów i zdarzeń w logu
+select count(t:name), count(e:name)
+
+-- Filtr po nazwie logu
+where l:name = 'teleclaims.mxml'
 ```
 
 ### Zaawansowane
 ```sql
--- Filtrowanie po czasie i koszcie
-SELECT t:caseId, e:concept:name, e:cost:total
-WHERE e:time:timestamp > '2023-01-01T00:00:00Z' AND e:cost:total > 100
+-- Częstość aktywności: grupowanie po nazwie zdarzenia, sortowanie po liczniku
+select e:name, count(e:name) group by e:name order by count(e:name) desc
 
--- Sortowanie i limitowanie (Scoped Limits)
-SELECT t:caseId, e:concept:name
-ORDER BY t:caseId ASC, e:time:timestamp DESC
-LIMIT l:10, t:5  -- 10 logów, 5 śladów na log
+-- Agregaty czasowe
+select min(e:timestamp), max(e:timestamp), count(e:name)
+
+-- Dopasowanie podłańcucha (semantyka PostgreSQL `~`, jak w oryginale)
+where e:name matches 'consult'
+
+-- Grupowanie po atrybucie zdarzenia podniesionym do zakresu śladu (hoisting)
+select count(e:name) group by ^e:name order by count(e:name) desc
 ```
 
 ## Konfiguracja
@@ -260,49 +295,57 @@ processm:
 
 ## Testowanie
 
-### Testy jednostkowe
+Jeden task uruchamia cały suite — testy jednostkowe i integracyjne (te ostatnie
+same podnoszą kontener Neo4j przez Testcontainers, więc wymagany jest Docker):
 
 ```bash
 ./gradlew test
 ```
 
-### Testy integracyjne z Testcontainers
-
-```bash
-./gradlew integrationTest
-```
-
-Testy automatycznie uruchamiają kontener Neo4j za pomocą Testcontainers.
+Bramka zgodności semantycznej z oryginałem (raport kompatybilności, wymagane zero
+problemów ścisłych) opisana jest w `AGENTS.md` i uruchamiana skryptem
+`scripts/run-compatibility-report.ps1`.
 
 ## Rozwój
 
 ### Struktura projektu
 
 ```
-src/main/kotlin/com/processm/processminterpreter/
-├── config/          # Konfiguracja Spring
-├── controller/      # REST Controllers
-├── service/         # Logika biznesowa
-├── repository/      # Repozytoria Neo4j
-├── model/           # Modele danych (Node entities)
-├── pql/             # Parser i translator PQL
-├── xes/             # Obsługa plików XES
-└── dto/             # Data Transfer Objects
+src/
+├── main/kotlin/com/processm/processminterpreter/
+│   ├── pql/          # AST, semantyka, plan, parser ANTLR, generacja Cypher, PqlQueryService
+│   ├── neo4j/        # repozytoria, import XES, wykonanie zapytań, rekonstrukcja wyników
+│   ├── xes/          # model logu/datastore, usługi, wejście/wyjście XES XML (xes.io)
+│   ├── processm/     # klient zdalnego ProcessM, XES-JSON, weryfikacja zgodności
+│   └── web/          # kontrolery REST + DTO
+├── main/resources/
+│   ├── logs/         # przykładowe logi XES (gzip); listowane przez GET /api/logs/samples
+│   └── static/       # UI porównawcze (index.html + app.js)
+├── test/             # testy; podpakiet .../processm/* to porty z oryginalnego ProcessM
+└── benchmark/        # osobny source set: benchmark do pracy (patrz src/benchmark/AGENTS.md)
 ```
 
 ### Dodawanie nowych funkcji
 
-1. **Modele danych**: Dodaj nowe `@Node` entities w pakiecie `model`
-2. **Repozytoria**: Stwórz repozytoria dziedziczące z `Neo4jRepository`
-3. **Serwisy**: Implementuj logikę biznesową w pakiecie `service`
-4. **Kontrolery**: Dodaj REST endpoints w pakiecie `controller`
-5. **Testy**: Napisz testy jednostkowe i integracyjne
+Nie używamy Spring Data Neo4j (`@Node` / `Neo4jRepository`) — dostęp do bazy idzie
+bezpośrednio przez sterownik (`org.neo4j.driver.Driver`) w klasach `neo4j/`.
+
+1. **Semantyka PQL**: rozszerz fazy w `pql/semantics` (Resolver/Validator/Planner);
+   zmiany walidacji sprawdzaj z oryginałem (`Query.kt` w lokalnym checkoucie ProcessM).
+2. **Generacja Cypher**: dodaj/zmień renderer w `pql/cypher` (bez interpolacji
+   wartości — tylko parametry).
+3. **Persystencja**: repozytoria i zapis/odczyt w `neo4j/`.
+4. **REST**: cienki kontroler w `web/` delegujący do usługi aplikacyjnej.
+5. **Testy**: jednostkowe w pakiecie feature; parytet semantyczny w `test/.../processm`.
+
+Przed każdą zmianą przeczytaj `AGENTS.md` — opisuje dyscyplinę zmian i bramkę
+zgodności (raport kompatybilności = zero problemów ścisłych).
 
 ### Debugowanie Neo4j
 
 ```bash
-# Połączenie z Neo4j CLI
-docker exec -it processm-interpreter-neo4j-1 cypher-shell -u neo4j -p password123
+# Połączenie z Neo4j CLI (nazwa kontenera: processm-neo4j)
+docker exec -it processm-neo4j cypher-shell -u neo4j -p password123
 ```
 
 ## Troubleshooting

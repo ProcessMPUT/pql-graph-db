@@ -51,8 +51,10 @@ claude.md
 .claude/
 
 ### Large Data Files ###
+# Uncompressed XES stays out of the repo; fixtures live as .xes.gz under
+# src/main/resources/logs/. sample_process.xes is the one tracked exception
+# (production load-sample default, tiny).
 src/main/resources/logs/*.xes
-!src/main/resources/logs/Hospital_log.xes
 !src/main/resources/logs/sample_process.xes
 
 ### Temporary Output ###

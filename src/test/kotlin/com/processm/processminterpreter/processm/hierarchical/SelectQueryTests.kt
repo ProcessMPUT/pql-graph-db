@@ -204,7 +204,7 @@ class SelectQueryTests : HierarchicalTestsBase() {
     fun scopedSelectAllWithGroupBy() {
         // ProcessM: select l:*, t:*, e:*, max(e:timestamp)-min(e:timestamp) where ... group by e:instance
         // Should throw PQLSyntaxException with MixedScopes problem
-        // Our q() goes through PQLQueryService which catches exceptions — check result.success instead
+        // Our q() goes through LegacyQueryTestFacade which catches exceptions — check result.success instead
         val result =
             q(
                 "select l:*, t:*, e:*, max(e:timestamp)-min(e:timestamp) where l:logId='$journalLogId' group by e:instance",

@@ -1,9 +1,9 @@
 package com.processm.processminterpreter.processm.hierarchical
 
 import com.processm.processminterpreter.TestcontainersConfiguration
-import com.processm.processminterpreter.domain.log.xes.XesAttributeValue
-import com.processm.processminterpreter.domain.log.xes.XesLog
-import com.processm.processminterpreter.domain.log.xes.XesTrace
+import com.processm.processminterpreter.xes.model.XesAttributeValue
+import com.processm.processminterpreter.xes.model.XesLog
+import com.processm.processminterpreter.xes.model.XesTrace
 import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.Disabled
 import org.junit.jupiter.api.Test

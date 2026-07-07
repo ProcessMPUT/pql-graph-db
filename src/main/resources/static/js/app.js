@@ -486,7 +486,7 @@ const pqlQueryText = document.getElementById('pqlQueryText');
 const pqlOutput = document.getElementById('pqlOutput');
 const pqlQuerySelect = document.getElementById('pqlQuerySelect');
 
-// Curated sample queries for Hospital_log.xes - guaranteed to work!
+// Curated sample queries for the Hospital log - guaranteed to work!
 const sampleQueries = {
     // === BASICS - Show Different Scopes ===
     "🔹 Show First 20 Events": "select event:* limit l:20",

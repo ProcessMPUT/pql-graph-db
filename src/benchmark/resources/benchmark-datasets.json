@@ -74,25 +74,17 @@
     },
     {
       "type": "SYNTHETIC",
-      "name": "trace-1000",
+      "name": "trace-2000",
       "series": "trace-scaling",
-      "traces": 1000,
+      "traces": 2000,
       "eventsPerTrace": 10,
       "attributesPerEvent": 5
     },
     {
       "type": "SYNTHETIC",
-      "name": "trace-2500",
+      "name": "trace-10000",
       "series": "trace-scaling",
-      "traces": 2500,
-      "eventsPerTrace": 10,
-      "attributesPerEvent": 5
-    },
-    {
-      "type": "SYNTHETIC",
-      "name": "trace-5000",
-      "series": "trace-scaling",
-      "traces": 5000,
+      "traces": 10000,
       "eventsPerTrace": 10,
       "attributesPerEvent": 5
     },
@@ -100,7 +92,7 @@
       "type": "SYNTHETIC",
       "name": "event-5",
       "series": "event-scaling",
-      "traces": 1000,
+      "traces": 100,
       "eventsPerTrace": 5,
       "attributesPerEvent": 5
     },
@@ -108,39 +100,31 @@
       "type": "SYNTHETIC",
       "name": "event-10",
       "series": "event-scaling",
-      "traces": 1000,
+      "traces": 100,
       "eventsPerTrace": 10,
-      "attributesPerEvent": 5
-    },
-    {
-      "type": "SYNTHETIC",
-      "name": "event-25",
-      "series": "event-scaling",
-      "traces": 1000,
-      "eventsPerTrace": 25,
       "attributesPerEvent": 5
     },
     {
       "type": "SYNTHETIC",
       "name": "event-50",
       "series": "event-scaling",
-      "traces": 1000,
+      "traces": 100,
       "eventsPerTrace": 50,
       "attributesPerEvent": 5
     },
     {
       "type": "SYNTHETIC",
-      "name": "event-100",
+      "name": "event-200",
       "series": "event-scaling",
-      "traces": 1000,
-      "eventsPerTrace": 100,
+      "traces": 100,
+      "eventsPerTrace": 200,
       "attributesPerEvent": 5
     },
     {
       "type": "SYNTHETIC",
       "name": "attr-1",
       "series": "attribute-scaling",
-      "traces": 1000,
+      "traces": 100,
       "eventsPerTrace": 10,
       "attributesPerEvent": 1
     },
@@ -148,39 +132,23 @@
       "type": "SYNTHETIC",
       "name": "attr-5",
       "series": "attribute-scaling",
-      "traces": 1000,
+      "traces": 100,
       "eventsPerTrace": 10,
       "attributesPerEvent": 5
     },
     {
       "type": "SYNTHETIC",
-      "name": "attr-10",
+      "name": "attr-20",
       "series": "attribute-scaling",
-      "traces": 1000,
+      "traces": 100,
       "eventsPerTrace": 10,
-      "attributesPerEvent": 10
-    },
-    {
-      "type": "SYNTHETIC",
-      "name": "attr-25",
-      "series": "attribute-scaling",
-      "traces": 1000,
-      "eventsPerTrace": 10,
-      "attributesPerEvent": 25
-    },
-    {
-      "type": "SYNTHETIC",
-      "name": "attr-50",
-      "series": "attribute-scaling",
-      "traces": 1000,
-      "eventsPerTrace": 10,
-      "attributesPerEvent": 50
+      "attributesPerEvent": 20
     },
     {
       "type": "REAL",
-      "name": "real-hospital",
+      "name": "real-sample-process",
       "series": "real-validation",
-      "resourcePath": "src/main/resources/logs/Hospital_log.xes.gz"
+      "resourcePath": "src/main/resources/logs/sample_process.xes"
     },
     {
       "type": "REAL",
@@ -196,9 +164,9 @@
     },
     {
       "type": "REAL",
-      "name": "real-teleclaims",
+      "name": "real-hospital",
       "series": "real-validation",
-      "resourcePath": "src/main/resources/logs/teleclaims.xes.gz"
+      "resourcePath": "src/main/resources/logs/Hospital_log.xes.gz"
     }
   ]
 }

@@ -98,6 +98,13 @@ Remove leftover benchmark datastores:
 .\gradlew.bat runBenchmarkCleanup
 ```
 
+Generate SVG charts and embed them into the run's `thesis-report.md`
+(standard post-run step; idempotent, safe to re-run):
+
+```powershell
+python scripts\benchmarks\plot-benchmark-results.py tmp\benchmark-results\<runId>
+```
+
 Relevant configuration:
 
 ```text
@@ -126,6 +133,8 @@ Each run must create an immutable directory under
 - `query-summary.csv`
 - `storage-results.csv`
 - `roundtrip-results.csv`
+- `memory-results.csv`
+- `memory-summary.csv`
 - `environment.json`
 - `cleanup-results.csv`
 

@@ -14,7 +14,6 @@ charts. Treat script behavior as part of the development workflow.
 - `init-processm-datastores.py`: create the reference user/datastores and upload
   the fixed XES fixtures used for compatibility work.
 - `compatibility-query-set.ps1`: version-controlled query definitions.
-- `verify-compatibility.ps1`: execute comparisons.
 - `run-compatibility-report.ps1`: orchestrate matrix/dropdown/discovery reports.
 - `benchmarks/plot-benchmark-results.py`: create plots from benchmark artifacts.
 

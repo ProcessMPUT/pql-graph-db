@@ -19,6 +19,8 @@ class BenchmarkResultsWriter(
         storage: List<StorageBenchmarkResult>,
         roundtrips: List<RoundtripBenchmarkResult>,
         cleanup: List<DataStoreCleanupResult>,
+        memorySamples: List<MemorySample> = emptyList(),
+        memorySummaries: List<MemorySummary> = emptyList(),
     ) {
         outputDirectory.createDirectories()
         writeDatasets(datasets)
@@ -27,9 +29,10 @@ class BenchmarkResultsWriter(
         writeQuerySummaries(querySummaries)
         writeStorage(storage)
         writeRoundtrips(roundtrips)
+        writeMemory(memorySamples, memorySummaries)
         writeCleanup(cleanup)
         writeEnvironment(settings)
-        writeSummary(settings, datasets, imports, queries, querySummaries, storage, roundtrips, cleanup)
+        writeSummary(settings, datasets, imports, queries, querySummaries, storage, roundtrips, cleanup, memorySamples)
     }
 
     private fun writeDatasets(datasets: List<PreparedDataset>) {
@@ -73,10 +76,52 @@ class BenchmarkResultsWriter(
     private fun writeQueries(queries: List<QueryBenchmarkResult>) {
         CsvWriter.write(
             outputDirectory.resolve("query-results.csv"),
-            listOf("system", "datasetName", "queryLabel", "run", "seconds", "status", "responseBytes", "details"),
+            listOf(
+                "system",
+                "datasetName",
+                "queryLabel",
+                "run",
+                "phase",
+                "seconds",
+                "status",
+                "responseBytes",
+                "logCount",
+                "traceCount",
+                "eventCount",
+                "details",
+            ),
             queries.map {
-                listOf(it.system, it.datasetName, it.queryLabel, it.run, it.seconds, it.status, it.responseBytes, it.details)
+                listOf(
+                    it.system,
+                    it.datasetName,
+                    it.queryLabel,
+                    it.run,
+                    it.phase,
+                    it.seconds,
+                    it.status,
+                    it.responseBytes,
+                    it.logCount,
+                    it.traceCount,
+                    it.eventCount,
+                    it.details,
+                )
             },
+        )
+    }
+
+    private fun writeMemory(
+        samples: List<MemorySample>,
+        summaries: List<MemorySummary>,
+    ) {
+        CsvWriter.write(
+            outputDirectory.resolve("memory-results.csv"),
+            listOf("timestamp", "phase", "component", "bytes"),
+            samples.map { listOf(it.timestamp, it.phase, it.component, it.bytes) },
+        )
+        CsvWriter.write(
+            outputDirectory.resolve("memory-summary.csv"),
+            listOf("component", "phase", "medianBytes", "peakBytes"),
+            summaries.map { listOf(it.component, it.phase, it.medianBytes, it.peakBytes) },
         )
     }
 
@@ -227,6 +272,9 @@ class BenchmarkResultsWriter(
                 appendLine("- Every dataset/system pair gets a fresh datastore for this run.")
                 appendLine("- Benchmark datastores use the `bench-` prefix and are deleted after the run unless `BENCHMARK_KEEP_DATASTORES=true`.")
                 appendLine("- Storage is measured as stabilized directory size before and after importing a dataset.")
+                appendLine("- Memory is sampled every 1 s by a background daemon thread: `docker stats` for `processm-server` and `processm-neo4j` plus host JVM RSS (`tasklist`) for the local application; phases: `idle` (${settings.profile.idleBaselineSeconds} s baseline before imports) and `queries`.")
+                appendLine("- Each (dataset, query) pair runs one recorded `cold` execution per system before warmups; measured repetitions alternate between systems (local, reference, local, reference, ...).")
+                appendLine("- Response log/trace/event counts of the last warm sample are compared between systems; on divergence all samples of the pair are marked `MISMATCH` (Q4 parity).")
                 appendLine("- Neo4j may report `BELOW_ALLOCATION_GRANULARITY` on already-grown stores; use fresh storage and `BENCHMARK_DATASET_FILTER` for thesis-grade per-dataset storage measurements.")
                 appendLine("- Query charts should use medians or p95 values from `query-summary.csv`, not single samples.")
                 appendLine()
@@ -249,9 +297,11 @@ class BenchmarkResultsWriter(
         storage: List<StorageBenchmarkResult>,
         roundtrips: List<RoundtripBenchmarkResult>,
         cleanup: List<DataStoreCleanupResult>,
+        memorySamples: List<MemorySample>,
     ) {
         val importErrors = imports.count { it.status != "OK" }
-        val queryErrors = queries.count { it.status != "OK" }
+        val queryErrors = queries.count { it.status == "ERROR" }
+        val queryMismatches = queries.count { it.status == QUERY_STATUS_MISMATCH }
         val roundtripErrors = roundtrips.count { it.status != "MATCH" }
         val storageErrors = storage.count { it.status != "OK" }
         val cleanupErrors = cleanup.count { it.status == "ERROR" }
@@ -262,8 +312,9 @@ class BenchmarkResultsWriter(
             appendLine("- Keep benchmark datastores: ${settings.keepBenchmarkDataStores}")
             appendLine("- Datasets: ${datasets.size}")
             appendLine("- Import results: ${imports.size}, errors: $importErrors")
-            appendLine("- Query samples: ${queries.size}, errors: $queryErrors")
+            appendLine("- Query samples: ${queries.size}, errors: $queryErrors, response-count mismatches: $queryMismatches")
             appendLine("- Query summaries: ${querySummaries.size}")
+            appendLine("- Memory samples: ${memorySamples.size}")
             appendLine("- Storage measurements: ${storage.size}, errors: $storageErrors")
             appendLine("- Roundtrip checks: ${roundtrips.size}, errors: $roundtripErrors")
             appendLine("- Datastore cleanup results: ${cleanup.size}, errors: $cleanupErrors")
@@ -286,9 +337,13 @@ class BenchmarkResultsWriter(
             appendLine("- `query-summary.csv`")
             appendLine("- `storage-results.csv`")
             appendLine("- `roundtrip-results.csv`")
+            appendLine("- `memory-results.csv`")
+            appendLine("- `memory-summary.csv`")
             appendLine("- `cleanup-results.csv`")
             appendLine("- `environment.json`")
             appendLine("- `environment.md`")
+            appendLine("- `thesis-report.md`")
+            appendLine("- `thesis-tables.tex`")
             appendLine()
             appendLine("Generate SVG plots with:")
             appendLine()
@@ -301,9 +356,14 @@ class BenchmarkResultsWriter(
 }
 
 object QueryStatistics {
+    /**
+     * Summarizes only successful warm repetitions. Cold samples (`phase=cold`) are
+     * reported raw in `query-results.csv` and must not skew medians; MISMATCH
+     * samples are invalidated measurements.
+     */
     fun summarize(results: List<QueryBenchmarkResult>): List<QueryBenchmarkSummary> =
         results
-            .filter { it.status == "OK" }
+            .filter { it.status == "OK" && it.phase == QUERY_PHASE_WARM }
             .groupBy { Triple(it.system, it.datasetName, it.queryLabel) }
             .map { (key, samples) ->
                 val seconds = samples.map { it.seconds }.sorted()

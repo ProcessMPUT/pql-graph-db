@@ -34,6 +34,12 @@ data class QueryBenchmarkResult(
     val seconds: Double,
     val status: String,
     val responseBytes: Long,
+    /** `cold` (first execution, before warmups) or `warm` (measured repetition). */
+    val phase: String = QUERY_PHASE_WARM,
+    /** Response counts parsed from the XES-JSON body (Q4 parity input). */
+    val logCount: Int = 0,
+    val traceCount: Int = 0,
+    val eventCount: Int = 0,
     val details: String = "",
 )
 
@@ -98,4 +104,21 @@ data class StorageProbe(
     val path: String,
     val sizeCommand: String? = null,
     val flushCommand: String? = null,
+)
+
+data class MemorySample(
+    /** ISO-8601 wall-clock timestamp of the sample. */
+    val timestamp: String,
+    /** Sampling phase: `idle` (baseline before imports) or `queries`. */
+    val phase: String,
+    /** Measured component, e.g. `processm-server`, `processm-neo4j`, `local-jvm`. */
+    val component: String,
+    val bytes: Long,
+)
+
+data class MemorySummary(
+    val component: String,
+    val phase: String,
+    val medianBytes: Long,
+    val peakBytes: Long,
 )
