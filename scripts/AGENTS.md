@@ -15,7 +15,12 @@ charts. Treat script behavior as part of the development workflow.
   the fixed XES fixtures used for compatibility work.
 - `compatibility-query-set.ps1`: version-controlled query definitions.
 - `run-compatibility-report.ps1`: orchestrate matrix/dropdown/discovery reports.
-- `benchmarks/plot-benchmark-results.py`: create plots from benchmark artifacts.
+- `benchmarks/plot-benchmark-results.py`: create SVG plots from benchmark
+  artifacts and embed them into the run's `thesis-report.md` and `.tex`.
+- `benchmarks/render-report-html.py`: fold `thesis-report.md` and its charts
+  into one self-contained HTML file (browser-viewable, print-to-PDF).
+- `benchmarks/measure-storage-scaling.ps1`: sequential no-cleanup storage
+  probe answering the disk-scaling question (writes `storage-scaling.csv`).
 
 Do not combine unrelated startup, destructive cleanup, seeding, comparison, and
 plotting responsibilities into one script.

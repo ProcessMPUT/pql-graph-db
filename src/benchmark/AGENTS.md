@@ -98,12 +98,23 @@ Remove leftover benchmark datastores:
 .\gradlew.bat runBenchmarkCleanup
 ```
 
-Generate SVG charts and embed them into the run's `thesis-report.md`
-(standard post-run step; idempotent, safe to re-run):
+Generate SVG charts and embed them into the run's `thesis-report.md` and
+`thesis-tables.tex` (standard post-run step; idempotent, safe to re-run), then
+optionally fold the Markdown report + charts into one self-contained HTML file:
 
 ```powershell
 python scripts\benchmarks\plot-benchmark-results.py tmp\benchmark-results\<runId>
+python scripts\benchmarks\render-report-html.py     tmp\benchmark-results\<runId>
 ```
+
+The HTML (`thesis-report.html`) inlines every SVG, so it needs nothing else to
+view or print to PDF. The `.tex` figure block uses extension-less
+`\includegraphics{plots/<name>}`; pdflatex needs PDF (not SVG) art, so convert
+once before compiling, e.g. `for f in plots/*.svg; do rsvg-convert -f pdf -o
+"${f%.svg}.pdf" "$f"; done`, or load the `svg` package and use `\includesvg`.
+
+Generated reports live under `tmp/` (gitignored) — do not commit run outputs;
+only the generator scripts are version-controlled.
 
 Relevant configuration:
 

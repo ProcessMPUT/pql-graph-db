@@ -363,6 +363,61 @@ def inject_into_sections(
     report.write_text("\n".join(lines), encoding="utf-8")
 
 
+TEX_MARKER_START = "% plots:figures:start"
+TEX_MARKER_END = "% plots:figures:end"
+
+
+def tex_escape(text: str) -> str:
+    for a, b in [("\\", r"\textbackslash{}"), ("&", r"\&"), ("%", r"\%"), ("_", r"\_"),
+                 ("#", r"\#"), ("{", r"\{"), ("}", r"\}"), ("^", r"\textasciicircum{}")]:
+        text = text.replace(a, b)
+    return text
+
+
+def append_tex_figures(
+    result_dir: Path,
+    anchors: list[tuple[str, list[tuple[str, str]], str]],
+) -> None:
+    """Appends a marker-delimited block of LaTeX figure environments to
+    thesis-tables.tex, one per chart the report embeds. pdflatex needs raster
+    or PDF art, so `\\includegraphics` is written extension-less: drop PDF
+    siblings next to the SVGs (a one-line `for f in plots/*.svg; do
+    rsvg-convert -f pdf ...` — see src/benchmark/AGENTS.md), or load the `svg` package and
+    swap `\\includegraphics` for `\\includesvg`. Re-runs replace the block."""
+    tex = result_dir / "thesis-tables.tex"
+    if not tex.exists():
+        return
+    plots_dir = result_dir / "plots"
+
+    figures: list[str] = [TEX_MARKER_START, "% figury raportu; wymaga PDF-owych wersji wykresow (zob. src/benchmark/AGENTS.md)"]
+    for _prefix, items, _placement in anchors:
+        for name, caption in items:
+            if not name or not (plots_dir / name).exists():
+                continue
+            stem = Path(name).stem
+            clean = re.sub(r"^Rys\.[^:]*:\s*", "", caption).strip().rstrip(".")
+            figures += [
+                r"\begin{figure}[htbp]",
+                r"  \centering",
+                rf"  \includegraphics[width=\linewidth]{{plots/{stem}}}",
+                rf"  \caption{{{tex_escape(clean)}}}",
+                rf"  \label{{fig:bench-{stem.replace('_', '-')}}}",
+                r"\end{figure}",
+                "",
+            ]
+    figures.append(TEX_MARKER_END)
+    block = "\n".join(figures)
+
+    text = tex.read_text(encoding="utf-8")
+    if TEX_MARKER_START in text and TEX_MARKER_END in text:
+        head, rest = text.split(TEX_MARKER_START, 1)
+        _, tail = rest.split(TEX_MARKER_END, 1)
+        text = head.rstrip() + "\n\n" + block + tail
+    else:
+        text = text.rstrip() + "\n\n" + block + "\n"
+    tex.write_text(text, encoding="utf-8")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("result_dir", type=Path)
@@ -611,6 +666,7 @@ def main() -> int:
             ),
         )
     inject_into_sections(result_dir, anchors)
+    append_tex_figures(result_dir, anchors)
 
     print(f"Wrote SVG plots to {plots_dir}")
     return 0
