@@ -120,7 +120,7 @@ class Neo4jXesBatchWriterTest {
             extensions = null,
             traceCount = 1,
             eventCount = 2,
-            traceBatches = listOf(
+            traceBatches = sequenceOf(
                 Neo4jXesTraceBatch(
                     traces = listOf(
                         mapOf(

@@ -592,8 +592,8 @@ internal class CypherAggregationRenderer(
             scope = Scope.TRACE,
         )
         s.registerSyntheticColumnAlias(
-            alias = SYNTHETIC_EVENT_ALIAS,
-            scope = Scope.EVENT,
+            alias = SYNTHETIC_NULL_EVENT_COUNT_ALIAS,
+            scope = Scope.TRACE,
         )
     }
 
@@ -606,20 +606,25 @@ internal class CypherAggregationRenderer(
         }
         s.cypher.append(" WITH log, ").append(aggregateColumns.joinToString(", "))
         s.cypher.append(" MATCH (log)-[:CONTAINS]->(_placeholder_trace:Trace)")
-        s.cypher.append(" OPTIONAL MATCH (_placeholder_trace)-[:HAS_EVENT]->(_placeholder_event:Event)")
-        s.cypher.append(" WITH log, ")
-            .append(placeholderCase.aggregateColumns.joinToString(", ") { it.alias })
-            .append(", _placeholder_trace, _placeholder_event")
+        // One row per trace with the event count, not one row per event: the
+        // reconstructor only needs how many null placeholder events each trace
+        // shows, so shipping O(events) rows (each repeating the log metadata and
+        // every aggregate) is pure transfer waste on large logs. An event-less
+        // trace still renders one null event, matching the previous shape where
+        // OPTIONAL MATCH produced a single unmatched row for it.
         val returnColumns = buildList {
             add("log.logId AS $SYNTHETIC_LOG_ID_ALIAS")
             add(logMetadataProjection())
             add("_placeholder_trace.traceId AS $SYNTHETIC_TRACE_ID_ALIAS")
             add("_placeholder_trace.importOrder AS $SYNTHETIC_TRACE_ORDER_ALIAS")
-            add("{} AS $SYNTHETIC_EVENT_ALIAS")
+            add(
+                "CASE WHEN $PLACEHOLDER_EVENT_COUNT < 1 THEN 1 ELSE $PLACEHOLDER_EVENT_COUNT END" +
+                    " AS $SYNTHETIC_NULL_EVENT_COUNT_ALIAS",
+            )
             addAll(placeholderCase.aggregateColumns.map { it.alias })
         }
         s.cypher.append(" RETURN ").append(returnColumns.joinToString(", "))
-        s.cypher.append(" ORDER BY $SYNTHETIC_LOG_ID_ALIAS, $SYNTHETIC_TRACE_ORDER_ALIAS, _placeholder_event.eventId")
+        s.cypher.append(" ORDER BY $SYNTHETIC_LOG_ID_ALIAS, $SYNTHETIC_TRACE_ORDER_ALIAS")
     }
 
     private fun emitTraceAggregatePlaceholderHierarchyIfNeeded(s: CypherBuildState): Boolean {
@@ -697,3 +702,5 @@ internal class CypherAggregationRenderer(
 }
 
 private const val TRACE_AGG_EVENT_ALIAS = "_trace_agg_event"
+
+private const val PLACEHOLDER_EVENT_COUNT = "COUNT { (_placeholder_trace)-[:HAS_EVENT]->(:Event) }"

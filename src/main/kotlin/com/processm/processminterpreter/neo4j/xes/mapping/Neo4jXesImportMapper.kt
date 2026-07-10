@@ -43,7 +43,7 @@ class Neo4jXesImportMapper(
             extensions = XesLogMetadataCodec.serializeExtensions(log.extensions),
             traceCount = log.traces.size,
             eventCount = log.traces.sumOf { it.events.size },
-            traceBatches = chunkByEventBudget(indexedTraces).map { traceBatch ->
+            traceBatches = chunkByEventBudget(indexedTraces).asSequence().map { traceBatch ->
                 Neo4jXesTraceBatch(
                     traces = traceRows(traceBatch, importedAt),
                     events = eventRows(traceBatch, importedAt),

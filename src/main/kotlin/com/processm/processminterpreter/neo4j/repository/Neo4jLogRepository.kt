@@ -114,23 +114,23 @@ class Neo4jLogRepository(
         }
     }
 
+    // COUNT {} subqueries instead of OPTIONAL MATCH + count(DISTINCT ...): the
+    // expanded pattern produces one row per event and deduplication has to hold
+    // the distinct sets in memory, which is measurable on 100k+-event logs.
     override fun getStatistics(id: String): LogStatistics? =
         driver.session().use { session ->
             session.executeRead { tx ->
                 val result = tx.run(
                     """
                     MATCH (l:Log {logId: ${'$'}logId})
-                    OPTIONAL MATCH (l)-[:CONTAINS]->(t:Trace)
-                    OPTIONAL MATCH (t)-[:HAS_EVENT]->(e:Event)
-                    RETURN count(DISTINCT t) AS traceCount, count(DISTINCT e) AS eventCount,
-                           count(l) AS logPresent
+                    RETURN COUNT { (l)-[:CONTAINS]->(:Trace) } AS traceCount,
+                           COUNT { (l)-[:CONTAINS]->(:Trace)-[:HAS_EVENT]->(:Event) } AS eventCount
                     """.trimIndent(),
                     mapOf("logId" to id),
                 )
                 if (!result.hasNext()) return@executeRead null
                 val rec = result.single()
-                if (rec.get("logPresent").asLong() == 0L) null
-                else LogStatistics(
+                LogStatistics(
                     traceCount = rec.get("traceCount").asLong(),
                     eventCount = rec.get("eventCount").asLong(),
                 )
@@ -143,9 +143,9 @@ class Neo4jLogRepository(
                 tx.run(
                     """
                     MATCH (l:Log)
-                    OPTIONAL MATCH (l)-[:CONTAINS]->(t:Trace)
-                    OPTIONAL MATCH (t)-[:HAS_EVENT]->(e:Event)
-                    RETURN l, count(DISTINCT t) AS traceCount, count(DISTINCT e) AS eventCount
+                    RETURN l,
+                           COUNT { (l)-[:CONTAINS]->(:Trace) } AS traceCount,
+                           COUNT { (l)-[:CONTAINS]->(:Trace)-[:HAS_EVENT]->(:Event) } AS eventCount
                     ORDER BY l.createdAt DESC
                     """.trimIndent(),
                 ).list { rec ->

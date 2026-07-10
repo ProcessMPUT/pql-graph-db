@@ -161,6 +161,18 @@ open class PqlQueryService(
      * to [execute] later (e.g. @Transactional) will not apply on this path.
      */
     fun exportAsXes(request: ExportQueryAsXesRequest, output: OutputStream): ExportResult {
+        val prepared = prepareXesExport(request)
+        prepared.write(output)
+        return prepared.result
+    }
+
+    /**
+     * Runs the query eagerly and returns a deferred XML-serialization step, so an
+     * HTTP endpoint can surface compile/execution errors as a normal error
+     * response BEFORE committing response headers, then stream the XES bytes
+     * straight to the servlet output instead of buffering the whole file.
+     */
+    fun prepareXesExport(request: ExportQueryAsXesRequest): PreparedXesExport {
         require(!isDeleteQuery(request.query)) {
             "DELETE queries cannot be exported as XES"
         }
@@ -174,15 +186,20 @@ open class PqlQueryService(
                 materializedScopes = setOf(Scope.LOG, Scope.TRACE, Scope.EVENT),
             ),
         )
-        writer.write(
-            logs = result.logs,
-            output = output,
-            options = XesWriteOptions(compress = request.compress, logName = request.logName),
-        )
-        return ExportResult(
-            logCount = result.logs.size,
-            rowCount = result.rowCount,
-            executedQueryDescription = result.executedQueryDescription,
+        val logs = result.logs
+        return PreparedXesExport(
+            result = ExportResult(
+                logCount = logs.size,
+                rowCount = result.rowCount,
+                executedQueryDescription = result.executedQueryDescription,
+            ),
+            write = { output ->
+                writer.write(
+                    logs = logs,
+                    output = output,
+                    options = XesWriteOptions(compress = request.compress, logName = request.logName),
+                )
+            },
         )
     }
 

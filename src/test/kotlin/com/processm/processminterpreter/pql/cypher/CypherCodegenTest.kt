@@ -693,11 +693,18 @@ class CypherCodegenTest {
         )
 
         assertTrue(q.cypher.contains("MATCH (log)-[:CONTAINS]->(_placeholder_trace:Trace)"), q.cypher)
-        assertTrue(q.cypher.contains("OPTIONAL MATCH (_placeholder_trace)-[:HAS_EVENT]->(_placeholder_event:Event)"), q.cypher)
-        assertTrue(q.cypher.contains("{} AS event"), q.cypher)
+        // One placeholder row per trace: null events travel as a count, never as
+        // one row per event (an event-less trace still shows a single null event).
+        assertTrue(
+            q.cypher.contains("COUNT { (_placeholder_trace)-[:HAS_EVENT]->(:Event) }"),
+            q.cypher,
+        )
+        assertTrue(q.cypher.contains("AS _null_event_count_"), q.cypher)
+        assertTrue(!q.cypher.contains("OPTIONAL MATCH (_placeholder_trace)"), q.cypher)
+        assertTrue(!q.cypher.contains("{} AS event"), q.cypher)
         assertTrue(q.cypher.contains("_log_meta_"), q.cypher)
-        assertTrue(q.columnAliases["event"]?.synthetic == true, q.columnAliases.toString())
-        assertEquals(Scope.EVENT, q.columnAliases["event"]?.scope)
+        assertTrue(q.columnAliases["_null_event_count_"]?.synthetic == true, q.columnAliases.toString())
+        assertEquals(Scope.TRACE, q.columnAliases["_null_event_count_"]?.scope)
     }
 
     @Test

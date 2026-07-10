@@ -8,6 +8,7 @@ import com.processm.processminterpreter.pql.ExportQueryAsXesRequest
 import com.processm.processminterpreter.pql.ExportResult
 import com.processm.processminterpreter.pql.PqlQueryService
 import com.processm.processminterpreter.pql.PqlQueryStatisticsSummary
+import com.processm.processminterpreter.pql.PreparedXesExport
 import com.processm.processminterpreter.pql.QueryResult
 import com.processm.processminterpreter.pql.SupportedPqlFeatures
 import com.processm.processminterpreter.pql.ValidatePqlQueryRequest
@@ -28,13 +29,14 @@ import org.springframework.context.annotation.Import
 import org.springframework.http.MediaType
 import org.springframework.test.context.bean.override.mockito.MockitoBean
 import org.springframework.test.web.servlet.MockMvc
+import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.content
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.header
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath
+import org.springframework.test.web.servlet.result.MockMvcResultMatchers.request
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
-import java.io.OutputStream
 
 @WebMvcTest(PQLQueryController::class)
 @Import(PqlResponseMapper::class)
@@ -174,20 +176,26 @@ class PQLQueryControllerTest {
         val xesContent = "<log></log>".toByteArray()
         var capturedRequest: ExportQueryAsXesRequest? = null
 
-        `when`(pqlQueryService.exportAsXes(anyArg<ExportQueryAsXesRequest>(), anyArg<OutputStream>()))
+        `when`(pqlQueryService.prepareXesExport(anyArg<ExportQueryAsXesRequest>()))
             .thenAnswer { invocation ->
                 capturedRequest = invocation.getArgument(0)
-                val out = invocation.getArgument<OutputStream>(1)
-                out.write(xesContent)
-                ExportResult(logCount = 1, rowCount = 0, executedQueryDescription = "")
+                PreparedXesExport(
+                    result = ExportResult(logCount = 1, rowCount = 0, executedQueryDescription = ""),
+                    write = { out -> out.write(xesContent) },
+                )
             }
 
-        mockMvc
+        val asyncResult = mockMvc
             .perform(
                 post("/api/query/execute-xes")
                     .contentType(MediaType.APPLICATION_JSON)
                     .content(objectMapper.writeValueAsString(request)),
-            ).andExpect(status().isOk)
+            ).andExpect(request().asyncStarted())
+            .andReturn()
+
+        mockMvc
+            .perform(asyncDispatch(asyncResult))
+            .andExpect(status().isOk)
             .andExpect(header().string("Content-Type", "application/xml"))
             .andExpect(content().bytes(xesContent))
 
@@ -201,21 +209,28 @@ class PQLQueryControllerTest {
         val gzippedContent = byteArrayOf(0x1f, 0x8b.toByte(), 0x08, 0x00)
         var capturedRequest: ExportQueryAsXesRequest? = null
 
-        `when`(pqlQueryService.exportAsXes(anyArg<ExportQueryAsXesRequest>(), anyArg<OutputStream>()))
+        `when`(pqlQueryService.prepareXesExport(anyArg<ExportQueryAsXesRequest>()))
             .thenAnswer { invocation ->
                 capturedRequest = invocation.getArgument(0)
-                invocation.getArgument<OutputStream>(1).write(gzippedContent)
-                ExportResult(logCount = 1, rowCount = 0, executedQueryDescription = "")
+                PreparedXesExport(
+                    result = ExportResult(logCount = 1, rowCount = 0, executedQueryDescription = ""),
+                    write = { out -> out.write(gzippedContent) },
+                )
             }
 
-        mockMvc
+        val asyncResult = mockMvc
             .perform(
                 post("/api/query/execute-xes")
                     .param("compress", "true")
                     .param("logName", "audit")
                     .contentType(MediaType.APPLICATION_JSON)
                     .content(objectMapper.writeValueAsString(request)),
-            ).andExpect(status().isOk)
+            ).andExpect(request().asyncStarted())
+            .andReturn()
+
+        mockMvc
+            .perform(asyncDispatch(asyncResult))
+            .andExpect(status().isOk)
             .andExpect(header().string("Content-Type", "application/gzip"))
             .andExpect(header().string("Content-Disposition", startsWith("attachment; filename=\"query_result_")))
             .andExpect(content().bytes(gzippedContent))

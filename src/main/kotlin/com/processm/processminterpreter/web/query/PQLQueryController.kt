@@ -20,7 +20,7 @@ import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.CrossOrigin
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RestController
-import java.io.ByteArrayOutputStream
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 
@@ -87,7 +87,7 @@ class PQLQueryController(
         request: PQLQueryRequest,
         compress: Boolean,
         logName: String,
-    ): ResponseEntity<ByteArray> {
+    ): ResponseEntity<StreamingResponseBody> {
         logger.info("=== Executing PQL Query as XES ===")
         logger.info(
             "PQL: ${request.query}, LogId: ${request.logId ?: "ALL"}, " +
@@ -95,8 +95,10 @@ class PQLQueryController(
         )
 
         return try {
-            val raw = ByteArrayOutputStream()
-            pqlQueryService.exportAsXes(
+            // The query executes here, so compile/execution failures still become a
+            // plain error response; only XML serialization is deferred to the
+            // response stream, which keeps the full XES file off the heap.
+            val prepared = pqlQueryService.prepareXesExport(
                 ExportQueryAsXesRequest(
                     query = request.query,
                     logId = request.logId,
@@ -104,9 +106,7 @@ class PQLQueryController(
                     compress = compress,
                     logName = logName,
                 ),
-                raw,
             )
-            val xesBytes = raw.toByteArray()
 
             val timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
             val extension = if (compress) "xes.gz" else "xes"
@@ -124,26 +124,26 @@ class PQLQueryController(
                             .attachment()
                             .filename(filename)
                             .build()
-                    this.contentLength = xesBytes.size.toLong()
                 }
 
-            logger.info("XES output generated: ${xesBytes.size} bytes, filename: $filename")
-            ResponseEntity.ok().headers(headers).body(xesBytes)
+            logger.info("XES export prepared: ${prepared.result.logCount} logs, filename: $filename")
+            ResponseEntity.ok().headers(headers).body(StreamingResponseBody(prepared.write))
         } catch (e: IllegalArgumentException) {
             logger.warn("Rejected XES export: ${e.message}")
-            ResponseEntity
-                .badRequest()
-                .contentType(MediaType.TEXT_PLAIN)
-                .body((e.message ?: "Invalid request").toByteArray())
+            textResponse(ResponseEntity.badRequest(), e.message ?: "Invalid request")
         } catch (e: Exception) {
             logger.error("Error executing PQL query as XES", e)
-            val errorMessage = "Error executing query as XES: ${e.message}"
-            ResponseEntity
-                .internalServerError()
-                .contentType(MediaType.TEXT_PLAIN)
-                .body(errorMessage.toByteArray())
+            textResponse(ResponseEntity.internalServerError(), "Error executing query as XES: ${e.message}")
         }
     }
+
+    private fun textResponse(
+        builder: ResponseEntity.BodyBuilder,
+        message: String,
+    ): ResponseEntity<StreamingResponseBody> =
+        builder
+            .contentType(MediaType.TEXT_PLAIN)
+            .body(StreamingResponseBody { it.write(message.toByteArray()) })
 
     override fun validateQuery(
         request: PQLValidationRequest,

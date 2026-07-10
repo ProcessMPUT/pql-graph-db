@@ -646,18 +646,11 @@ class QueryTests : HierarchicalTestsBase() {
             assertNull(trace.costTotal, "Trace cost:total should be null")
             assertNull(trace.identityId, "Trace identity:id should be null")
 
-            assertTrue(trace.events.count() >= 1, "Trace should have events")
-            for (event in trace.events) {
-                assertNull(event.conceptName, "Event conceptName should be null")
-                assertNull(event.conceptInstance, "Event concept:instance should be null")
-                assertNull(event.costCurrency, "Event cost:currency should be null")
-                assertNull(event.costTotal, "Event cost:total should be null")
-                assertNull(event.orgGroup, "Event org:group should be null")
-                assertNull(event.orgRole, "Event org:role should be null")
-                assertNull(event.orgResource, "Event org:resource should be null")
-                assertNull(event.timeTimestamp, "Event timestamp should be null")
-                assertEquals(0, event.customAttributes.size, "Event should have 0 attributes")
-            }
+            // Placeholder events travel as a per-trace count (like the grouped
+            // trace-variant shape); the JSON/XES writers render them as null
+            // events, so the wire output is unchanged.
+            assertTrue(trace.nullEventCount >= 1, "Trace should carry null placeholder events")
+            assertTrue(trace.events.isEmpty(), "Placeholder events must not be materialized")
         }
     }
 

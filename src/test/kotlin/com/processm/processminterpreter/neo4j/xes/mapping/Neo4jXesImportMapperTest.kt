@@ -46,7 +46,7 @@ class Neo4jXesImportMapperTest {
         assertEquals(importedAt, batch.importedAt)
         assertEquals(1, batch.traceCount)
         assertEquals(2, batch.eventCount)
-        assertEquals(1, batch.traceBatches.size)
+        assertEquals(1, batch.traceBatches.count())
 
         val traceBatch = batch.traceBatches.single()
         assertEquals(1, traceBatch.traces.size)

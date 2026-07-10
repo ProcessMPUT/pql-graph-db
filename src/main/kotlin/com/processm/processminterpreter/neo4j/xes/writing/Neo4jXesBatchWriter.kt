@@ -26,14 +26,15 @@ class Neo4jXesBatchWriter(private val driver: Driver) {
     }
 
     private fun writeTraceBatches(batch: Neo4jXesImportBatch) {
-        val totalBatches = batch.traceBatches.size
         var traceOffset = 0
 
+        // Sequence, not list: counting batches up-front would materialize every
+        // row map before the first write — the laziness is the point.
         batch.traceBatches.forEachIndexed { batchIndex, traceBatch ->
             val startTrace = traceOffset + 1
             traceOffset += traceBatch.traces.size
             val endTrace = traceOffset
-            logger.trace("Processing batch ${batchIndex + 1} / $totalBatches. Traces $startTrace to $endTrace")
+            logger.trace("Processing batch ${batchIndex + 1} of ${batch.traceCount} traces. Traces $startTrace to $endTrace")
 
             driver.session().use { session ->
                 session.executeWrite { tx ->

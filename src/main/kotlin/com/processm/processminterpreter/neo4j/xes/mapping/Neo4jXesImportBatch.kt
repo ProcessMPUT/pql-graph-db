@@ -13,7 +13,12 @@ data class Neo4jXesImportBatch(
     val extensions: String?,
     val traceCount: Int,
     val eventCount: Int,
-    val traceBatches: List<Neo4jXesTraceBatch>,
+    /**
+     * Lazily built row maps: each batch is materialized when the writer reaches
+     * it and becomes garbage right after its transaction commits, so an import
+     * never holds the row-map copy of the whole log next to the domain objects.
+     */
+    val traceBatches: Sequence<Neo4jXesTraceBatch>,
 )
 
 data class Neo4jXesTraceBatch(

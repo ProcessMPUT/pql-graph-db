@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestParam
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody
 
 /**
  * Readable HTTP contract for query-related endpoints.
@@ -32,7 +33,7 @@ interface PqlQueryApi {
         @RequestBody request: PQLQueryRequest,
         @RequestParam(defaultValue = "false") compress: Boolean,
         @RequestParam(defaultValue = "Query Result Log") logName: String,
-    ): ResponseEntity<ByteArray>
+    ): ResponseEntity<StreamingResponseBody>
 
     @PostMapping("/validate")
     fun validateQuery(
