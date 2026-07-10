@@ -143,20 +143,6 @@ class BenchmarkHttpClient(
         return TimedQueryResult(seconds = seconds, statusCode = statusCode, responseBytes = bytes, counts = counts)
     }
 
-    fun exportXesZip(dataStoreId: String): ByteArray {
-        val response = sendAuthorizedBytes(
-            HttpRequest.newBuilder(uri("/data-stores/$dataStoreId/logs"))
-                .timeout(Duration.ofMinutes(10))
-                .header("Accept", "application/zip")
-                .GET()
-                .build(),
-        )
-        require(response.statusCode() in 200..299) {
-            "XES export failed (${response.statusCode()}): ${String(response.body(), StandardCharsets.UTF_8).take(500)}"
-        }
-        return response.body()
-    }
-
     fun exportQueryAsXes(dataStoreId: String): ByteArray {
         val body = mapper.writeValueAsString(mapOf("query" to "", "dataStoreId" to dataStoreId))
         val response = sendAuthorizedBytes(

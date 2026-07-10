@@ -21,6 +21,7 @@ class BenchmarkResultsWriter(
         cleanup: List<DataStoreCleanupResult>,
         memorySamples: List<MemorySample> = emptyList(),
         memorySummaries: List<MemorySummary> = emptyList(),
+        environmentDetails: Map<String, Any?> = emptyMap(),
     ) {
         outputDirectory.createDirectories()
         writeDatasets(datasets)
@@ -31,7 +32,7 @@ class BenchmarkResultsWriter(
         writeRoundtrips(roundtrips)
         writeMemory(memorySamples, memorySummaries)
         writeCleanup(cleanup)
-        writeEnvironment(settings)
+        writeEnvironment(settings, environmentDetails)
         writeSummary(settings, datasets, imports, queries, querySummaries, storage, roundtrips, cleanup, memorySamples)
     }
 
@@ -225,7 +226,10 @@ class BenchmarkResultsWriter(
         )
     }
 
-    private fun writeEnvironment(settings: BenchmarkSettings) {
+    private fun writeEnvironment(
+        settings: BenchmarkSettings,
+        environmentDetails: Map<String, Any?> = emptyMap(),
+    ) {
         val environment = mapOf(
             "profile" to settings.profile.name.lowercase(),
             "warmups" to settings.profile.warmups,
@@ -239,7 +243,7 @@ class BenchmarkResultsWriter(
             "osName" to System.getProperty("os.name"),
             "osVersion" to System.getProperty("os.version"),
             "userName" to System.getProperty("user.name"),
-        )
+        ) + environmentDetails
         outputDirectory.resolve("environment.json").writeText(mapper.writerWithDefaultPrettyPrinter().writeValueAsString(environment))
         outputDirectory.resolve("environment.md").writeText(
             buildString {
@@ -262,8 +266,9 @@ class BenchmarkResultsWriter(
                 appendLine()
                 appendLine("- Local interpreter API: `${settings.localApi}`")
                 appendLine("- Reference ProcessM API: `${settings.referenceApi}`")
-                appendLine("- Local storage probe: logical file size of Neo4j `/data/databases` and `/data/transactions`, with Neo4j checkpoint before measurement")
-                appendLine("- Reference storage probe: allocated directory size of ProcessM PostgreSQL `/var/lib/postgresql/data`")
+                appendLine("- Local storage probe: logical file size of Neo4j `/data/databases` and `/data/transactions`; Neo4j community edition has no manual checkpoint procedure, so sizes reflect the naturally checkpointed state (stabilized by repeated reads)")
+                appendLine("- Reference storage probe: allocated directory size of ProcessM PostgreSQL `/var/lib/postgresql/data`, after an explicit `CHECKPOINT;`")
+                appendLine("- Host hardware, Docker container limits, and database memory configuration are recorded in `environment.json` (`host` / `containers` keys)")
                 appendLine()
                 appendLine("## Measurement Protocol")
                 appendLine()
@@ -360,6 +365,11 @@ object QueryStatistics {
      * Summarizes only successful warm repetitions. Cold samples (`phase=cold`) are
      * reported raw in `query-results.csv` and must not skew medians; MISMATCH
      * samples are invalidated measurements.
+     *
+     * Quantiles use the same type-7 estimator as the thesis tables
+     * ([ThesisStatistics]), so a median or p95 in `query-summary.csv` — and in
+     * every chart plotted from it — is numerically identical to the one printed
+     * in `thesis-report.md` for the same samples.
      */
     fun summarize(results: List<QueryBenchmarkResult>): List<QueryBenchmarkSummary> =
         results
@@ -372,21 +382,12 @@ object QueryStatistics {
                     datasetName = key.second,
                     queryLabel = key.third,
                     samples = seconds.size,
-                    medianSeconds = percentile(seconds, 0.50),
-                    p95Seconds = percentile(seconds, 0.95),
+                    medianSeconds = ThesisStatistics.quantile(seconds, 0.50),
+                    p95Seconds = ThesisStatistics.quantile(seconds, 0.95),
                     minSeconds = seconds.first(),
                     maxSeconds = seconds.last(),
                     averageSeconds = seconds.average(),
                 )
             }
             .sortedWith(compareBy<QueryBenchmarkSummary> { it.datasetName }.thenBy { it.system }.thenBy { it.queryLabel })
-
-    private fun percentile(
-        sortedValues: List<Double>,
-        percentile: Double,
-    ): Double {
-        if (sortedValues.isEmpty()) return Double.NaN
-        val index = ((sortedValues.size - 1) * percentile).toInt().coerceIn(sortedValues.indices)
-        return sortedValues[index]
-    }
 }

@@ -134,7 +134,6 @@ object XesDatasetInspector {
         var totalAttributes = 0
         var eventAttributes = 0
         var insideEvent = false
-        var depth = 0
         var uncompressedBytes = 0L
 
         XesStreams.openPossiblyCompressed(path).use { input ->
@@ -143,7 +142,6 @@ object XesDatasetInspector {
             while (reader.hasNext()) {
                 val event = reader.next()
                 if (event == javax.xml.stream.XMLStreamConstants.START_ELEMENT) {
-                    depth++
                     when (reader.localName) {
                         "trace" -> traces++
                         "event" -> {
@@ -158,7 +156,6 @@ object XesDatasetInspector {
                         }
                     }
                 } else if (event == javax.xml.stream.XMLStreamConstants.END_ELEMENT) {
-                    depth--
                     when (reader.localName) {
                         "event" -> insideEvent = false
                     }

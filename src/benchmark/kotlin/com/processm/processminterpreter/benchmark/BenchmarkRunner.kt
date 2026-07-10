@@ -200,6 +200,7 @@ fun main(args: Array<String>) {
         cleanup = cleanup,
         memorySamples = memorySampler.samples(),
         memorySummaries = memorySampler.summaries(),
+        environmentDetails = EnvironmentProbe.collect(systems.map { it.storage.container }),
     )
     // Thesis artifacts (METODOLOGIA §6): generated at the end of every run from the
     // in-memory records, never by re-reading the CSVs written above.
@@ -339,8 +340,9 @@ private fun benchmarkSystems(settings: BenchmarkSettings): List<BenchmarkSystem>
             storage = StorageProbe(
                 container = "processm-server",
                 path = "/var/lib/postgresql/data",
-                // Same pre-measurement flush semantics as the Neo4j checkpoint above,
-                // so neither system reports un-checkpointed WAL/page state as disk size.
+                // PostgreSQL is checkpointed before measurement so un-flushed page
+                // state is not reported as disk size; Neo4j community has no manual
+                // checkpoint equivalent (see the local probe comment above).
                 flushCommand = "psql -U postgres -c 'CHECKPOINT;'",
             ),
         ),

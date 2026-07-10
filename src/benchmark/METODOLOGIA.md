@@ -37,8 +37,10 @@ dyskwalifikuje przebieg:
    zawyżał wyniki LOCAL o oszacowane 10–30% na zapytaniach rzędu milisekund.
 2. **Czarna skrzynka przez HTTP.** Oba systemy odpytywane są wyłącznie przez
    swoje publiczne API REST, tym samym klientem HTTP, z identycznymi
-   parametrami (`includeTraces`, `includeEvents`). Mierzony jest pełny czas
-   end-to-end (kompilacja zapytania + wykonanie + serializacja odpowiedzi).
+   parametrami — żaden opcjonalny parametr (`includeTraces`, `includeEvents`)
+   nie jest wysyłany, więc oba systemy odpowiadają swoimi domyślnymi, pełnymi
+   hierarchiami. Mierzony jest pełny czas end-to-end (kompilacja zapytania +
+   wykonanie + serializacja odpowiedzi).
 3. **Identyczna polityka rozgrzewki.** Każde zapytanie poprzedzone jest tą samą
    liczbą nierejestrowanych wykonań w obu systemach; wewnętrzne cache silników
    baz (page cache PostgreSQL/Neo4j) traktujemy jako integralną część systemu.
@@ -71,9 +73,14 @@ podzbioru; wyniki do pracy pochodzą wyłącznie z profilu FULL.
 ## 4. Mierzone wielkości
 
 ### Q1 — import
-Czas ściany (sekundy) żądania importu XES przez HTTP, od wysłania pliku do
-odpowiedzi 2xx; osobno dla każdego datasetu, ≥3 powtórzenia na świeżym
-datastore (nowy datastore per powtórzenie, żeby uniknąć deduplikacji).
+Czas ściany (sekundy) importu XES przez HTTP, od wysłania pliku do chwili,
+w której zaimportowany log jest **widoczny na liście logów** datastore'u
+(odpowiedź 2xx + polling listy co 1 s). Samo 2xx nie wystarcza, bo REFERENCE
+importuje asynchronicznie; kwantyzacja pollingu (±1 s) obciąża oba systemy
+symetrycznie. Jeden import na świeży datastore w każdym przebiegu benchmarku
+(nowy datastore per przebieg, żeby uniknąć deduplikacji); wymagane ≥3 próbki
+per dataset pochodzą z ≥3 osobnych przebiegów całego eksperymentu (§5 pkt 6) —
+tabela importu pojedynczego przebiegu zawiera więc pojedyncze pomiary.
 
 ### Q2 — zapytania
 Klasy zapytań (rozszerzone względem pierwotnych 6 o operacje najbardziej
@@ -183,6 +190,13 @@ min/max z 30 repetycji. Deklarowana różnica między systemami uznawana jest za
 istotną tylko, gdy przedziały IQR obu systemów są rozłączne — inaczej wynik
 opisywany jest jako porównywalny. Uzasadnienie rygoru: zmierzony jitter
 median run-to-run na tej samej wersji kodu sięga 2× przy zapytaniach ~10 ms.
+
+Wszystkie kwantyle (mediana, Q1/Q3, p95) we wszystkich artefaktach —
+`query-summary.csv`, tabelach `thesis-report.md`/`thesis-tables.tex`
+i wykresach z nich generowanych — liczone są tym samym estymatorem typu 7
+wg Hyndman & Fan (interpolacja liniowa między rangami; domyślny estymator
+R/NumPy/Excela), więc ta sama wielkość ma identyczną wartość w tabeli
+i na rysunku.
 
 ## 6. Artefakty wynikowe
 

@@ -111,4 +111,29 @@ class BenchmarkResultsWriterTest {
         assertEquals(2.0, summaries.single().medianSeconds)
         assertTrue(summaries.single().maxSeconds == 3.0, "cold/mismatch samples must not reach the summary")
     }
+
+    @Test
+    fun `summary quantiles use the same type-7 estimator as the thesis tables`() {
+        fun sample(
+            run: Int,
+            seconds: Double,
+        ) = QueryBenchmarkResult(
+            system = "local",
+            datasetName = "trace-100",
+            queryLabel = "hierarchyWindow",
+            run = run,
+            seconds = seconds,
+            status = "OK",
+            responseBytes = 1,
+            phase = QUERY_PHASE_WARM,
+        )
+
+        val seconds = listOf(1.0, 2.0, 3.0, 10.0)
+        val summary = QueryStatistics.summarize(seconds.mapIndexed(::sample)).single()
+
+        // Even sample count: a nearest-rank floor estimator would report 2.0 / 3.0 here.
+        assertEquals(ThesisStatistics.quantile(seconds, 0.50), summary.medianSeconds)
+        assertEquals(2.5, summary.medianSeconds)
+        assertEquals(ThesisStatistics.quantile(seconds, 0.95), summary.p95Seconds)
+    }
 }
