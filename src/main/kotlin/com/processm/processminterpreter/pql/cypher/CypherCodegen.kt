@@ -46,6 +46,7 @@ class CypherCodegen(propertyMapper: PhysicalAttributeMapper) {
         val state = CypherBuildState(shadow)
         CypherMatchEmitter.emit(state)
         filterRenderer.emitWhereClause(state)
+        CypherMatchEmitter.emitPendingOptionalEventMatch(state)
         state.cypher.append(" RETURN DISTINCT log.logId AS logId")
         emitLogOrder(state)
         return state.finish()
@@ -94,6 +95,7 @@ class CypherCodegen(propertyMapper: PhysicalAttributeMapper) {
         if (!whereAlreadyEmitted && !emitWindowedAggregationMatchIfNeeded(s)) {
             CypherMatchEmitter.emit(s)
             filterRenderer.emitWhereClause(s)
+            CypherMatchEmitter.emitPendingOptionalEventMatch(s)
         }
         if (emitPostMatchShapeIfNeeded(s)) return s.finish()
         aggregationRenderer.emitIfAggregation(s)

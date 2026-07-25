@@ -37,6 +37,19 @@ class MemorySamplerTest {
         assertNull(parseTasklistMemoryBytes("INFO: No tasks are running which match the specified criteria."))
     }
 
+    /**
+     * The POSIX RSS probe backs the `local-jvm` series. It used to be missing entirely
+     * (Windows-only `tasklist`), which silently dropped the LOCAL application JVM from
+     * the Q3 memory comparison and understated this system's footprint.
+     */
+    @Test
+    fun `parses ps rss output in kilobytes`() {
+        assertEquals(1_234_567L * 1024, parsePsRssBytes(" 1234567\n"))
+        assertEquals(4096L * 1024, parsePsRssBytes("  RSS\n4096\n"))
+        assertNull(parsePsRssBytes(""))
+        assertNull(parsePsRssBytes("ps: no such process\n"))
+    }
+
     @Test
     fun `summarize reports median and peak per component and phase`() {
         fun sample(component: String, phase: String, bytes: Long) =

@@ -49,7 +49,7 @@ dyskwalifikuje przebieg:
    nie nakładają się w czasie (pomiar naprzemienny, sekcja 5). Konfiguracja
    pamięci obu baz jest udokumentowana w `environment.json` każdego przebiegu.
 5. **Świeży stan dla pomiarów storage.** Finalne pomiary rozmiaru bazy
-   wykonywane są na stacku postawionym od zera (`docker-compose down -v`),
+   wykonywane są na stacku postawionym od zera (`docker compose down -v`),
    żeby uniknąć fragmentacji i pozostałości po wcześniejszych eksperymentach.
 6. **Równoważność odpowiedzi.** Dla każdej pary (dataset, zapytanie) rejestrowane
    są liczności odpowiedzi (logi/trace'y/zdarzenia) obu systemów; rozjazd
@@ -144,7 +144,7 @@ Rejestrowane: czas ściany każdej próbki, rozmiar odpowiedzi (bajty), licznoś
   raportujemy wyłącznie dla REFERENCE.
 
   **Współczynnik ekspansji (pytanie badawcze 5)** mierzy dedykowana sonda
-  `scripts/benchmarks/measure-storage-scaling.ps1`: świeży stack, sekwencyjny
+  `scripts/benchmarks/measure-storage-scaling.py`: świeży stack, sekwencyjny
   import serii skalujących **bez czyszczenia** (żaden store nie maleje, więc
   kolejne delty są przypisywalne konkretnym datasetom), checkpoint wymuszany
   po stronie Neo4j czystym restartem kontenera (checkpoint przy zamknięciu),
@@ -154,6 +154,16 @@ Rejestrowane: czas ściany każdej próbki, rozmiar odpowiedzi (bajty), licznoś
   `storage-scaling.csv` i na wykresy `storage_scaling_*` w raporcie;
   raportowany przyrost oraz współczynnik ekspansji względem rozmiaru XES
   (bajty bazy / bajty XES).
+
+  **Zmiana narzędzia (wersja sondy):** sonda została przeniesiona z PowerShella
+  (`measure-storage-scaling.ps1`) na Pythona, żeby uruchamiała się na każdym
+  systemie bez dodatkowych zależności. **Metoda pomiaru pozostała niezmieniona:**
+  te same polecenia w kontenerach (restart Neo4j i sumowanie `/data/databases`,
+  `CHECKPOINT;` i `sum(pg_database_size(...))` po stronie PostgreSQL), ta sama
+  lista i kolejność datasetów, ten sam zestaw kolumn `storage-scaling.csv` i ten
+  sam format liczb. Zmienił się wyłącznie interpreter uruchamiający te
+  polecenia, więc wyniki zebrane obiema wersjami są porównywalne; przy
+  raportowaniu w pracy wystarczy odnotować, którą wersją zebrano dany przebieg.
 - **Pamięć operacyjna:** próbkowanie co 1 s w trakcie fazy zapytań:
   - REFERENCE: `docker stats` kontenera `processm-server` (obejmuje aplikację
     i PostgreSQL — jeden kontener),
@@ -168,9 +178,45 @@ Rejestrowane: czas ściany każdej próbki, rozmiar odpowiedzi (bajty), licznoś
 - parytet liczności odpowiedzi per zapytanie (sekcja 2 pkt 6),
 - odwołanie do niezależnego raportu kompatybilności.
 
+#### Kolejność zdarzeń a hoistowane warianty śladu (ustalenie interpretacyjne)
+
+**Rozjazd liczności na zapytaniach `group by ^e:name` wynika z odstępstwa systemu
+REFERENCE od specyfikacji PQL, a nie z błędu implementacji LOCAL.** Ustalenie jest
+istotne dla interpretacji wyników Q4 i musi być przywołane w pracy.
+
+Zapytania grupujące ślady po hoistowanym atrybucie zdarzenia dzielą je na warianty
+procesu według **sekwencji** wartości tego atrybutu, więc wynik zależy wprost od
+kolejności zdarzeń wewnątrz śladu. Specyfikacja PQL ustala tę kolejność jednoznacznie:
+
+> By omitting the `order by` clause, the components are returned in the same order
+> as provided by the data source.
+
+— *ProcessM PQL specification*, `docs/pql.md`
+(https://github.com/ProcessMPUT/processm/blob/master/docs/pql.md).
+
+Domyślną kolejnością jest zatem kolejność **ze źródła danych** (zapisu w pliku XES),
+a nie chronologiczna według `time:timestamp`. LOCAL zachowuje kolejność źródłową
+(`importOrder` nadawany przy imporcie, zgodny co do znaku z plikiem XES); REFERENCE
+porządkuje zdarzenia po znaczniku czasu, a przy **równych** znacznikach — w kolejności
+narzuconej przez plan zapytania bazy relacyjnej. Logi rzeczywiste zawierają zdarzenia
+o identycznych znacznikach czasu w obrębie śladu, więc systemy budują wtedy różne
+sekwencje wariantów, co zmienia podział śladów na grupy i łączną liczbę zdarzeń.
+
+Zjawisko nie jest niedeterminizmem: obie strony są powtarzalne (wielokrotne wykonanie
+daje po każdej stronie identyczne liczności), a różnica jest systematyczna. Nie
+występuje na zbiorach syntetycznych, które mają ściśle rosnące znaczniki czasu.
+Poprawność przechowywania danych potwierdza niezależnie roundtrip XES (`MATCH`, zero
+różnic dla wszystkich zbiorów).
+
+Zgodnie z zasadą „nie normalizujemy rozbieżności, by komparator zaraportował `MATCH`”
+(sekcja 2) **nie dostosowujemy LOCAL do zachowania REFERENCE** — byłoby to odejście od
+specyfikacji. Pary te są unieważniane i wykluczane z tabel czasów, a `thesis-report.md`
+generuje dla nich dedykowaną sekcję „Kolejność zdarzeń w wariantach śladu — zgodność ze
+specyfikacją PQL”.
+
 ## 5. Protokół pomiarowy
 
-1. Świeży stack (`docker-compose down -v && up -d`), zapis `environment.json`
+1. Świeży stack (`docker compose down -v && up -d`), zapis `environment.json`
    (wersje, limity, sprzęt, konfiguracja pamięci baz).
 2. Pomiar pamięci spoczynkowej obu systemów (60 s próbkowania).
 3. Dla każdego datasetu: import do REFERENCE i LOCAL (pomiar Q1 + przyrost

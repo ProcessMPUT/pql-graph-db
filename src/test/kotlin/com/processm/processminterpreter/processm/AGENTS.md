@@ -6,11 +6,10 @@ Tests in this subtree protect behavior ported from the original ProcessM
 repository. They are high-value semantic regression tests, especially the
 hierarchical PQL and XES suites.
 
-The reference repository is available at:
-
-```text
-C:\Users\andre\AntigravityProjects\processm
-```
+The reference repository is a separate checkout that is not present on every
+machine. Resolve it via `PROCESSM_REFERENCE_REPO`, a sibling `../processm`
+checkout, or GitHub — see *Reference ProcessM Repository* in the root
+`AGENTS.md`.
 
 Before changing a ported test, locate the original test and compare its setup,
 query, complete assertions, fixtures, limits, and expected failure behavior.
@@ -62,10 +61,13 @@ incorrect grouping, extra synthetic data, or lost metadata are real failures.
 
 ## Commands
 
-```powershell
-.\gradlew.bat test --tests com.processm.processminterpreter.processm.hierarchical.*
-.\gradlew.bat test --tests com.processm.processminterpreter.processm.log.*
+```bash
+./gradlew test --tests 'com.processm.processminterpreter.processm.hierarchical.*'
+./gradlew test --tests 'com.processm.processminterpreter.processm.log.*'
 ```
+
+Quote the pattern: `zsh` fails on an unquoted trailing `*` that matches no file.
+See *Platform And Commands* in the root `AGENTS.md` for Windows equivalents.
 
 Run the relevant class while iterating, then both groups and the full suite
 before a compatibility checkpoint.

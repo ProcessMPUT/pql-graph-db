@@ -583,7 +583,7 @@ def main() -> int:
                 (f"query_{label}_by_{axis}.svg", f"Rys.: {label} ({clause}) — {axis_caption}."),
             )
 
-    # Storage-scaling probe results (scripts/benchmarks/measure-storage-scaling.ps1):
+    # Storage-scaling probe results (scripts/benchmarks/measure-storage-scaling.py):
     # sequential no-cleanup imports give attributable per-dataset disk deltas for
     # BOTH systems, unlike the benchmark's own storage rows (thesis question 5).
     storage_scaling = join_dataset(read_csv(result_dir / "storage-scaling.csv"), datasets)

@@ -8,6 +8,36 @@ internal class SelectPlanFacts(private val plan: LogicalPlan.Select) {
     val materializedScopes: Set<Scope> = plan.materializedScopes
     val usedScopes: Set<Scope> = plan.source.usedScopes + plan.source.fromScope + materializedScopes
 
+    /**
+     * True when events are needed only to materialize output, i.e. no clause of the
+     * query (explicit projection, filter, grouping, ordering) references the event
+     * scope. Such queries must not drop traces that have no events — see
+     * [CypherMatchEmitter.emit].
+     *
+     * Derived from the clauses rather than from `source.usedScopes`, because the
+     * planner also puts EVENT there for the implicit `select *` of an unmentioned
+     * scope — which is exactly the materialize-only case this must detect.
+     *
+     * `fromScope` is deliberately NOT consulted: a SELECT without an explicit FROM
+     * always defaults to [Scope.EVENT] (ProcessM convention), so treating that as an
+     * event reference would disable this for every query. ProcessM itself counts a
+     * trace that has no events, which is the behaviour being matched here.
+     */
+    val eventScopeOnlyMaterialized: Boolean by lazy {
+        if (Scope.EVENT !in usedScopes) {
+            false
+        } else {
+            val clauseExpressions = buildList {
+                plan.filter?.let(::add)
+                plan.groupBy?.keys?.let(::addAll)
+                plan.orderBy.forEach { add(it.expression) }
+                plan.projection.columns.forEach { column -> column.expression?.let(::add) }
+            }
+            val explicitEventColumn = plan.projection.columns.any { it.scope == Scope.EVENT }
+            !explicitEventColumn && clauseExpressions.none { Scope.EVENT in scopesOf(it) }
+        }
+    }
+
     val projectedScopes: Set<Scope> =
         plan.projection.columns.map { it.scope }.toSet() +
             plan.projection.selectAll.filterValues { it }.keys

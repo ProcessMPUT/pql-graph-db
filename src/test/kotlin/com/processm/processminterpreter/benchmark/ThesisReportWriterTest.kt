@@ -26,6 +26,47 @@ class ThesisReportWriterTest {
         assertEquals(9.55, stats.p95, 1e-9)
     }
 
+    /**
+     * The hoisted trace-variant difference is a REFERENCE deviation from the PQL
+     * spec's source-order rule, not a defect here — the report must say so, with the
+     * citation, or the invalidated rows read as our incompatibility. Guarded by a test
+     * so the argument cannot be dropped silently.
+     */
+    @Test
+    fun `documents the source-order finding for hoisted trace-variant invalidations`(
+        @TempDir tempDir: Path,
+    ) {
+        writeSyntheticRun(tempDir)
+        val md = tempDir.resolve("thesis-report.md").readText()
+
+        assertTrue(
+            md.contains("## Kolejność zdarzeń w wariantach śladu — zgodność ze specyfikacją PQL"),
+            "report must carry the dedicated spec-compliance section",
+        )
+        assertTrue(
+            md.contains("nie z błędu niniejszej implementacji"),
+            "the section must state the finding is not a defect of this implementation",
+        )
+        assertTrue(
+            md.contains("By omitting the `order by` clause, the components are returned in the same order"),
+            "the section must quote the PQL specification verbatim",
+        )
+        assertTrue(
+            md.contains("https://github.com/ProcessMPUT/processm/blob/master/docs/pql.md"),
+            "the quote must be attributed to a citable source",
+        )
+        // The hoisted pair is flagged in the invalidated list; the plain MISMATCH is not.
+        assertTrue(
+            md.contains("- ds-beta / hoistedGroup: MISMATCH") &&
+                md.substringAfter("- ds-beta / hoistedGroup:").substringBefore('\n').contains("kolejność źródłowa"),
+            "the hoisted pair must be marked as the source-order class",
+        )
+        assertFalse(
+            md.substringAfter("- ds_alpha / custom_attr:").substringBefore('\n').contains("kolejność źródłowa"),
+            "a plain count MISMATCH must NOT be attributed to the source-order deviation",
+        )
+    }
+
     @Test
     fun `writes thesis report and latex tables from synthetic records`(
         @TempDir tempDir: Path,
@@ -40,8 +81,8 @@ class ThesisReportWriterTest {
         assertTrue(md.contains("- ds_alpha / custom_attr: MISMATCH"), "invalidated pair must be listed with reason")
         assertTrue(md.contains("traces 5 vs 7"), "MISMATCH details must be propagated to the reason")
         assertTrue(
-            md.contains("3 par (dataset, zapytanie) zgodnych (OK), 1 par unieważnionych"),
-            "Q4 parity summary must count 3 OK pairs and 1 MISMATCH pair",
+            md.contains("3 par (dataset, zapytanie) zgodnych (OK), 2 par unieważnionych"),
+            "Q4 parity summary must count 3 OK pairs and 2 MISMATCH pairs",
         )
 
         // IQR-overlap pair (ds-beta x hierarchyWindow) is marked comparable and listed as a caveat.
@@ -141,6 +182,12 @@ class ThesisReportWriterTest {
             add(warm("reference", "ds-beta", "custom_attr", 2, 0.002))
             add(cold("local", "ds-beta", "custom_attr", 0.003))
             add(cold("reference", "ds-beta", "custom_attr", 0.004))
+            // Pair 5: ds-beta x hoistedGroup — invalidated on a hoisted trace-variant
+            // query, i.e. the REFERENCE source-order deviation class.
+            add(warm("local", "ds-beta", "hoistedGroup", 1, 0.010, status = QUERY_STATUS_MISMATCH, details = "Response count mismatch: events 714 vs 723"))
+            add(warm("reference", "ds-beta", "hoistedGroup", 1, 0.011, status = QUERY_STATUS_MISMATCH, details = "Response count mismatch: events 714 vs 723"))
+            add(cold("local", "ds-beta", "hoistedGroup", 0.050))
+            add(cold("reference", "ds-beta", "hoistedGroup", 0.060))
         }
         val storage = listOf(
             storageResult("local", "ds_alpha", 10L * 1024 * 1024, 10.0),
@@ -167,6 +214,11 @@ class ThesisReportWriterTest {
             storage = storage,
             roundtrips = roundtrips,
             memorySummaries = memorySummaries,
+            querySpecs = listOf(
+                BenchmarkQuerySpec("hierarchyWindow", "limit l:1, t:10, e:20"),
+                BenchmarkQuerySpec("custom_attr", "where [e:attr_1] is not null limit l:1, t:10"),
+                BenchmarkQuerySpec("hoistedGroup", "group by ^e:name order by count(t:name) desc"),
+            ),
         )
     }
 

@@ -213,6 +213,7 @@ fun main(args: Array<String>) {
         storage = storage,
         roundtrips = roundtrips,
         memorySummaries = memorySampler.summaries(),
+        querySpecs = config.queries,
     )
 
     println("Benchmark report written to $outputDirectory")
@@ -279,8 +280,20 @@ private fun memorySources(
             val port = runCatching { java.net.URI(settings.localApi).port }.getOrNull().takeIf { it != null && it > 0 } ?: 8080
             val pid = LocalAppPidResolver.resolve(port)
             if (pid != null) {
-                println("Sampling local JVM RSS for PID $pid (port $port)")
-                add(WindowsProcessMemorySource("local-jvm", pid))
+                val source = ProcessMemorySource("local-jvm", pid)
+                // Probe once up front: resolving a PID is not proof the RSS probe works
+                // (it used to be Windows-only and failed silently elsewhere), and a
+                // missing local-jvm series understates LOCAL memory in Q3.
+                if (source.sample().isEmpty()) {
+                    println(
+                        "WARNING: local JVM RSS probe returned nothing for PID $pid; " +
+                            "local-jvm memory will NOT be sampled and the Q3 memory comparison " +
+                            "would understate LOCAL — fix the probe before using this run as thesis data",
+                    )
+                } else {
+                    println("Sampling local JVM RSS for PID $pid (port $port)")
+                    add(source)
+                }
             } else {
                 println("WARNING: could not resolve local application PID on port $port; local-jvm memory will not be sampled")
             }
@@ -331,7 +344,7 @@ private fun benchmarkSystems(settings: BenchmarkSettings): List<BenchmarkSystem>
                 // `CALL db.checkpoint()` here failed silently for months) —
                 // sizes reflect naturally checkpointed state. Attributable
                 // local per-dataset deltas come from the sequential probe in
-                // scripts/benchmarks/measure-storage-scaling.ps1 instead.
+                // scripts/benchmarks/measure-storage-scaling.py instead.
             ),
         ),
         BenchmarkSystem(

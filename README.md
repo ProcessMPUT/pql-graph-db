@@ -75,29 +75,50 @@ Interfejsy (porty) istnieją tylko na realnych granicach podmiany:
 `LogRepository`, `DataStoreRepository` (Neo4j) i `RemoteProcessMGateway` (HTTP).
 Reszta to konkretne klasy — bez ceremonii warstwowej.
 
-> **Źródło prawdy o architekturze i regułach zmian to `AGENTS.md`** (w root oraz
-> per-obszar: `scripts/AGENTS.md`, `src/benchmark/AGENTS.md`). Metodologia
-> testów wydajnościowych: `src/benchmark/METODOLOGIA.md`.
+> **Źródło prawdy o architekturze i regułach zmian to `AGENTS.md`** — w root oraz
+> trzy przewodniki per-obszar: `scripts/AGENTS.md`, `src/benchmark/AGENTS.md`
+> i `src/test/kotlin/com/processm/processminterpreter/processm/AGENTS.md`
+> (testy portowane z oryginalnego ProcessM). Są to jedyne wersjonowane
+> instrukcje dla agentów i celowo niezależne od narzędzia — pliki notatek
+> specyficzne dla konkretnego asystenta są gitignorowane (sekcja
+> `### AI Agents ###` w `.gitignore`), więc nie przetrwają świeżego klonu.
+> Metodologia testów wydajnościowych: `src/benchmark/METODOLOGIA.md`.
 
 ## Model danych Neo4j
 
 ```
 Nodes:
-- Log (properties: id, name, attributes)
-- Trace (properties: id, case_id, attributes)  
-- Event (properties: id, activity, timestamp, resource, attributes)
+- DataStore (properties: dataStoreId, name)
+- Log        (properties: logId, name, classifiers, extensions,
+              traceGlobals, eventGlobals, atrybuty niestandardowe)
+- Trace      (properties: traceId, caseId, atrybuty niestandardowe)
+- Event      (properties: eventId, activity, timestamp, resource,
+              atrybuty niestandardowe)
 
 Relationships:
-- Log -[CONTAINS]-> Trace
-- Trace -[HAS_EVENT]-> Event
-- Event -[FOLLOWS]-> Event (sekwencja eventów w trace)
+- DataStore -[CONTAINS_LOG]-> Log
+- Log       -[CONTAINS]->     Trace
+- Trace     -[HAS_EVENT]->    Event
+- Event     -[FOLLOWS]->      Event (sekwencja zdarzeń w śladzie)
 ```
+
+**DataStore jest korzeniem zakresu zapytań.** Każde zapytanie PQL startuje od
+`MATCH (:DataStore {dataStoreId: $dataStoreId})-[:CONTAINS_LOG]->(log:Log)`, co
+odwzorowuje model ProcessM: jeden datastore może zawierać wiele logów, a
+zapytania wielologowe (`select l:name limit l:10`) działają w obrębie datastore'u.
 
 ## Wymagania
 
-- Java 21+
-- Docker & Docker Compose
-- Gradle 8.0+
+- **JDK 25** — `build.gradle.kts` ustawia `jvmToolchain(25)`; Gradle pobierze
+  odpowiedni toolchain, jeśli nie masz go lokalnie
+- Docker + Docker Compose (v2, `docker compose`)
+- Python 3 — skrypty operacyjne w `scripts/` (tylko biblioteka standardowa,
+  bez `pip install`)
+- Gradle **nie jest wymagany globalnie** — używaj wrappera (`./gradlew`,
+  na Windows `.\gradlew.bat`), który przypina wersję 9.5.0
+
+Na świeżym klonie na macOS/Linux nadaj wrapperowi prawo wykonywania:
+`chmod +x gradlew`.
 
 ## Uruchomienie środowiska deweloperskiego
 
@@ -105,13 +126,13 @@ Relationships:
 
 ```bash
 # Uruchomienie całego środowiska: Neo4j + referencyjny ProcessM + seed danych
-docker-compose up -d
+docker compose up -d
 
 # Sprawdzenie statusu
-docker-compose ps
+docker compose ps
 
 # Logi Neo4j
-docker-compose logs -f neo4j
+docker compose logs -f neo4j
 ```
 
 Neo4j będzie dostępne pod adresami:
@@ -135,13 +156,51 @@ Aplikacja będzie dostępna pod adresem: http://localhost:8080/api
 
 ```bash
 # Zatrzymanie wszystkich serwisów
-docker-compose down
+docker compose down
 
 # Zatrzymanie z usunięciem volumes (UWAGA: usuwa dane!)
-docker-compose down -v
+docker compose down -v
 ```
 
 ## API Endpoints
+
+### Datastore'y (zakres zapytań)
+
+```http
+POST /api/data-stores
+Content-Type: application/json
+{ "name": "My Datastore" }
+# Tworzy datastore; zwraca { "id": ... } używane dalej jako dataStoreId
+
+GET /api/data-stores
+# Lista datastore'ów
+
+GET /api/data-stores/{dataStoreId}
+# Metadane pojedynczego datastore'u
+
+GET /api/data-stores/{dataStoreId}/log-summaries
+# Skrócone podsumowania logów w datastorze
+
+PATCH /api/data-stores/{dataStoreId}
+Content-Type: application/json
+{ "name": "Nowa nazwa" }
+# Zmiana nazwy
+
+DELETE /api/data-stores/{dataStoreId}
+# Usunięcie datastore'u wraz z zawartością
+
+POST /api/data-stores/{dataStoreId}/logs
+Content-Type: multipart/form-data
+# Parametry: file (MultipartFile) — .xes lub .xes.gz
+# Import logu XES do datastore'u (ścieżka zgodna z API ProcessM)
+
+GET /api/data-stores/{dataStoreId}/logs
+# Parametry: query (PQL, domyślnie ""), includeTraces, includeEvents
+# Wykonanie zapytania PQL w zakresie datastore'u — endpoint zgodny z ProcessM
+
+DELETE /api/data-stores/{dataStoreId}/logs/{logId}
+# Usunięcie pojedynczego logu z datastore'u
+```
 
 ### Zarządzanie logami
 
@@ -152,8 +211,11 @@ Content-Type: multipart/form-data
 # Upload pliku XES
 
 POST /api/logs/load-sample
-# Parametry: resourcePath (domyślnie: logs/sample_process.xes), logId (opcjonalny)
+# Parametry: resourcePath (domyślnie: logs/sample_process.xes), logId, dataStoreId
 # Ładuje przykładowy log z zasobów aplikacji
+
+GET /api/logs/samples
+# Lista przykładowych logów dostępnych w zasobach (src/main/resources/logs)
 
 POST /api/logs
 Content-Type: application/json
@@ -181,8 +243,9 @@ Content-Type: application/json
 # Aktualizacja metadanych logu
 
 DELETE /api/logs/{logId}
-# Parametry: deleteAllData (domyślnie: false) — usuwa też traces i events
-# Usunięcie logu
+# Parametry: deleteAllData (domyślnie: TRUE) — usuwa też traces i events
+# Usunięcie logu. Uwaga: domyślne zachowanie jest destrukcyjne — żeby zostawić
+# dane potomne, trzeba jawnie przekazać deleteAllData=false
 
 HEAD /api/logs/{logId}
 # Sprawdzenie czy log istnieje (200 / 404)
@@ -197,9 +260,13 @@ GET /api/logs/generate-id
 POST /api/query/execute?format=json
 Content-Type: application/json
 # Parametr format: "json" (domyślnie) lub "xes" — XES jako JSON structure
+# Zakres: podaj dataStoreId (zalecane, zgodne z ProcessM) albo logId
 {
   "query": "select e:name, e:timestamp where e:name = 'Task A'",
-  "logId": "log-123"
+  "dataStoreId": "ds-123",
+  "logId": null,
+  "timeout": null,
+  "maxResults": null
 }
 
 POST /api/query/execute-xes
@@ -225,14 +292,26 @@ GET /api/query/features
 POST /api/query/verify
 Content-Type: application/json
 # Parametry: format ("full" domyślnie lub "light")
-# Porównuje wyniki z ProcessM (wymaga skonfigurowanego serwera ProcessM)
+# Porównuje wyniki z ProcessM (wymaga skonfigurowanego serwera ProcessM).
+# To endpoint, na którym opiera się raport kompatybilności — porównanie jest
+# semantyczne, a nie po statusie HTTP czy rozmiarze odpowiedzi.
 {
   "query": "select e:name",
-  "logId": "log-123",
-  "logName": "My Log",
+  "dataStoreId": "lokalny-ds",
+  "remoteDataStoreId": "ds-w-referencyjnym-processm",
+  "logId": null,
+  "logName": null,
   "includeTraces": true,
   "includeEvents": true
 }
+
+POST /api/query/processm/upload
+Content-Type: multipart/form-data
+# Parametry: file (MultipartFile), logName
+# Wysyła log do referencyjnego ProcessM (przygotowanie porównania)
+
+GET /api/query/processm/data-stores
+# Lista datastore'ów po stronie referencyjnego ProcessM
 ```
 
 ## Przykłady PQL
@@ -304,7 +383,7 @@ same podnoszą kontener Neo4j przez Testcontainers, więc wymagany jest Docker):
 
 Bramka zgodności semantycznej z oryginałem (raport kompatybilności, wymagane zero
 problemów ścisłych) opisana jest w `AGENTS.md` i uruchamiana skryptem
-`scripts/run-compatibility-report.ps1`.
+`scripts/run-compatibility-report.py`.
 
 ## Rozwój
 
@@ -320,10 +399,16 @@ src/
 │   └── web/          # kontrolery REST + DTO
 ├── main/resources/
 │   ├── logs/         # przykładowe logi XES (gzip); listowane przez GET /api/logs/samples
-│   └── static/       # UI porównawcze (index.html + app.js)
+│   └── static/       # UI porównawcze: index.html + js/ (app.js, json-viewer.js) + css/
 ├── test/             # testy; podpakiet .../processm/* to porty z oryginalnego ProcessM
 └── benchmark/        # osobny source set: benchmark do pracy (patrz src/benchmark/AGENTS.md)
+
+scripts/             # narzędzia operacyjne (Python 3, tylko stdlib) — patrz scripts/AGENTS.md
 ```
+
+Lista zapytań w rozwijanym menu UI (`static/index.html`, `#sampleQueriesSelect`)
+jest domyślnym źródłem zapytań raportu kompatybilności — dodanie tam zapytania
+automatycznie obejmuje je testem zgodności.
 
 ### Dodawanie nowych funkcji
 
@@ -331,11 +416,14 @@ Nie używamy Spring Data Neo4j (`@Node` / `Neo4jRepository`) — dostęp do bazy
 bezpośrednio przez sterownik (`org.neo4j.driver.Driver`) w klasach `neo4j/`.
 
 1. **Semantyka PQL**: rozszerz fazy w `pql/semantics` (Resolver/Validator/Planner);
-   zmiany walidacji sprawdzaj z oryginałem (`Query.kt` w lokalnym checkoucie ProcessM).
+   zmiany walidacji sprawdzaj z oryginałem (`Query.kt`). Repozytorium referencyjne
+   ProcessM wskazuje zmienna `PROCESSM_REFERENCE_REPO`, checkout obok tego repo
+   (`../processm`) albo GitHub — szczegóły w `AGENTS.md`.
 2. **Generacja Cypher**: dodaj/zmień renderer w `pql/cypher` (bez interpolacji
    wartości — tylko parametry).
 3. **Persystencja**: repozytoria i zapis/odczyt w `neo4j/`.
-4. **REST**: cienki kontroler w `web/` delegujący do usługi aplikacyjnej.
+4. **REST**: cienki kontroler w `web/` delegujący do usługi feature'owej
+   (`PqlQueryService`, `LogService`, `DataStoreService`).
 5. **Testy**: jednostkowe w pakiecie feature; parytet semantyczny w `test/.../processm`.
 
 Przed każdą zmianą przeczytaj `AGENTS.md` — opisuje dyscyplinę zmian i bramkę
@@ -353,10 +441,13 @@ docker exec -it processm-neo4j cypher-shell -u neo4j -p password123
 ### Neo4j nie startuje
 ```bash
 # Sprawdź logi
-docker-compose logs neo4j
+docker compose logs neo4j
 
-# Sprawdź czy port 7687 jest wolny
-netstat -an | findstr 7687
+# Sprawdź czy port 7687 jest wolny (macOS/Linux)
+lsof -nP -iTCP:7687 -sTCP:LISTEN
+
+# Windows
+netstat -ano | findstr 7687
 ```
 
 ### Problemy z pamięcią
@@ -366,6 +457,6 @@ NEO4J_server_memory_heap_max__size: "2G"
 ```
 
 ### Błędy połączenia
-- Sprawdź czy Neo4j jest uruchomiony: `docker-compose ps`
+- Sprawdź czy Neo4j jest uruchomiony: `docker compose ps`
 - Sprawdź konfigurację w `application.yml`
 - Sprawdź czy hasło jest poprawne (password123)

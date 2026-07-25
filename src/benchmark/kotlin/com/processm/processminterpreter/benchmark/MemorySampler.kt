@@ -155,25 +155,48 @@ fun parseByteSize(value: String): Long? {
     return (amount * multiplier).toLong()
 }
 
+internal val isWindowsHost: Boolean
+    get() = System.getProperty("os.name").orEmpty().startsWith("Windows", ignoreCase = true)
+
 /**
- * Samples the RSS (working set) of one host process via Windows `tasklist`.
- * Used for the LOCAL application JVM which runs on the host, outside Docker.
+ * Samples the RSS (working set) of one host process, used for the LOCAL application
+ * JVM which runs on the host, outside Docker.
+ *
+ * Cross-platform on purpose: `tasklist` on Windows, `ps -o rss=` on macOS/Linux.
+ * Without the POSIX branch the source silently produced nothing there, so the LOCAL
+ * side of the Q3 memory comparison counted only the Neo4j container and understated
+ * this system's footprint — a fairness defect, not a cosmetic one.
  */
-class WindowsProcessMemorySource(
+class ProcessMemorySource(
     private val component: String,
     private val pid: Long,
 ) : MemorySampler.MemorySource {
     override fun sample(): List<Pair<String, Long>> =
         runCatching {
-            val process = ProcessBuilder(
-                "tasklist", "/FI", "PID eq $pid", "/FO", "CSV", "/NH",
-            ).redirectErrorStream(true).start()
+            val command = if (isWindowsHost) {
+                listOf("tasklist", "/FI", "PID eq $pid", "/FO", "CSV", "/NH")
+            } else {
+                listOf("ps", "-o", "rss=", "-p", pid.toString())
+            }
+            val process = ProcessBuilder(command).redirectErrorStream(true).start()
             val output = process.inputStream.bufferedReader().readText()
             if (!process.waitFor(30, TimeUnit.SECONDS)) return@runCatching emptyList()
-            val bytes = parseTasklistMemoryBytes(output) ?: return@runCatching emptyList()
+            val bytes = if (isWindowsHost) {
+                parseTasklistMemoryBytes(output)
+            } else {
+                parsePsRssBytes(output)
+            } ?: return@runCatching emptyList()
             listOf(component to bytes)
         }.getOrDefault(emptyList())
 }
+
+/** Parses `ps -o rss= -p <pid>` output: a single integer in kilobytes. */
+fun parsePsRssBytes(output: String): Long? =
+    output.lineSequence()
+        .map { it.trim() }
+        .firstOrNull { it.isNotEmpty() && it.all(Char::isDigit) }
+        ?.toLongOrNull()
+        ?.times(1024)
 
 /** Parses `tasklist /FO CSV /NH` output; the last CSV field is e.g. `"1,234,567 K"`. */
 fun parseTasklistMemoryBytes(output: String): Long? {
@@ -194,13 +217,17 @@ fun parseTasklistMemoryBytes(output: String): Long? {
 /**
  * Resolves the PID of the local application JVM listening on [port].
  *
- * Primary source is `netstat -ano` (the LISTENING process is the JVM we want to
- * measure). The bootRun PID file written by `scripts/restart-app-8080.ps1`
- * (`build/bootrun-<port>.pid`) is only a fallback: it records the cmd.exe wrapper
- * that launched Gradle, not the application JVM itself.
+ * The listening process is the JVM we want to measure: `netstat -ano` on Windows,
+ * `lsof` on macOS/Linux (POSIX `netstat` prints no PID column, so the Windows parse
+ * silently found nothing there). The bootRun PID file written by
+ * `scripts/restart-app-8080.py` (`build/bootrun-<port>.pid`) is only a fallback — it
+ * records the launcher process, which need not be the application JVM itself.
  */
 object LocalAppPidResolver {
-    fun resolve(port: Int): Long? = netstatListeningPid(port) ?: pidFilePid(port)
+    fun resolve(port: Int): Long? = listeningPid(port) ?: pidFilePid(port)
+
+    private fun listeningPid(port: Int): Long? =
+        if (isWindowsHost) netstatListeningPid(port) else lsofListeningPid(port)
 
     private fun netstatListeningPid(port: Int): Long? =
         runCatching {
@@ -213,6 +240,19 @@ object LocalAppPidResolver {
                     parts.size >= 5 && parts[0] == "TCP" && parts[1].endsWith(":$port") && parts[3] == "LISTENING"
                 }
                 ?.last()
+                ?.toLongOrNull()
+        }.getOrNull()
+
+    private fun lsofListeningPid(port: Int): Long? =
+        runCatching {
+            val process = ProcessBuilder(
+                "lsof", "-nP", "-iTCP:$port", "-sTCP:LISTEN", "-t",
+            ).redirectErrorStream(true).start()
+            val output = process.inputStream.bufferedReader().readText()
+            if (!process.waitFor(30, TimeUnit.SECONDS)) return@runCatching null
+            output.lineSequence()
+                .map { it.trim() }
+                .firstOrNull { it.isNotEmpty() && it.all(Char::isDigit) }
                 ?.toLongOrNull()
         }.getOrNull()
 

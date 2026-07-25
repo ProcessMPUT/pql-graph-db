@@ -17,6 +17,7 @@ internal class CypherDeleteRenderer(
         val s = CypherBuildState(shadow)
         CypherMatchEmitter.emit(s)
         filterRenderer.emitWhereClause(s)
+        CypherMatchEmitter.emitPendingOptionalEventMatch(s)
         when (plan.target) {
             Scope.LOG -> s.cypher.append(
                 " WITH DISTINCT log" +

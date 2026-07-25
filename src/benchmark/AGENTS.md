@@ -72,39 +72,49 @@ WAL/transaction logs, page cache, and filesystem allocation granularity can
 distort small deltas. Use a fresh stack for final storage runs and describe the
 measurement method in the thesis.
 
+The expansion-factor probe `scripts/benchmarks/measure-storage-scaling.py` was
+ported from PowerShell to Python so it runs on any host. The measurement method
+itself is unchanged — same container commands, same size sources, same dataset
+order, same CSV columns and number formatting — and METODOLOGIA records the
+change. Runs collected with either version stay comparable; note in the thesis
+which version produced a given run.
+
 ## Commands
+
+Commands use POSIX form; see *Platform And Commands* in the root `AGENTS.md`
+for the Windows equivalents.
 
 Compile the benchmark source set:
 
-```powershell
-.\gradlew.bat compileBenchmarkKotlin
+```bash
+./gradlew compileBenchmarkKotlin
 ```
 
 Run the smoke profile:
 
-```powershell
-.\gradlew.bat runBenchmarkSmoke
+```bash
+./gradlew runBenchmarkSmoke
 ```
 
 Run the full thesis profile:
 
-```powershell
-.\gradlew.bat runBenchmarkFull
+```bash
+./gradlew runBenchmarkFull
 ```
 
 Remove leftover benchmark datastores:
 
-```powershell
-.\gradlew.bat runBenchmarkCleanup
+```bash
+./gradlew runBenchmarkCleanup
 ```
 
 Generate SVG charts and embed them into the run's `thesis-report.md` and
 `thesis-tables.tex` (standard post-run step; idempotent, safe to re-run), then
 optionally fold the Markdown report + charts into one self-contained HTML file:
 
-```powershell
-python scripts\benchmarks\plot-benchmark-results.py tmp\benchmark-results\<runId>
-python scripts\benchmarks\render-report-html.py     tmp\benchmark-results\<runId>
+```bash
+python3 scripts/benchmarks/plot-benchmark-results.py tmp/benchmark-results/<runId>
+python3 scripts/benchmarks/render-report-html.py     tmp/benchmark-results/<runId>
 ```
 
 The HTML (`thesis-report.html`) inlines every SVG, so it needs nothing else to
@@ -184,10 +194,10 @@ When modifying benchmark code:
    `src/test/kotlin/com/processm/processminterpreter/benchmark`.
 5. Run:
 
-```powershell
-.\gradlew.bat compileKotlin compileTestKotlin compileBenchmarkKotlin
-.\gradlew.bat test --tests com.processm.processminterpreter.benchmark.*
-.\gradlew.bat runBenchmarkSmoke
+```bash
+./gradlew compileKotlin compileTestKotlin compileBenchmarkKotlin
+./gradlew test --tests 'com.processm.processminterpreter.benchmark.*'
+./gradlew runBenchmarkSmoke
 ```
 
 6. Inspect generated CSV rows for errors, missing samples, implausible zeroes,

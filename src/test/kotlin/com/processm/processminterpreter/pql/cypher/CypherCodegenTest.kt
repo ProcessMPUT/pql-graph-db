@@ -26,6 +26,7 @@ import com.processm.processminterpreter.pql.plan.Projection
 import com.processm.processminterpreter.pql.ast.PqlExpression
 import com.processm.processminterpreter.pql.parser.AntlrPqlParser
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.time.LocalDateTime
@@ -398,6 +399,50 @@ class CypherCodegenTest {
         assertTrue(c.contains("log.name AS log_name"), c)
     }
 
+    /**
+     * `select count(t:name)` counts traces; an empty trace is still a trace, and
+     * ProcessM counts it. Expanding events with a mandatory MATCH used to drop such
+     * traces (wrong result) and made every trace-level aggregate walk the whole event
+     * set of the log (slow). Events are still expanded — the output hierarchy needs
+     * them — but optionally.
+     */
+    @Test
+    fun `trace-scope aggregation expands events optionally so empty traces survive`() {
+        val traceName = stdAttr(Scope.TRACE, "concept:name")
+        val q = codegen.generate(
+            selectPlan(
+                listOf(
+                    ProjectedColumn(
+                        PqlExpression.Aggregation("count", traceName, type = Type.NUMBER, location = loc),
+                        alias = "cnt",
+                        scope = Scope.TRACE,
+                    ),
+                ),
+                from = Scope.LOG,
+                used = setOf(Scope.LOG, Scope.TRACE),
+            ).copy(materializedScopes = setOf(Scope.LOG, Scope.TRACE, Scope.EVENT)),
+        )
+
+        assertTrue(q.cypher.contains("OPTIONAL MATCH (trace)-[:HAS_EVENT]->(event:Event)"), q.cypher)
+        assertFalse(q.cypher.contains("(trace:Trace)-[:HAS_EVENT]->"), q.cypher)
+    }
+
+    /** When a clause really uses the event scope, the expansion must stay mandatory. */
+    @Test
+    fun `event-scope query keeps the mandatory event expansion`() {
+        val eventName = stdAttr(Scope.EVENT, "concept:name")
+        val q = codegen.generate(
+            selectPlan(
+                listOf(ProjectedColumn(eventName, alias = "e_name", scope = Scope.EVENT)),
+                from = Scope.LOG,
+                used = setOf(Scope.LOG, Scope.TRACE, Scope.EVENT),
+            ).copy(materializedScopes = setOf(Scope.LOG, Scope.TRACE, Scope.EVENT)),
+        )
+
+        assertTrue(q.cypher.contains("-[:HAS_EVENT]->(event:Event)"), q.cypher)
+        assertFalse(q.cypher.contains("OPTIONAL MATCH (trace)-[:HAS_EVENT]->"), q.cypher)
+    }
+
     @Test
     fun `log-only projection can materialize descendant placeholders`() {
         val a = stdAttr(Scope.LOG, "concept:name")
@@ -410,7 +455,12 @@ class CypherCodegenTest {
         )
         val c = q.cypher
 
-        assertTrue(c.contains("MATCH (log:Log)-[:CONTAINS]->(trace:Trace)-[:HAS_EVENT]->(event:Event)"), c)
+        // Events are materialized for output only — no clause references the event
+        // scope — so the expansion must be OPTIONAL. A mandatory `-[:HAS_EVENT]->`
+        // silently drops traces that have no events, which ProcessM does return.
+        assertTrue(c.contains("MATCH (log:Log)-[:CONTAINS]->(trace:Trace)"), c)
+        assertTrue(c.contains("OPTIONAL MATCH (trace)-[:HAS_EVENT]->(event:Event)"), c)
+        assertFalse(c.contains("(trace:Trace)-[:HAS_EVENT]->"), c)
         assertTrue(c.contains("log.logId AS _log_id_"), c)
         assertTrue(c.contains("trace.traceId AS _trace_id_"), c)
         assertTrue(c.contains("{} AS event"), c)

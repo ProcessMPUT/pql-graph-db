@@ -120,6 +120,7 @@ internal class CypherBuildState(val plan: LogicalPlan.Select) {
     private var nextCaggId: Int = 0
     private var queryNowParamName: String? = null
     private var hydrateLogProperties: Boolean = false
+    private var pendingOptionalEventMatch: Boolean = false
 
     /**
      * Marks the query as returning `log.logId AS _logKey` instead of the log node,
@@ -127,6 +128,18 @@ internal class CypherBuildState(val plan: LogicalPlan.Select) {
      */
     fun deferLogProperties() {
         hydrateLogProperties = true
+    }
+
+    /** See [CypherMatchEmitter.emit] — the event expansion must wait for the WHERE clause. */
+    fun markPendingOptionalEventMatch() {
+        pendingOptionalEventMatch = true
+    }
+
+    /** Returns whether an optional event match is pending, clearing the flag. */
+    fun consumePendingOptionalEventMatch(): Boolean {
+        val pending = pendingOptionalEventMatch
+        pendingOptionalEventMatch = false
+        return pending
     }
 
     /** Bind a value to a fresh `$paramN` placeholder; returns the placeholder name (e.g. `param0`). */

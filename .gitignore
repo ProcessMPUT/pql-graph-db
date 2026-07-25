@@ -61,10 +61,15 @@ src/main/resources/logs/*.xes
 tmp/
 *.txt
 *.log
+# Stray ad-hoc Python written during a session is temporary output, but
+# everything under scripts/ is the project's operational tooling and must be
+# version controlled. Whitelist the whole directory rather than file by file:
+# the previous per-file list silently dropped every newly added script.
 *.py
 __pycache__/
 *.pyc
-!scripts/init-processm-datastores.py
+!scripts/
+!scripts/*.py
 !scripts/benchmarks/
 !scripts/benchmarks/*.py
 scripts/verify-compatibility.cases.local.json
