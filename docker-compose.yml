@@ -69,6 +69,38 @@ services:
     entrypoint: ["python3", "/scripts/init-processm-datastores.py"]
     restart: "no"
 
+  # The interpreter under test. Containerised so the benchmark reaches both
+  # systems over the same path (see Dockerfile); build the jar with
+  # `./gradlew bootJar` before `docker compose up -d --build app`.
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: processm-interpreter:local
+    container_name: processm-interpreter
+    depends_on:
+      neo4j:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    networks:
+      - processm-network
+    environment:
+      # Inside the network Neo4j is reachable by service name, so the driver no
+      # longer crosses the host boundary on every Cypher round trip.
+      - SPRING_NEO4J_URI=bolt://neo4j:7687
+      - PROCESSM_API_URL=http://processm:2080/api
+      # JVM_HEAP_OPTS intentionally unset: the entrypoint then sizes the heap by the
+      # same rule the reference implementation uses for itself (half the memory
+      # available to the container). Set it only to override for an experiment.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/api/query/features >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    restart: unless-stopped
+
 
 volumes:
   neo4j_data:

@@ -67,6 +67,14 @@ Before collecting thesis results:
 - repeat the full experiment more than once and retain every run directory;
 - do not edit or regenerate CSV files manually after a run.
 
+METODOLOGIA §5.6 requires **at least three** valid runs on one code version. A
+run is valid only if `memory-results.csv` carries all three components
+(`processm-neo4j`, `local-jvm`, `processm-server`) — a missing `local-jvm`
+series means the LOCAL side was measured without the application process.
+Pick the representative run and report the run-to-run spread with
+`scripts/benchmarks/compare-runs.py <runA> <runB> <runC>`; it enforces the
+validity check and the selection rule, so neither is done by hand.
+
 Storage measurements require particular care. Database allocation, checkpoints,
 WAL/transaction logs, page cache, and filesystem allocation granularity can
 distort small deltas. Use a fresh stack for final storage runs and describe the

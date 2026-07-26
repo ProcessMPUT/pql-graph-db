@@ -46,7 +46,10 @@ class CypherCodegen(propertyMapper: PhysicalAttributeMapper) {
         val state = CypherBuildState(shadow)
         CypherMatchEmitter.emit(state)
         filterRenderer.emitWhereClause(state)
-        CypherMatchEmitter.emitPendingOptionalEventMatch(state)
+        // The probe returns nothing but log ids, so a pending optional event
+        // expansion is deliberately dropped rather than emitted: it cannot affect
+        // the result and would only multiply rows ahead of the DISTINCT.
+        state.discardPendingOptionalEventMatch()
         state.cypher.append(" RETURN DISTINCT log.logId AS logId")
         emitLogOrder(state)
         return state.finish()

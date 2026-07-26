@@ -51,6 +51,13 @@ data class BenchmarkSettings(
     val datasetFilter: Set<String>,
     val systemFilter: Set<String>,
     val keepBenchmarkDataStores: Boolean,
+    /**
+     * Container running the LOCAL interpreter. When it exists, its memory is read
+     * with `docker stats` — the same probe used for REFERENCE — so both systems are
+     * measured identically. Empty (or a missing container) falls back to sampling
+     * the application JVM's RSS on the host, which is the development setup.
+     */
+    val localAppContainer: String,
 ) {
     companion object {
         fun fromEnvironment(profile: BenchmarkProfile): BenchmarkSettings =
@@ -64,6 +71,7 @@ data class BenchmarkSettings(
                 datasetFilter = csvEnv("BENCHMARK_DATASET_FILTER"),
                 systemFilter = csvEnv("BENCHMARK_SYSTEM_FILTER"),
                 keepBenchmarkDataStores = booleanEnv("BENCHMARK_KEEP_DATASTORES", default = false),
+                localAppContainer = env("LOCAL_APP_CONTAINER", "processm-interpreter"),
             )
 
         private fun env(name: String, default: String): String =

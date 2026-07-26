@@ -203,12 +203,13 @@ class CypherCodegenTest {
         )
 
         assertTrue(
-            q.cypher.contains("MATCH (:DataStore {dataStoreId: \$dataStoreId})-[:CONTAINS_LOG]->(log:Log)-[:HAS_EVENT]->(event:Event)") ||
-                q.cypher.contains(
-                    "MATCH (:DataStore {dataStoreId: \$dataStoreId})-[:CONTAINS_LOG]->(log:Log)-[:CONTAINS]->(trace:Trace)-[:HAS_EVENT]->(event:Event)",
-                ),
+            q.cypher.startsWith("MATCH (:DataStore {dataStoreId: \$dataStoreId})-[:CONTAINS_LOG]->(log:Log)"),
             q.cypher,
         )
+        // The probe yields log ids only, so events must not be expanded at all —
+        // mandatorily it would drop logs whose traces have no events, optionally it
+        // would just multiply rows ahead of the DISTINCT.
+        assertFalse(q.cypher.contains("HAS_EVENT"), q.cypher)
         assertTrue(q.cypher.contains("WHERE log.name = \$param0"), q.cypher)
         assertTrue(q.cypher.endsWith("RETURN DISTINCT log.logId AS logId ORDER BY log.logId"), q.cypher)
         assertEquals("store-42", q.parameters["dataStoreId"])

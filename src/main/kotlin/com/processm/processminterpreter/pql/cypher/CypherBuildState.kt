@@ -142,6 +142,11 @@ internal class CypherBuildState(val plan: LogicalPlan.Select) {
         return pending
     }
 
+    /** Drops a pending optional event match for queries that cannot observe events. */
+    fun discardPendingOptionalEventMatch() {
+        pendingOptionalEventMatch = false
+    }
+
     /** Bind a value to a fresh `$paramN` placeholder; returns the placeholder name (e.g. `param0`). */
     fun bindParam(value: Any?): String {
         val name = "param${nextParamId++}"

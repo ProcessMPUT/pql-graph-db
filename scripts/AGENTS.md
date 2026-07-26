@@ -40,6 +40,10 @@ consistent with each other. Use it rather than re-deriving:
   artifacts and embed them into the run's `thesis-report.md` and `.tex`.
 - `benchmarks/render-report-html.py`: fold `thesis-report.md` and its charts
   into one self-contained HTML file (browser-viewable, print-to-PDF).
+- `benchmarks/compare-runs.py`: cross-run repeatability (METODOLOGIA §5 pkt 6) —
+  rejects runs whose memory series is incomplete, picks the representative run
+  by the fixed rule, and writes `repeatability.csv` / `repeatability.md`. A
+  single run cannot show reproducibility, so thesis numbers come from here.
 - `benchmarks/measure-storage-scaling.py`: sequential no-cleanup storage
   probe answering the disk-scaling question (writes `storage-scaling.csv`).
 

@@ -44,10 +44,20 @@ dyskwalifikuje przebieg:
 3. **Identyczna polityka rozgrzewki.** Każde zapytanie poprzedzone jest tą samą
    liczbą nierejestrowanych wykonań w obu systemach; wewnętrzne cache silników
    baz (page cache PostgreSQL/Neo4j) traktujemy jako integralną część systemu.
-4. **Parytet środowiska.** Oba systemy działają na tej samej maszynie, z
-   jawnie zadeklarowanymi limitami zasobów kontenerów; przebiegi obu systemów
+4. **Parytet środowiska.** Oba systemy działają na tej samej maszynie i **oba
+   w kontenerach**, więc droga żądania jest po obu stronach identyczna: klient
+   (host) → aplikacja (kontener, jedno przekroczenie granicy Dockera) → baza
+   (wewnątrz sieci kontenerów, bez przekroczenia hosta). Przebiegi obu systemów
    nie nakładają się w czasie (pomiar naprzemienny, sekcja 5). Konfiguracja
-   pamięci obu baz jest udokumentowana w `environment.json` każdego przebiegu.
+   pamięci obu baz oraz sterty interpretera jest udokumentowana
+   w `environment.json` każdego przebiegu.
+
+   **Limity zasobów nie są narzucane** — kontenery współdzielą zasoby hosta,
+   co `environment.json` odnotowuje jako `unlimited` dla każdego z nich.
+   Parytet zapewnia symetryczna topologia i pomiar naprzemienny, a nie sztywne
+   limity; narzucenie ich wymagałoby podziału budżetu między dwa kontenery
+   LOCAL i jeden REFERENCE, co samo w sobie mogłoby zniekształcić wynik
+   (np. zbyt mały page cache jednej z baz).
 5. **Świeży stan dla pomiarów storage.** Finalne pomiary rozmiaru bazy
    wykonywane są na stacku postawionym od zera (`docker compose down -v`),
    żeby uniknąć fragmentacji i pozostałości po wcześniejszych eksperymentach.
@@ -128,8 +138,13 @@ Rejestrowane: czas ściany każdej próbki, rozmiar odpowiedzi (bajty), licznoś
 > indeksów po atrybutach nie jest zaniedbaniem, lecz decyzją popartą pomiarem.
 
 ### Q3 — zasobożerność
-- **Dysk:** rozmiar katalogu danych bazy (`du` wewnątrz kontenera, po flushu
-  i ustabilizowaniu odczytu) — przed importem i po imporcie każdego datasetu.
+- **Dysk:** rozmiar danych trwałych bazy odczytywany wewnątrz kontenera —
+  przed importem i po imporcie każdego datasetu. Pomiar **nie obejmuje logów
+  transakcyjnych (WAL)** po żadnej ze stron: po stronie Neo4j sumowane są pliki
+  store'u w `/data/databases` (bez `/data/transactions`), po stronie PostgreSQL
+  używane jest `pg_database_size` (relacje, bez `pg_wal`). Dzięki temu
+  porównywany jest trwały rozmiar danych, a nie chwilowy stan dzienników,
+  którego rozmiar zależy od cyklu recyklingu segmentów.
   Przed każdym pomiarem REFERENCE jest checkpointowany (`CHECKPOINT;` przez
   psql), żeby nie raportować rozmiaru z nieutrwalonym stanem stron w pamięci.
   Neo4j w wersji community **nie udostępnia ręcznego checkpointu** (procedura
@@ -164,11 +179,17 @@ Rejestrowane: czas ściany każdej próbki, rozmiar odpowiedzi (bajty), licznoś
   sam format liczb. Zmienił się wyłącznie interpreter uruchamiający te
   polecenia, więc wyniki zebrane obiema wersjami są porównywalne; przy
   raportowaniu w pracy wystarczy odnotować, którą wersją zebrano dany przebieg.
-- **Pamięć operacyjna:** próbkowanie co 1 s w trakcie fazy zapytań:
-  - REFERENCE: `docker stats` kontenera `processm-server` (obejmuje aplikację
-    i PostgreSQL — jeden kontener),
-  - LOCAL: suma `docker stats` kontenera `processm-neo4j` + RSS procesu JVM
-    aplikacji na hoście.
+- **Pamięć operacyjna:** próbkowanie co 1 s w trakcie fazy zapytań, **tą samą
+  sondą (`docker stats`) po obu stronach**, więc wartości są porównywalne wprost:
+  - REFERENCE: kontener `processm-server` (aplikacja i PostgreSQL razem),
+  - LOCAL: suma kontenerów `processm-interpreter` (interpreter) i
+    `processm-neo4j` (baza).
+
+  Wcześniejsza wersja protokołu uruchamiała interpreter na hoście i mierzyła go
+  jako RSS procesu (składnik `local-jvm`), czyli inną metryką niż REFERENCE.
+  Przebiegów zebranych w tamtej konfiguracji nie należy używać do porównania Q3;
+  rozpoznaje je obecność składnika `local-jvm` w `memory-results.csv`
+  (`scripts/benchmarks/compare-runs.py` sygnalizuje to automatycznie).
   Raportowane: mediana i szczyt (peak) w fazie zapytań oraz w spoczynku
   (baseline po starcie, przed importem). Zestawienie sum składników obu
   systemów jest jawnie opisane w raporcie (różna architektura procesów).
@@ -227,15 +248,50 @@ specyfikacją PQL”.
    Pierwsza próbka po imporcie raportowana osobno jako `cold`.
 5. Sprzątanie datastore'ów `bench-*`.
 6. **Cały eksperyment powtarzany ≥3 razy** (osobne uruchomienia w różnym
-   czasie); do pracy trafia przebieg środkowy względem mediany całkowitej,
-   a rozrzut między przebiegami raportowany jest jako miara powtarzalności.
+   czasie), wszystkie na tej samej wersji kodu — zmiana kodu mierzonego
+   systemu rozpoczyna nową serię i wcześniejszych przebiegów nie łączy się
+   z nowymi.
+
+   **Reguła wyboru przebiegu reprezentatywnego** (aby wybór nie był uznaniowy):
+   dla każdego przebiegu liczona jest jedna liczba — mediana ze wszystkich
+   median LOCAL par (dataset, zapytanie) z próbek warm; do pracy trafia
+   przebieg, którego liczba jest medianą tych wartości między przebiegami
+   (przy parzystej liczbie przebiegów — starszy z dwóch środkowych).
+   Reguła jest ustalona z góry i nie zależy od tego, który przebieg wypada
+   korzystniej dla LOCAL.
+
+   **Raportowana powtarzalność:** dla każdej pary (dataset, zapytanie, system)
+   podaje się rozrzut median między przebiegami (min–max oraz iloraz
+   max/min); pary, dla których rozrzut przekracza deklarowaną istotność
+   (sekcja *Statystyka*), nie mogą być podstawą wniosku o przewadze żadnego
+   z systemów. Zarówno wybór przebiegu, jak i tabelę rozrzutu wylicza
+   `scripts/benchmarks/compare-runs.py` (zapisuje `repeatability.csv`
+   i `repeatability.md` w katalogu przebiegu reprezentatywnego), więc liczby
+   podawane w pracy są odtwarzalne z artefaktów, a nie liczone ręcznie:
+
+   ```bash
+   python3 scripts/benchmarks/compare-runs.py tmp/benchmark-results/<runA> <runB> <runC>
+   ```
+
+   **Warunek ważności przebiegu:** przebieg wolno wykorzystać w pracy tylko,
+   gdy `memory-results.csv` zawiera wszystkie trzy składniki
+   (`processm-neo4j`, `local-jvm`, `processm-server`). Brak serii `local-jvm`
+   oznacza, że strona LOCAL została policzona bez procesu aplikacji, a więc
+   zaniżona — taki przebieg jest nieważny dla Q3.
 
 ### Statystyka
 Dla każdej pary (dataset, zapytanie, system): **mediana**, **IQR**, **p95**,
 min/max z 30 repetycji. Deklarowana różnica między systemami uznawana jest za
 istotną tylko, gdy przedziały IQR obu systemów są rozłączne — inaczej wynik
-opisywany jest jako porównywalny. Uzasadnienie rygoru: zmierzony jitter
-median run-to-run na tej samej wersji kodu sięga 2× przy zapytaniach ~10 ms.
+opisywany jest jako porównywalny.
+
+Uzasadnienie rygoru: mediana tej samej pary (dataset, zapytanie, system)
+potrafi różnić się między przebiegami **na tej samej wersji kodu**, zwłaszcza
+przy zapytaniach rzędu pojedynczych milisekund, gdzie stały narzut HTTP i
+zmienny stan cache'y dominują nad kosztem samego zapytania. Skalę tego rozrzutu
+raportuje się z danych powtarzalności (§5 pkt 6) i **nie podaje się jej jako
+stałej z góry** — różnica median mniejsza niż zmierzony rozrzut run-to-run nie
+jest odróżnialna od szumu i nie może być podstawą wniosku o przewadze systemu.
 
 Wszystkie kwantyle (mediana, Q1/Q3, p95) we wszystkich artefaktach —
 `query-summary.csv`, tabelach `thesis-report.md`/`thesis-tables.tex`
@@ -259,12 +315,79 @@ Wykresy generuje `scripts/benchmarks/plot-benchmark-results.py` z surowych CSV.
 
 ## 7. Zagrożenia trafności (threats to validity) — do rozdziału pracy
 
-- oba systemy na jednej maszynie z systemem gospodarza (Windows + Docker
-  Desktop/WSL2) — narzut wirtualizacji dotyka obu, ale niesymetrycznie
-  (LOCAL: JVM na hoście, baza w kontenerze; REFERENCE: całość w kontenerze);
-  łagodzone limitami zasobów i pomiarem naprzemiennym,
+- oba systemy na jednej maszynie z systemem gospodarza i Dockerem — narzut
+  konteneryzacji dotyka obu **symetrycznie** (sekcja 2 pkt 4). Konkretny system
+  gospodarza i wersje zapisuje `environment.json` każdego przebiegu — przy
+  raportowaniu w pracy należy podać je za tym plikiem, a nie za niniejszym
+  dokumentem,
+
+- **zmiana protokołu: interpreter przeniesiony na kontener (nowa wersja
+  eksperymentu).** We wcześniejszej konfiguracji interpreter działał na hoście,
+  a baza w kontenerze, co dawało asymetrię o nieustalonym kierunku: żądania
+  klienta do REFERENCE przekraczały granicę Dockera, a do LOCAL nie — za to
+  LOCAL przekraczał ją przy **każdej** rundzie zapytania do Neo4j. Koszt
+  jednego przekroczenia zmierzono osobnym testem (identyczny trywialny serwer
+  HTTP na hoście i w kontenerze): **+1,08 ms na żądanie** (0,29 ms → 1,37 ms),
+  co przy zapytaniach rzędu pojedynczych milisekund jest wielkością istotną.
+  Po przeniesieniu interpretera do kontenera obie strony mają tę samą
+  topologię. Skutek pomiarowy jest znaczący: mediana czasów LOCAL spadła o ok.
+  31%, bo rundy zapytań do bazy nie przekraczają już granicy hosta. Przebiegi
+  sprzed i po tej zmianie **nie są porównywalne** i nie wolno ich łączyć
+  w jednej serii,
+
+- **rozmiar sterty JVM wyrównany z regułą referencji.** Interpreter dobiera
+  `-Xmx` tym samym algorytmem, którego referencja używa dla siebie (połowa
+  pamięci dostępnej kontenerowi — `processm.launcher/src/main/docker/`
+  `docker-start-processm.sh`), co przy obecnej konfiguracji daje po obu
+  stronach identyczne `-Xmx4063240k`; wartość faktycznie użytą przez każdy
+  kontener zapisuje `environment.json` (`effectiveJvmHeap`), bo oba systemy
+  wyliczają ją dopiero przy starcie. Wcześniejsza, arbitralna konfiguracja
+  (`-Xms512m -Xmx2g`) była pod dwoma względami gorsza: dawała referencji
+  dwukrotnie wyższy sufit, a wymuszone `-Xms` zawyżało pomiar pamięci
+  interpretera o ok. 200 MiB **bez wpływu na przepustowość** (zmierzone
+  w spoczynku: 589 MiB z `-Xms512m` wobec 389 MiB bez niego; sam sufit jest
+  bez znaczenia — 389 MiB przy `-Xmx2g` wobec 393 MiB przy `-Xmx3968m`).
+  Uwaga interpretacyjna: `docker stats` i RSS procesu mierzą tu praktycznie
+  to samo (zmierzone równocześnie: 1246 MiB wobec 1213 MiB, różnica 2,7%),
+  więc zmiany wyników pamięci między konfiguracjami **nie należy tłumaczyć
+  zmianą metryki**,
+
+- **residualna asymetria po stronie baz:** REFERENCE trzyma aplikację
+  i PostgreSQL w jednym kontenerze (komunikacja lokalna), podczas gdy LOCAL
+  łączy się z Neo4j przez sieć kontenerów. Pozostała różnica działa więc
+  na **niekorzyść** LOCAL, co jest bezpiecznym kierunkiem dla wniosków
+  o przewadze LOCAL, ale należy ją odnotować,
 - REFERENCE mierzony jako całość (aplikacja+PostgreSQL w jednym kontenerze) —
   brak możliwości rozdzielenia składników bez modyfikacji obrazu,
 - syntetyczne datasety mają jednostajne rozkłady — kompensowane serią `real`,
-- pomiar `du` obejmuje WAL/logi transakcyjne baz — stabilizowany flushem
-  i odczytem do ustalenia się wartości.
+- **koszt odczytu metadanych logu po stronie LOCAL rośnie z liczbą atrybutów
+  logu.** Log `Hospital_log` (3TU) przechowuje rozbudowane, zagnieżdżone
+  statystyki na poziomie logu, co po spłaszczeniu daje ok. 3,4 tys. właściwości
+  jednego węzła `Log`; Neo4j czyta je przez łańcuch właściwości węzła, podczas
+  gdy PostgreSQL czyta zbiór wierszy. Odpowiada to za istotną część różnicy Q2
+  na tym zbiorze i jest ograniczeniem modelu grafowego przy węzłach o tysiącach
+  właściwości, a nie właściwością samego zapytania — przy interpretacji wyników
+  Q2 dla logów bogatych w metadane należy to jawnie odnotować,
+- **sonda sekwencyjna storage może przypisać ostatniemu datasetowi serii
+  jednorazową prealokację pliku store.** Ponieważ sonda importuje kolejno bez
+  czyszczenia, silnik może w dowolnym kroku powiększyć plik z zapasem; przy
+  ostatnim zbiorze nie ma już kolejnych importów, które ten zapas
+  zagospodarują, więc jego delta bywa zawyżona.
+
+  **Przypadek potwierdzony pomiarem — `attr-20`.** W sekwencji sonda raportuje
+  dla LOCAL przyrost 34 021 376 B, czyli ekspansję **×30,01**, podczas gdy
+  pozostałe zbiory mieszczą się w przedziale ×1,2–1,9. Wartość jest w pełni
+  powtarzalna (identyczna co do bajta w dwóch niezależnych sesjach sondy), więc
+  nie jest szumem. Test kontrolny — import **wyłącznie** `attr-20` na świeżym
+  Neo4j — daje przyrost 933 888 B przy pliku XES 1 133 493 B, czyli ekspansję
+  **×0,82**. Różnica ×30,01 vs ×0,82 dowodzi, że w sekwencji do tego zbioru
+  doliczana jest prealokacja wygenerowana przez wcześniejsze importy, a nie
+  koszt jego własnych danych. Potwierdza to również arytmetyka: `attr-20` ma
+  czterokrotnie więcej wartości atrybutów niż `attr-5`, co przy ×30 dawałoby
+  ok. 1,7 KB na pojedynczą wartość.
+
+  **Wniosek dla pracy:** punktu `attr-20` z serii sekwencyjnej **nie należy
+  interpretować jako współczynnika ekspansji**; przy raportowaniu serii
+  atrybutowej trzeba albo podać wartość z testu izolowanego, albo wykluczyć
+  ostatni punkt serii i to odnotować. Surowego `storage-scaling.csv` nie
+  edytujemy (sekcja 6) — korekta należy do warstwy interpretacji.

@@ -648,11 +648,14 @@ class ThesisReportWriter(
             appendLine()
             appendMarkdownTable(model.memoryTable)
             appendLine(
-                "Ze względu na różną architekturę procesów wartości LOCAL są sumą składników " +
-                    "(kontener Neo4j `processm-neo4j` + RSS procesu JVM aplikacji na hoście, " +
-                    "składnik `local-jvm`), podczas gdy REFERENCE mierzony jest jako jeden kontener " +
-                    "`processm-server` obejmujący aplikację i PostgreSQL; porównując systemy, " +
-                    "należy sumować składniki LOCAL w obrębie tej samej fazy.",
+                "LOCAL składa się z dwóch kontenerów — interpretera (`processm-interpreter`) i bazy " +
+                    "(`processm-neo4j`) — podczas gdy REFERENCE to jeden kontener `processm-server` " +
+                    "obejmujący aplikację i PostgreSQL. Porównując systemy, należy zsumować składniki " +
+                    "LOCAL w obrębie tej samej fazy. Wszystkie składniki mierzone są tą samą sondą " +
+                    "(`docker stats`), więc wartości są porównywalne wprost. Jeżeli w tabeli występuje " +
+                    "składnik `local-jvm`, przebieg zebrano w konfiguracji deweloperskiej " +
+                    "(interpreter na hoście, mierzony RSS procesu) — takiego przebiegu nie należy " +
+                    "używać do porównania Q3, bo obie strony mierzono wtedy różnymi sondami.",
             )
             appendLine()
             appendLine("## Poprawność (Q4)")

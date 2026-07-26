@@ -200,7 +200,7 @@ fun main(args: Array<String>) {
         cleanup = cleanup,
         memorySamples = memorySampler.samples(),
         memorySummaries = memorySampler.summaries(),
-        environmentDetails = EnvironmentProbe.collect(systems.map { it.storage.container }),
+        environmentDetails = EnvironmentProbe.collect(memoryContainers(settings, systems)),
     )
     // Thesis artifacts (METODOLOGIA §6): generated at the end of every run from the
     // in-memory records, never by re-reading the CSVs written above.
@@ -270,33 +270,69 @@ private fun recordedQuerySample(
     )
 
 
+/**
+ * Containers whose memory is sampled with `docker stats`: the databases plus, when
+ * the LOCAL interpreter runs in a container, the interpreter itself. Measuring both
+ * applications through the same probe is what makes the Q3 comparison symmetric.
+ */
+internal fun memoryContainers(
+    settings: BenchmarkSettings,
+    systems: List<BenchmarkSystem>,
+): Set<String> =
+    systems.map { it.storage.container }.toSet() +
+        setOfNotNull(settings.localAppContainer.takeIf { it.isNotBlank() && dockerContainerExists(it) })
+
+private fun dockerContainerExists(name: String): Boolean =
+    runCatching {
+        val process = ProcessBuilder("docker", "inspect", name)
+            .redirectErrorStream(true)
+            .start()
+        process.inputStream.readAllBytes()
+        process.waitFor() == 0
+    }.getOrDefault(false)
+
 private fun memorySources(
     settings: BenchmarkSettings,
     systems: List<BenchmarkSystem>,
 ): List<MemorySampler.MemorySource> =
     buildList {
-        add(DockerStatsMemorySource(systems.map { it.storage.container }.toSet()))
-        if (systems.any { it.name == "local" }) {
-            val port = runCatching { java.net.URI(settings.localApi).port }.getOrNull().takeIf { it != null && it > 0 } ?: 8080
-            val pid = LocalAppPidResolver.resolve(port)
-            if (pid != null) {
-                val source = ProcessMemorySource("local-jvm", pid)
-                // Probe once up front: resolving a PID is not proof the RSS probe works
-                // (it used to be Windows-only and failed silently elsewhere), and a
-                // missing local-jvm series understates LOCAL memory in Q3.
-                if (source.sample().isEmpty()) {
-                    println(
-                        "WARNING: local JVM RSS probe returned nothing for PID $pid; " +
-                            "local-jvm memory will NOT be sampled and the Q3 memory comparison " +
-                            "would understate LOCAL — fix the probe before using this run as thesis data",
-                    )
-                } else {
-                    println("Sampling local JVM RSS for PID $pid (port $port)")
-                    add(source)
-                }
-            } else {
-                println("WARNING: could not resolve local application PID on port $port; local-jvm memory will not be sampled")
-            }
+        val containers = memoryContainers(settings, systems)
+        add(DockerStatsMemorySource(containers))
+
+        val appContainer = settings.localAppContainer
+        if (appContainer.isNotBlank() && appContainer in containers) {
+            println("Sampling LOCAL interpreter memory from container $appContainer (docker stats, as for REFERENCE)")
+            return@buildList
+        }
+        if (systems.none { it.name == "local" }) return@buildList
+
+        // Fallback: the interpreter runs on the host (development setup). Its memory
+        // then comes from a different probe than REFERENCE's, so the Q3 comparison is
+        // not measured like-for-like — see METODOLOGIA §7.
+        println(
+            "WARNING: container '$appContainer' not found; falling back to host RSS sampling of the " +
+                "LOCAL interpreter. REFERENCE is measured with docker stats, so the Q3 memory " +
+                "comparison will NOT be like-for-like — start the app with `docker compose up -d app` " +
+                "before collecting thesis data",
+        )
+        val port = runCatching { java.net.URI(settings.localApi).port }.getOrNull().takeIf { it != null && it > 0 } ?: 8080
+        val pid = LocalAppPidResolver.resolve(port)
+        if (pid == null) {
+            println("WARNING: could not resolve local application PID on port $port; local-jvm memory will not be sampled")
+            return@buildList
+        }
+        val source = ProcessMemorySource("local-jvm", pid)
+        // Resolving a PID is not proof the RSS probe works (it used to be Windows-only
+        // and failed silently elsewhere), and a missing series understates LOCAL in Q3.
+        if (source.sample().isEmpty()) {
+            println(
+                "WARNING: local JVM RSS probe returned nothing for PID $pid; " +
+                    "local-jvm memory will NOT be sampled and the Q3 memory comparison " +
+                    "would understate LOCAL — fix the probe before using this run as thesis data",
+            )
+        } else {
+            println("Sampling local JVM RSS for PID $pid (port $port)")
+            add(source)
         }
     }
 

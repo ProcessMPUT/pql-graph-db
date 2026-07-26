@@ -140,6 +140,7 @@ class ThesisReportWriterTest {
             datasetFilter = emptySet(),
             systemFilter = emptySet(),
             keepBenchmarkDataStores = false,
+            localAppContainer = "processm-interpreter",
         )
         val datasets = listOf(
             dataset("ds_alpha", tempDir),

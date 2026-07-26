@@ -22,6 +22,7 @@ class BenchmarkResultsWriterTest {
             datasetFilter = emptySet(),
             systemFilter = emptySet(),
             keepBenchmarkDataStores = false,
+            localAppContainer = "processm-interpreter",
         )
         val querySample = QueryBenchmarkResult(
             system = "local",

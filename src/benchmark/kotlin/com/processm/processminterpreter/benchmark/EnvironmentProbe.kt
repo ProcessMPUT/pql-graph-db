@@ -33,7 +33,36 @@ object EnvironmentProbe {
             ?: "unavailable"
 
     private fun containerInfo(name: String): Map<String, Any?> =
-        dockerInspect(name)?.let(::parseContainerInfo) ?: mapOf("status" to "unavailable")
+        dockerInspect(name)
+            ?.let(::parseContainerInfo)
+            ?.plus("effectiveJvmHeap" to (effectiveJvmHeap(name) ?: "unavailable"))
+            ?: mapOf("status" to "unavailable")
+
+    /**
+     * The heap the JVM actually runs with, read from the container's main process.
+     *
+     * Both systems size their heap at startup rather than declaring it statically —
+     * the reference computes it from the memory available to its container, and this
+     * interpreter follows the same rule — so the configured environment alone does not
+     * document what was measured. Best-effort: containers without a JVM report null.
+     */
+    private fun effectiveJvmHeap(name: String): String? =
+        runCatching {
+            // Scan every process, not just PID 1: the reference starts its JVM from a
+            // shell script, so there the heap flags live on a child process.
+            val process = ProcessBuilder(
+                "docker", "exec", name, "sh", "-c", PROC_CMDLINE_SCAN,
+            ).redirectErrorStream(true).start()
+            val output = process.inputStream.readAllBytes().toString(Charsets.UTF_8)
+            if (process.waitFor() != 0) return@runCatching null
+            HEAP_FLAG.findAll(output)
+                .map { it.value }
+                .distinct()
+                .sorted()
+                .toList()
+                .takeIf { it.isNotEmpty() }
+                ?.joinToString(" ")
+        }.getOrNull()
 
     /** Parses one `docker inspect <name>` JSON document (visible for tests). */
     fun parseContainerInfo(inspectJson: String): Map<String, Any?> {
@@ -81,6 +110,12 @@ object EnvironmentProbe {
             if (process.waitFor() == 0) output else null
         }.getOrNull()
 
+    /** Prints every process command line inside a container, NUL-separated args joined. */
+    private val PROC_CMDLINE_SCAN =
+        "for f in /proc/[0-9]*/cmdline; do tr '\\0' ' ' < \"${'$'}f\" 2>/dev/null; echo; done"
+
+    /** `-Xmx`/`-Xms` as written on the command line, e.g. `-Xmx4063240k`. */
+    private val HEAP_FLAG = Regex("-X(?:mx|ms)[0-9]+[kKmMgG]?")
     private val MEMORY_ENV_KEY = Regex("(?i)(memory|heap|pagecache|cache|buffers|work_mem|shared)")
     private val SECRET_ENV_KEY = Regex("(?i)(auth|password|secret|token|credential)")
 }
