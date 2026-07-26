@@ -196,6 +196,21 @@ class Renderer:
 
 def build(run_dir: Path, out_path: Path) -> None:
     md_text = (run_dir / "thesis-report.md").read_text(encoding="utf-8")
+
+    # A single run cannot show that the numbers reproduce, and METODOLOGIA §5.6
+    # requires the run-to-run spread to be reported. Fold it in when
+    # compare-runs.py has produced it, so the shared HTML is self-contained
+    # evidence rather than one run in isolation.
+    repeatability = run_dir / "repeatability.md"
+    if repeatability.is_file():
+        md_text += "\n\n" + repeatability.read_text(encoding="utf-8")
+    else:
+        md_text += (
+            "\n\n## Powtarzalność pomiarów\n\n"
+            "*Brak danych powtarzalności — uruchom `scripts/benchmarks/compare-runs.py`"
+            " na co najmniej trzech przebiegach (METODOLOGIA §5 pkt 6).*\n"
+        )
+
     body = Renderer(run_dir).render(md_text)
     out_path.write_text(
         "<!DOCTYPE html>\n<html lang=\"pl\">\n<head>\n"

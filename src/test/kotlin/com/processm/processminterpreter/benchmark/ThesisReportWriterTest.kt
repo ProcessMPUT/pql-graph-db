@@ -85,6 +85,15 @@ class ThesisReportWriterTest {
             "Q4 parity summary must count 3 OK pairs and 2 MISMATCH pairs",
         )
 
+        // METODOLOGIA §Q3 reports per-dataset benchmark storage for REFERENCE only.
+        // ds_alpha has a positive LOCAL delta (10 MiB, ratio 10.0); rendering it would
+        // present an allocation jump as an expansion factor contradicting the probe.
+        assertTrue(md.contains("nie raportowane (§Q3)"), "LOCAL storage cells must carry the marker")
+        assertFalse(
+            Regex("""\| ds_alpha \| 10\.00 \| 10\.00 \|""").containsMatchIn(md),
+            "a positive LOCAL delta must not be rendered as a number",
+        )
+
         // IQR-overlap pair (ds-beta x hierarchyWindow) is marked comparable and listed as a caveat.
         assertTrue(md.contains("porównywalne (IQR nachodzą)"), "md must mark the IQR-overlap pair as comparable")
         assertTrue(md.contains("ds-beta / hierarchyWindow"), "IQR-overlap caveat must name the pair")

@@ -54,6 +54,19 @@ def memory_components(run: Path) -> set[str]:
     return {row["component"] for row in read_csv(run / "memory-results.csv") if row.get("component")}
 
 
+def memory_medians(run: Path) -> dict[str, float]:
+    """component -> median MiB during the query phase."""
+    out: dict[str, float] = {}
+    for row in read_csv(run / "memory-summary.csv"):
+        if row.get("phase") != "queries":
+            continue
+        try:
+            out[row["component"]] = float(row["medianBytes"]) / (1024 * 1024)
+        except (KeyError, TypeError, ValueError):
+            continue
+    return out
+
+
 def selection_metric(medians: dict[tuple[str, str, str], float]) -> float | None:
     """One number per run: the median of every LOCAL per-pair median."""
     local = [v for (_, _, system), v in medians.items() if system == "local"]
@@ -204,6 +217,26 @@ def main() -> int:
             "jest mniejszy niż różnice uznawane za istotne.",
         )
     md.append("")
+
+    # Memory (Q3) needs the same treatment as latency: a single run cannot show
+    # whether a difference between the systems is real. The application component in
+    # particular depends on where GC cycles fall during the query phase, so a ranking
+    # read off one run can invert between runs.
+    mem_runs = [(name, memory_medians(path)) for name, path, _, _ in valid]
+    components = sorted(set().union(*(set(m) for _, m in mem_runs))) if mem_runs else []
+    if components:
+        md += ["", "## Pamięć (Q3): rozrzut między przebiegami", "",
+               "| Składnik | " + " | ".join(name for name, _ in mem_runs) + " | Rozrzut |",
+               "| :--- | " + " | ".join("---:" for _ in mem_runs) + " | ---: |"]
+        for comp in components:
+            values = [m.get(comp) for _, m in mem_runs]
+            cells = " | ".join(f"{v:.0f}" if v is not None else "—" for v in values)
+            present = [v for v in values if v]
+            spread = f"×{max(present) / min(present):.2f}" if len(present) > 1 and min(present) > 0 else "—"
+            md.append(f"| {comp} | {cells} | {spread} |")
+        md += ["", "Wartości to mediany [MiB] z fazy zapytań. Jeżeli rozrzut składnika między",
+               "przebiegami jest porównywalny z różnicą między systemami, pomiar nie",
+               "uprawnia do wniosku o przewadze żadnego z nich.", ""]
 
     md_path = out_dir / "repeatability.md"
     md_path.write_text("\n".join(md), encoding="utf-8")

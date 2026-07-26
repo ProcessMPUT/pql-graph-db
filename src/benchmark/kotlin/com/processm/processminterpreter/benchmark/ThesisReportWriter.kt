@@ -97,6 +97,7 @@ private const val SYSTEM_LOCAL = "local"
 private const val SYSTEM_REFERENCE = "reference"
 private const val MISSING = "—"
 private const val BELOW_GRANULARITY = "poniżej granulacji"
+private const val LOCAL_NOT_REPORTED = "nie raportowane (§Q3)"
 private const val SOURCE_ORDER_FINDING_HEADING =
     "Kolejność zdarzeń w wariantach śladu — zgodność ze specyfikacją PQL"
 private const val SOURCE_ORDER_MARK = "kolejność źródłowa (zob. sekcję o zgodności ze specyfikacją)"
@@ -452,21 +453,27 @@ data class ThesisReportModel(
                 if (measured(result)) fmt2(result!!.deltaBytes!!.toDouble() / MIB) else BELOW_GRANULARITY
             fun expansionCell(result: StorageBenchmarkResult?): String =
                 if (measured(result)) result!!.deltaToXesRatio?.let(::fmt2) ?: MISSING else BELOW_GRANULARITY
+
+            // METODOLOGIA §Q3 states plainly that per-dataset disk figures from the
+            // import-measure-cleanup protocol are reported for REFERENCE only: Neo4j
+            // reuses freed pages, so a LOCAL delta is either below the allocation
+            // granularity or an allocation jump inherited from earlier imports. Left
+            // as a number, such a jump reads as a 59x expansion factor and flatly
+            // contradicts the probe. Show the marker for LOCAL in every row instead.
+            fun localCell(result: StorageBenchmarkResult?): String =
+                if (measured(result)) LOCAL_NOT_REPORTED else BELOW_GRANULARITY
+
             val rows = datasetOrder.mapNotNull { dataset ->
                 val local = probe(dataset, SYSTEM_LOCAL)
                 val reference = probe(dataset, SYSTEM_REFERENCE)
                 if (local == null && reference == null) return@mapNotNull null
                 listOf(
                     dataset,
-                    deltaCell(local),
-                    expansionCell(local),
+                    localCell(local),
+                    localCell(local),
                     deltaCell(reference),
                     expansionCell(reference),
-                    if (measured(local) && measured(reference)) {
-                        ratio(local!!.deltaBytes!!.toDouble(), reference!!.deltaBytes!!.toDouble())
-                    } else {
-                        MISSING
-                    },
+                    MISSING,
                 )
             }
             return ThesisTable(
@@ -634,14 +641,29 @@ class ThesisReportWriter(
             appendLine()
             appendMarkdownTable(model.storageTable)
             appendLine(
-                "Powyższa tabela pochodzi z protokołu benchmarku (import → pomiar → " +
-                    "czyszczenie). Zgodnie z METODOLOGIA §Q3 per-dataset przyrost dysku z tego " +
-                    "protokołu jest miarodajny wyłącznie dla REFERENCE; przyrosty LOCAL padają " +
-                    "poniżej granulacji alokacji systemu plików (Neo4j reużywa zwolnione strony), " +
-                    "a bardzo małe datasety mogą po stronie REFERENCE nawet nie urosnąć mierzalnie. " +
-                    "Miarodajne, przypisywalne per-dataset przyrosty i współczynniki ekspansji dla " +
-                    "OBU systemów daje dedykowana sonda sekwencyjna " +
-                    "(`scripts/benchmarks/measure-storage-scaling.py`, wykresy Q3a–Q3f powyżej).",
+                "Powyższa tabela pochodzi z protokołu benchmarku, w którym kolejne datasety " +
+                    "importowane są narastająco (czyszczenie następuje dopiero po całym przebiegu). " +
+                    "Zgodnie z METODOLOGIA §Q3 per-dataset przyrost dysku z tego protokołu jest " +
+                    "miarodajny **wyłącznie dla REFERENCE**, dlatego kolumny LOCAL nie zawierają " +
+                    "wartości liczbowych. Powodem jest brak wymuszonego checkpointu po stronie " +
+                    "LOCAL: REFERENCE jest checkpointowany przed każdym pomiarem (`CHECKPOINT;`), " +
+                    "natomiast Neo4j w wersji community nie udostępnia takiej procedury, więc " +
+                    "świeżo zaimportowane dane pozostają w pamięci i logach transakcji, a pliki " +
+                    "store'u rosną skokowo dopiero przy naturalnym checkpoincie silnika — " +
+                    "w losowym momencie serii. Podany jako liczba, taki skok czytałby się jak " +
+                    "kilkudziesięciokrotna ekspansja i przeczyłby pomiarowi sondy. Po stronie " +
+                    "REFERENCE bardzo małe zbiory również mogą nie urosnąć mierzalnie.",
+            )
+            appendLine()
+            appendLine(
+                "Miarodajne, przypisywalne per-dataset przyrosty i współczynniki ekspansji dla " +
+                    "**obu** systemów daje dedykowana sonda sekwencyjna " +
+                    "(`scripts/benchmarks/measure-storage-scaling.py`, wykresy Q3a–Q3f powyżej) — " +
+                    "i to jej wyniki należy cytować w pracy. Wartości odstające od reszty serii " +
+                    "o rząd wielkości także tam wymagają weryfikacji importem w izolacji: dla " +
+                    "zbioru `attr-20` sonda raportuje ×30,01, natomiast import tego samego zbioru " +
+                    "jako jedynego na świeżym stacku daje ×0,82 — różnica dowodzi, że w sekwencji " +
+                    "doliczana jest prealokacja, a nie koszt danych (METODOLOGIA §7).",
             )
             appendLine()
             appendLine("### Pamięć operacyjna")

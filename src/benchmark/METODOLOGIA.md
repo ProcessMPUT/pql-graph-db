@@ -138,25 +138,44 @@ Rejestrowane: czas ściany każdej próbki, rozmiar odpowiedzi (bajty), licznoś
 > indeksów po atrybutach nie jest zaniedbaniem, lecz decyzją popartą pomiarem.
 
 ### Q3 — zasobożerność
-- **Dysk:** rozmiar danych trwałych bazy odczytywany wewnątrz kontenera —
-  przed importem i po imporcie każdego datasetu. Pomiar **nie obejmuje logów
-  transakcyjnych (WAL)** po żadnej ze stron: po stronie Neo4j sumowane są pliki
-  store'u w `/data/databases` (bez `/data/transactions`), po stronie PostgreSQL
-  używane jest `pg_database_size` (relacje, bez `pg_wal`). Dzięki temu
-  porównywany jest trwały rozmiar danych, a nie chwilowy stan dzienników,
-  którego rozmiar zależy od cyklu recyklingu segmentów.
-  Przed każdym pomiarem REFERENCE jest checkpointowany (`CHECKPOINT;` przez
-  psql), żeby nie raportować rozmiaru z nieutrwalonym stanem stron w pamięci.
-  Neo4j w wersji community **nie udostępnia ręcznego checkpointu** (procedura
-  `CALL db.checkpoint()` nie istnieje), więc rozmiary LOCAL w protokole
-  benchmarku odzwierciedlają stan po naturalnych checkpointach silnika.
+- **Dysk:** rozmiar danych bazy odczytywany wewnątrz kontenera — przed importem
+  i po imporcie każdego datasetu. Datastore'y benchmarku **nie są czyszczone
+  między datasetami** (usuwane są dopiero po całym przebiegu), więc kolejne
+  importy narastają na sobie. Zakres plików różni się między systemami:
+  po stronie LOCAL sumowane są `/data/databases` **oraz** `/data/transactions`
+  (czyli razem z logami transakcji), po stronie REFERENCE mierzy się katalog
+  danych PostgreSQL.
 
-  **Ograniczenia protokołu benchmarku po stronie LOCAL:** Neo4j nie zmniejsza
-  plików store'u po usunięciu danych i reużywa zwolnione strony przy
-  kolejnych importach, więc przy protokole import → pomiar → czyszczenie →
-  następny dataset delty per-dataset są strukturalnie bliskie zeru (status
-  `BELOW_ALLOCATION_GRANULARITY`). Wyniki per-dataset z przebiegu benchmarku
-  raportujemy wyłącznie dla REFERENCE.
+  **Dlaczego per-dataset raportujemy wyłącznie dla REFERENCE.** Powodem jest
+  brak wymuszonego checkpointu po stronie LOCAL, a nie reużycie stron:
+  przed każdym pomiarem REFERENCE jest checkpointowany (`CHECKPOINT;` przez
+  psql), natomiast Neo4j w wersji Community **nie udostępnia ręcznego
+  checkpointu**.
+
+  Jest to ograniczenie **licencyjne, a nie wersyjne**: procedura
+  `db.checkpoint()` istnieje, lecz dokumentacja Neo4j oznacza ją etykietą
+  `enterprise-edition`, czyli jest dostępna wyłącznie w edycji Enterprise
+  (*Operations Manual → Built-in procedures*, wpis `db.checkpoint()`).
+  Etykieta ta występuje **zarówno w dokumentacji linii 5.x, jak i w najnowszym
+  wydaniu kalendarzowym (2026.07)**, a `db.checkpoint()` jest w spisie procedur
+  wbudowanych jedyną procedurą związaną z checkpointem — aktualizacja Community
+  do nowszego wydania nie zmieniłaby więc niczego. Potwierdza to test na
+  używanej instancji: Neo4j 5.26.25 Community nie rejestruje żadnej procedury
+  zawierającej „checkpoint”, a wywołanie kończy się błędem
+  `There is no procedure with the name db.checkpoint`. Przejścia na
+  Enterprise świadomie nie dokonujemy: byłby to inny produkt (m.in. dodatkowe
+  polityki checkpointowania `continuous` i `volumetric`, niedostępne
+  w Community), co zmieniłoby mierzony system i unieważniło zebrane wyniki.
+  Zamiast tego sonda wymusza checkpoint **restartem kontenera** — zamknięcie
+  silnika wykonuje checkpoint — co jest jedynym sposobem dostępnym w tej edycji. Świeżo zaimportowane
+  dane pozostają więc w pamięci i logach transakcji, a pliki store'u rosną
+  dopiero przy naturalnym checkpoincie silnika — który wypada w losowym
+  momencie serii. Skutek widać w danych: dla LOCAL większość datasetów ma
+  status `BELOW_ALLOCATION_GRANULARITY` (delta ≤ 0), a pojedyncze wykazują
+  skokowy przyrost rzędu dziesiątek MiB, przypisany temu importowi, w trakcie
+  którego checkpoint akurat nastąpił — nie kosztowi jego danych. Takich
+  wartości nie wolno interpretować jako współczynnika ekspansji, dlatego
+  kolumny LOCAL w tabeli raportu są oznaczone jako nieraportowane.
 
   **Współczynnik ekspansji (pytanie badawcze 5)** mierzy dedykowana sonda
   `scripts/benchmarks/measure-storage-scaling.py`: świeży stack, sekwencyjny
