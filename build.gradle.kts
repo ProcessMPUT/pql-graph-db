@@ -128,6 +128,28 @@ tasks.register<JavaExec>("runBenchmarkFull") {
     args("full")
 }
 
+tasks.register<JavaExec>("runBenchmarkScaling") {
+    group = "benchmark"
+    description = "Runs the deep size ladder (10^4..10^6 events) for the Q2 scaling chapter."
+    classpath = benchmarkSourceSet.runtimeClasspath
+    mainClass.set("com.processm.processminterpreter.benchmark.BenchmarkRunnerKt")
+    args("scaling")
+}
+
+tasks.register<JavaExec>("rebuildBenchmarkReport") {
+    group = "benchmark"
+    description =
+        "Re-derives thesis-report.md/.tex for an existing run from its CSVs " +
+        "(-PrunDir=tmp/benchmark-results/<runId>). No containers needed."
+    classpath = benchmarkSourceSet.runtimeClasspath
+    mainClass.set("com.processm.processminterpreter.benchmark.BenchmarkRunnerKt")
+    argumentProviders.add {
+        val runDir = providers.gradleProperty("runDir").orNull
+            ?: error("Missing -PrunDir=<benchmark run directory>")
+        listOf("report", runDir)
+    }
+}
+
 tasks.register<JavaExec>("runBenchmarkCleanup") {
     group = "benchmark"
     description = "Deletes benchmark datastores with the bench- prefix from local and reference ProcessM APIs."

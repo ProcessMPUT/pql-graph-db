@@ -73,6 +73,73 @@ def selection_metric(medians: dict[tuple[str, str, str], float]) -> float | None
     return median(local) if local else None
 
 
+LOCAL_MEMORY_COMPONENTS = {"processm-interpreter", "processm-neo4j", "local-jvm"}
+REFERENCE_MEMORY_COMPONENTS = {"processm-server"}
+
+
+def memory_verdict(
+    mem_runs: list[tuple[str, dict[str, float]]],
+    components: list[str],
+) -> list[str]:
+    """States whether the Q3 memory comparison is resolved, and says so either way.
+
+    The rule the report has always declared but never applied: a difference between
+    the systems counts only when it exceeds how much the same component moves
+    between runs of the same code. On the pre-fix data the application container
+    varied by 416 MiB run-to-run while the systems differed by 215 MiB — the
+    comparison was noise, and the report still printed it as a result.
+    """
+    per_run_totals: list[tuple[float, float]] = []
+    for _, medians in mem_runs:
+        local = sum(v for c, v in medians.items() if c in LOCAL_MEMORY_COMPONENTS)
+        reference = sum(v for c, v in medians.items() if c in REFERENCE_MEMORY_COMPONENTS)
+        if local > 0 and reference > 0:
+            per_run_totals.append((local, reference))
+    if not per_run_totals:
+        return ["**Werdykt Q3-pamięć: nierozstrzygnięty** — brak kompletu składników obu systemów.", ""]
+
+    mean_local = sum(local for local, _ in per_run_totals) / len(per_run_totals)
+    mean_reference = sum(reference for _, reference in per_run_totals) / len(per_run_totals)
+    effect = abs(mean_local - mean_reference)
+
+    # Largest run-to-run swing of any single component, in MiB — the noise the
+    # effect has to clear.
+    noise = 0.0
+    worst_component = ""
+    for comp in components:
+        values = [m.get(comp) for _, m in mem_runs if m.get(comp)]
+        if len(values) > 1:
+            swing = max(values) - min(values)
+            if swing > noise:
+                noise, worst_component = swing, comp
+
+    lines = [
+        f"LOCAL {mean_local:.0f} MiB wobec REFERENCE {mean_reference:.0f} MiB "
+        f"(średnia z {len(per_run_totals)} przebiegów) — różnica **{effect:.0f} MiB**. "
+        f"Największy rozrzut pojedynczego składnika między przebiegami: "
+        f"**{noise:.0f} MiB** ({worst_component or 'brak danych'}).",
+        "",
+    ]
+    if noise >= effect:
+        lines += [
+            f"**Werdykt Q3-pamięć: nierozstrzygnięty.** Szum między przebiegami ({noise:.0f} MiB) "
+            f"jest nie mniejszy niż mierzony efekt ({effect:.0f} MiB), więc pomiar nie uprawnia "
+            "do wniosku o przewadze żadnego z systemów. W pracy należy podać to wprost — "
+            "jest to wynik, nie brak wyniku. Rozstrzygnięcie wymaga większej liczby przebiegów "
+            "albo ograniczenia źródeł rozrzutu (stały rozmiar sterty, wymuszony GC przed pomiarem).",
+            "",
+        ]
+    else:
+        lines += [
+            f"**Werdykt Q3-pamięć: rozstrzygnięty.** Efekt ({effect:.0f} MiB) przekracza rozrzut "
+            f"między przebiegami ({noise:.0f} MiB). Uwaga: warstwy bazodanowe obu systemów mogą mieć "
+            "różne budżety pamięci (zob. `environment.json`) — kierunek tej asymetrii należy podać "
+            "w zagrożeniach trafności.",
+            "",
+        ]
+    return lines
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("run_dirs", type=Path, nargs="+", help="two or more benchmark run directories")
@@ -234,9 +301,8 @@ def main() -> int:
             present = [v for v in values if v]
             spread = f"×{max(present) / min(present):.2f}" if len(present) > 1 and min(present) > 0 else "—"
             md.append(f"| {comp} | {cells} | {spread} |")
-        md += ["", "Wartości to mediany [MiB] z fazy zapytań. Jeżeli rozrzut składnika między",
-               "przebiegami jest porównywalny z różnicą między systemami, pomiar nie",
-               "uprawnia do wniosku o przewadze żadnego z nich.", ""]
+        md += ["", "Wartości to mediany [MiB] z fazy zapytań.", ""]
+        md += memory_verdict(mem_runs, components)
 
     md_path = out_dir / "repeatability.md"
     md_path.write_text("\n".join(md), encoding="utf-8")

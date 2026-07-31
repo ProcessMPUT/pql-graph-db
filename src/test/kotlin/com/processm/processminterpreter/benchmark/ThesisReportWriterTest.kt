@@ -85,42 +85,88 @@ class ThesisReportWriterTest {
             "Q4 parity summary must count 3 OK pairs and 2 MISMATCH pairs",
         )
 
-        // METODOLOGIA §Q3 reports per-dataset benchmark storage for REFERENCE only.
-        // ds_alpha has a positive LOCAL delta (10 MiB, ratio 10.0); rendering it would
-        // present an allocation jump as an expansion factor contradicting the probe.
+        // Every research question gets an answer, including "unresolved" ones.
+        assertTrue(md.contains("## Podsumowanie — odpowiedzi na pytania badawcze"), "report must open with per-question verdicts")
+        assertTrue(md.contains("**Q2 (zapytania).**") && md.contains("**Q4 (poprawność).**"), "Q2 and Q4 must be answered")
+
+        // ds_alpha and ds-beta share their parameters, so they are replicates: the same
+        // experiment measured twice. Their disagreement is the run's measurement error
+        // and becomes the practical-significance floor.
+        assertTrue(md.contains("## Kontrola replikacji"), "replicate control section must be present")
+        assertTrue(md.contains("ds-beta = ds_alpha"), "the replicate group must be named")
+
+        // Hand-computed: local 18/20/22 ms (x4) -> median 20.0, quartiles [18.0; 22.0];
+        // reference 48/50/52 ms (x4) -> median 50.0, [48.0; 52.0]. Ratio 20/50 = 0.40,
+        // i.e. a x2.50 advantage for LOCAL. Replicate spread for hierarchyWindow is
+        // x2.00 (local 20 ms vs 40 ms), which this effect clears.
+        assertTrue(
+            md.contains("| hierarchyWindow | okno | 20.0 | [18.0; 22.0] | 50.0 | [48.0; 52.0] | ×2.50 (LOCAL) |"),
+            "warm-stats row must match the hand-computed median/quartiles/advantage",
+        )
+        assertTrue(md.contains("×2.50 (LOCAL)") && md.contains("istotna"), "a x2.5 effect above the error floor is significant")
+
+        // ds-beta: 40 ms vs 50 ms is x1.25 — real and statistically resolvable, but
+        // smaller than the x2.00 the replicates prove the measurement itself varies by.
+        assertTrue(
+            md.contains("×1.25 (LOCAL)"),
+            "the smaller effect must be reported as a directed factor",
+        )
+        assertTrue(
+            md.contains("poniżej błędu pomiaru"),
+            "an effect below the measured replicate spread must not be called significant",
+        )
+        // The disjoint-IQR rule is gone; nothing may still claim significance by it.
+        assertFalse(md.contains("IQR rozłączne"), "the disjoint-IQR rule must no longer appear")
+        assertFalse(md.contains("porównywalne (IQR nachodzą)"), "the disjoint-IQR rule must no longer appear")
+
+        // p95 is withheld below the sample size at which it describes a tail at all.
+        assertFalse(md.contains("p95 [ms]"), "p95 must not be tabulated at n far below the threshold")
+        assertTrue(md.contains("kwantyl 0,95 jest funkcją dwóch obserwacji"), "the report must say why p95 is absent")
+
+        // Import row: 1 MiB XES, LOCAL 2.00 s vs REFERENCE 4.00 s -> x2.00 for LOCAL.
+        assertTrue(
+            md.contains("| ds_alpha | 1.00 | 100 | 1000 | 2.00 | 4.00 | ×2.00 (LOCAL) |"),
+            "import row must match the hand-computed advantage",
+        )
+
+        // First-touch is separated from cold: the first dataset's first execution
+        // measures class loading and JIT, so it carries no L/R ratio.
+        assertTrue(md.contains("### Pierwsze dotknięcie"), "first-touch must have its own section")
+        assertTrue(md.contains("nie podano dla nich ilorazu"), "first-touch must state why it has no ratio")
+        assertFalse(
+            md.contains("| ds_alpha | hierarchyWindow | 100.0 | 200.0 |"),
+            "the first dataset must not appear in the cold table",
+        )
+        assertTrue(
+            md.contains("| ds-beta | hierarchyWindow | 70.0 | 80.0 | ×1.14 (LOCAL) |"),
+            "cold row for a non-first dataset must carry the advantage",
+        )
+
+        // Disk: a positive LOCAL delta stays behind the marker (METODOLOGIA §Q3), and a
+        // negative delta is named as a contaminated measurement rather than folded into
+        // "below granularity" — the two have different causes and different consequences.
         assertTrue(md.contains("nie raportowane (§Q3)"), "LOCAL storage cells must carry the marker")
+        assertTrue(md.contains("pomiar skażony (delta ujemna)"), "a negative delta must be named as contaminated")
         assertFalse(
             Regex("""\| ds_alpha \| 10\.00 \| 10\.00 \|""").containsMatchIn(md),
             "a positive LOCAL delta must not be rendered as a number",
         )
+        assertTrue(md.contains("## Załącznik: pomiar dysku z protokołu benchmarku"), "protocol disk data belongs in an appendix")
 
-        // IQR-overlap pair (ds-beta x hierarchyWindow) is marked comparable and listed as a caveat.
-        assertTrue(md.contains("porównywalne (IQR nachodzą)"), "md must mark the IQR-overlap pair as comparable")
-        assertTrue(md.contains("ds-beta / hierarchyWindow"), "IQR-overlap caveat must name the pair")
-
-        // Hand-computed warm-stats row for ds_alpha x hierarchyWindow:
-        // local 10/20/30 ms -> median 20.0, IQR [15.0; 25.0], p95 29.0;
-        // reference 40/50/60 ms -> median 50.0, IQR [45.0; 55.0], p95 59.0; ratio 20/50 = 0.40.
-        assertTrue(
-            md.contains("| hierarchyWindow | 20.0 | [15.0; 25.0] | 29.0 | 50.0 | [45.0; 55.0] | 59.0 | 0.40 | istotna (IQR rozłączne) |"),
-            "warm-stats row must match the hand-computed median/IQR/p95/ratio",
-        )
-        // Import row: 1 MiB XES, LOCAL 2.00 s vs REFERENCE 4.00 s -> ratio 0.50.
-        assertTrue(
-            md.contains("| ds_alpha | 1.00 | 100 | 1000 | 2.00 | 4.00 | 0.50 |"),
-            "import row must match the hand-computed L/R ratio",
-        )
-        // Cold table row for the clean pair: 100.0 ms vs 200.0 ms -> 0.50.
-        assertTrue(
-            md.contains("| ds_alpha | hierarchyWindow | 100.0 | 200.0 | 0.50 |"),
-            "cold row must match the hand-computed cold ratio",
-        )
+        // Memory: the sum is stated, the verdict is explicitly deferred to the
+        // cross-run spread rather than claimed from a single run.
+        assertTrue(md.contains("**Zestawienie.** LOCAL 1536.0 MiB"), "memory must be summed per system")
+        assertTrue(md.contains("**Warunek rozstrzygnięcia.**"), "memory verdict must state its precondition")
 
         // LaTeX: booktabs tables with one \label per table environment.
         val tableCount = Regex("""\\begin\{table}""").findAll(tex).count()
         val labelCount = Regex("""\\label\{tab:bench-""").findAll(tex).count()
         assertEquals(tableCount, labelCount, "every LaTeX table must carry exactly one tab:bench-* label")
-        assertEquals(8, tableCount, "environment, import, 2 query tables, cold, storage, memory, roundtrip")
+        assertEquals(
+            10,
+            tableCount,
+            "environment, replicate, import, 2 query tables, first-touch, cold, storage appendix, memory, roundtrip",
+        )
         assertTrue(tex.contains("% generated by ThesisReportWriter run-test"), "tex must start with the generator comment")
         assertTrue(tex.contains("\\toprule") && tex.contains("\\midrule") && tex.contains("\\bottomrule"), "booktabs rules")
 
@@ -132,9 +178,6 @@ class ThesisReportWriterTest {
                 assertTrue(index > 0 && tex[index - 1] == '\\', "unescaped underscore at index $index")
             }
         }
-
-        // Comparable marking is carried into the LaTeX significance column too.
-        assertTrue(tex.contains("porównywalne (IQR nachodzą)"), "tex must mark the IQR-overlap pair as comparable")
         assertFalse(md.contains("NaN"), "no NaN may leak into the report")
     }
 
@@ -161,14 +204,23 @@ class ThesisReportWriterTest {
             importResult("local", "ds-beta", 1.0),
             importResult("reference", "ds-beta", 1.0),
         )
+
+        // Twelve repetitions per cell: below roughly ten, no arrangement of the data can
+        // reach p < 0.05 two-sided, so a three-sample fixture could only ever exercise
+        // the "not significant" branch.
+        fun spread(
+            dataset: String,
+            label: String,
+            system: String,
+            centre: Double,
+        ) = listOf(centre - 2, centre, centre + 2).flatMap { value ->
+            (1..4).map { warm(system, dataset, label, it, value / 1000.0) }
+        }
+
         val queries = buildList {
-            // Pair 1: ds_alpha x hierarchyWindow — clean, disjoint IQRs (hand-computed row).
-            add(warm("local", "ds_alpha", "hierarchyWindow", 1, 0.010))
-            add(warm("local", "ds_alpha", "hierarchyWindow", 2, 0.020))
-            add(warm("local", "ds_alpha", "hierarchyWindow", 3, 0.030))
-            add(warm("reference", "ds_alpha", "hierarchyWindow", 1, 0.040))
-            add(warm("reference", "ds_alpha", "hierarchyWindow", 2, 0.050))
-            add(warm("reference", "ds_alpha", "hierarchyWindow", 3, 0.060))
+            // Pair 1: ds_alpha x hierarchyWindow — 20 ms vs 50 ms, clearly separated.
+            addAll(spread("ds_alpha", "hierarchyWindow", "local", 20.0))
+            addAll(spread("ds_alpha", "hierarchyWindow", "reference", 50.0))
             add(cold("local", "ds_alpha", "hierarchyWindow", 0.100))
             add(cold("reference", "ds_alpha", "hierarchyWindow", 0.200))
             // Pair 2: ds_alpha x custom_attr — invalidated by response-count MISMATCH.
@@ -176,20 +228,15 @@ class ThesisReportWriterTest {
             add(warm("reference", "ds_alpha", "custom_attr", 1, 0.011, status = QUERY_STATUS_MISMATCH, details = "Response count mismatch: traces 5 vs 7"))
             add(cold("local", "ds_alpha", "custom_attr", 0.050))
             add(cold("reference", "ds_alpha", "custom_attr", 0.060))
-            // Pair 3: ds-beta x hierarchyWindow — overlapping IQRs ([20;40] vs [35;55] ms).
-            add(warm("local", "ds-beta", "hierarchyWindow", 1, 0.010))
-            add(warm("local", "ds-beta", "hierarchyWindow", 2, 0.030))
-            add(warm("local", "ds-beta", "hierarchyWindow", 3, 0.050))
-            add(warm("reference", "ds-beta", "hierarchyWindow", 1, 0.025))
-            add(warm("reference", "ds-beta", "hierarchyWindow", 2, 0.045))
-            add(warm("reference", "ds-beta", "hierarchyWindow", 3, 0.065))
+            // Pair 3: ds-beta x hierarchyWindow — 40 ms vs 50 ms. Separated, so the test
+            // resolves the direction, but x1.25 is under the x2.00 the replicates show.
+            addAll(spread("ds-beta", "hierarchyWindow", "local", 40.0))
+            addAll(spread("ds-beta", "hierarchyWindow", "reference", 50.0))
             add(cold("local", "ds-beta", "hierarchyWindow", 0.070))
             add(cold("reference", "ds-beta", "hierarchyWindow", 0.080))
-            // Pair 4: ds-beta x custom_attr — clean, disjoint IQRs.
-            add(warm("local", "ds-beta", "custom_attr", 1, 0.001))
-            add(warm("local", "ds-beta", "custom_attr", 2, 0.001))
-            add(warm("reference", "ds-beta", "custom_attr", 1, 0.002))
-            add(warm("reference", "ds-beta", "custom_attr", 2, 0.002))
+            // Pair 4: ds-beta x custom_attr — small, clean, separated.
+            addAll(spread("ds-beta", "custom_attr", "local", 10.0))
+            addAll(spread("ds-beta", "custom_attr", "reference", 20.0))
             add(cold("local", "ds-beta", "custom_attr", 0.003))
             add(cold("reference", "ds-beta", "custom_attr", 0.004))
             // Pair 5: ds-beta x hoistedGroup — invalidated on a hoisted trace-variant
@@ -203,7 +250,9 @@ class ThesisReportWriterTest {
             storageResult("local", "ds_alpha", 10L * 1024 * 1024, 10.0),
             storageResult("reference", "ds_alpha", 5L * 1024 * 1024, 5.0),
             storageResult("local", "ds-beta", 2L * 1024 * 1024, 2.0),
-            storageResult("reference", "ds-beta", 4L * 1024 * 1024, 4.0),
+            // The database shrank across this import: not a small measurement, no
+            // measurement. It must reach neither a table cell nor a chart point.
+            storageResult("reference", "ds-beta", -4L * 1024 * 1024, -4.0, STORAGE_STATUS_CONTAMINATED),
         )
         val roundtrips = listOf(
             RoundtripBenchmarkResult("ds_alpha", "MATCH", 0, ""),
@@ -227,7 +276,7 @@ class ThesisReportWriterTest {
             querySpecs = listOf(
                 BenchmarkQuerySpec("hierarchyWindow", "limit l:1, t:10, e:20"),
                 BenchmarkQuerySpec("custom_attr", "where [e:attr_1] is not null limit l:1, t:10"),
-                BenchmarkQuerySpec("hoistedGroup", "group by ^e:name order by count(t:name) desc"),
+                BenchmarkQuerySpec("hoistedGroup", "group by ^e:name order by count(t:name) desc", WORKLOAD_FULL_PASS),
             ),
         )
     }
@@ -309,6 +358,7 @@ class ThesisReportWriterTest {
         datasetName: String,
         deltaBytes: Long,
         xesRatio: Double,
+        status: String = STORAGE_STATUS_OK,
     ) = StorageBenchmarkResult(
         system = system,
         datasetName = datasetName,
@@ -317,6 +367,6 @@ class ThesisReportWriterTest {
         deltaBytes = deltaBytes,
         deltaToXesRatio = xesRatio,
         deltaToGzipRatio = xesRatio * 8,
-        status = "OK",
+        status = status,
     )
 }

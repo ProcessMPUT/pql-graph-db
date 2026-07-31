@@ -71,14 +71,36 @@ dyskwalifikuje przebieg:
 
 | Seria | Datasety | Co bada |
 |---|---|---|
-| trace-scaling | 100 / 500 / 2000 / 10000 trace'ów (10 zdarzeń/trace, 5 atrybutów/zdarzenie) | skalowanie po liczbie trace'ów (Q1, Q2) |
-| event-scaling | 5 / 10 / 50 / 200 zdarzeń/trace (100 trace'ów) | skalowanie po głębokości trace'a |
-| attr-scaling | 1 / 5 / 20 atrybutów/zdarzenie (100×10) | koszt atrybutów niestandardowych |
-| real | sample_process, JournalReview, Sepsis, Hospital_log | realne rozkłady atrybutów i długości trace'ów |
+| trace-scaling | 100 / 500 / 2000 / 10 000 / 50 000 trace'ów (10 zdarzeń/trace, 5 atrybutów/zdarzenie) | skalowanie po liczbie trace'ów (Q1, Q2) |
+| event-scaling | 5 / 10 / 50 / 200 / 1000 zdarzeń/trace (100 trace'ów) | skalowanie po głębokości trace'a |
+| attribute-scaling | 1 / 2 / 5 / 10 / 20 / 50 atrybutów/zdarzenie (100×10) | koszt atrybutów niestandardowych |
+| **shape-scaling** | 1000×10, 500×20, 100×100, 20×500, 10×1000 — **zawsze 10 000 zdarzeń** | kształt logu przy stałej objętości |
+| real-validation | sample_process, JournalReview, Sepsis, Hospital_log | realne rozkłady atrybutów i długości trace'ów |
 
 Syntetyczne datasety generuje `XesDatasetGenerator` (deterministyczny seed —
 identyczne pliki XES dla obu systemów). Profil SMOKE (test dymny) używa
 podzbioru; wyniki do pracy pochodzą wyłącznie z profilu FULL.
+
+**Dlaczego seria `shape-scaling`.** Trzy pierwsze serie nie są ortogonalne: każda
+z nich, zmieniając swój parametr, zmienia zarazem łączną objętość danych. Z samych
+tych serii nie da się więc oddzielić „kosztu śladu” od „kosztu zdarzenia”. Seria
+`shape-scaling` trzyma objętość stałą (10 000 zdarzeń w każdym zbiorze) i zmienia
+wyłącznie proporcję ślady : zdarzenia — każda różnica w niej jest czystym efektem
+**kształtu** logu, przy zerowym efekcie rozmiaru. To jest eksperyment najsilniej
+różnicujący model grafowy od relacyjnego.
+
+**Punkt przecięcia serii = kontrola replikacji.** `trace-100`, `event-10`
+i `attr-5` to **ten sam zbiór** (100×10×5) pod trzema nazwami; wygenerowane pliki
+różnią się wyłącznie wartością `concept:name` logu. Nie jest to redundancja, tylko
+celowy pomiar tej samej wielkości trzy razy w różnych pozycjach sekwencji — patrz
+warunek ważności przebiegu w §5.
+
+**Profil SCALING** (`./gradlew runBenchmarkScaling`) dokłada głęboką drabinę
+10^4…10^6 zdarzeń do rozdziału o skalowaniu. Powód: przy 10^5 zdarzeń wszystkie
+czasy leżą jeszcze na podłodze narzutu transportowego (jednostki milisekund), a
+reżim, w którym systemy się różnią, zaczyna się mniej więcej tam, gdzie kończyła
+się poprzednia drabina — `real-hospital` (150 291 zdarzeń) daje po stronie
+REFERENCE 6 076 ms tam, gdzie `trace-10000` dawał 9 ms.
 
 ## 4. Mierzone wielkości
 
@@ -96,20 +118,64 @@ tabela importu pojedynczego przebiegu zawiera więc pojedyncze pomiary.
 Klasy zapytań (rozszerzone względem pierwotnych 6 o operacje najbardziej
 różnicujące model grafowy od relacyjnego):
 
-| Etykieta | PQL (schemat) | Klasa operacji |
-|---|---|---|
-| hierarchyWindow | `limit l:1, t:10, e:20` | okno hierarchii |
-| eventNameFilter | `where e:name is not null limit ...` | filtr po atrybucie standardowym |
-| customAttrFilter | `where [e:attr_1] is not null limit ...` | filtr po atrybucie niestandardowym |
-| timestampNameOrder | `order by e:timestamp, e:name limit ...` | sortowanie wieloatrybutowe |
-| eventNameGroup | `group by e:name order by e:name limit ...` | grupowanie w obrębie trace'a |
-| hoistedGroup | `group by ^e:name order by count(t:name) desc` | grupowanie po hoistowanym atrybucie |
-| hoistedWhere | `where ^e:name is not null limit ...` | filtr hoistowany (EXISTS/JOIN) |
-| timestampAggregates | `select min(e:timestamp), max(e:timestamp), count(e:name)` | agregacje |
-| customAttributesProjection | `select [e:attr_1], [e:attr_5] limit ...` | projekcja atrybutów niestandardowych |
+| Etykieta | PQL (schemat) | Klasa operacji | Klasa obciążenia |
+|---|---|---|---|
+| minimalWindow | `limit l:1, t:1, e:1` | najmniejsze możliwe okno | **podłoga** |
+| hierarchyWindow | `limit l:1, t:10, e:20` | okno hierarchii | okno |
+| eventNameFilter | `where e:name is not null limit ...` | filtr po atrybucie standardowym | okno |
+| customAttrFilter | `where [e:attr_1] is not null limit ...` | filtr po atrybucie niestandardowym | okno |
+| timestampNameOrder | `order by e:timestamp, e:name limit ...` | sortowanie wieloatrybutowe | okno |
+| eventNameGroup | `group by e:name order by e:name limit ...` | grupowanie w obrębie trace'a | okno |
+| hoistedWhere | `where ^e:name is not null limit ...` | filtr hoistowany (EXISTS/JOIN) | okno |
+| timestampAggregates | `select min(e:timestamp), max(e:timestamp), count(e:name)` | agregacje w obrębie śladu | okno |
+| customAttributesProjection | `select [e:attr_1], [e:attr_5] limit ...` | projekcja atrybutów niestandardowych | okno |
+| hoistedGroup | `group by ^e:name order by count(t:name) desc` | warianty procesu | **pełny przebieg** |
+| globalEventCount | `select l:name, count(t:name), count(^^e:name) group by l:name ...` | agregat globalny | **pełny przebieg** |
+| variantGroupCount | `select count(t:name), count(^e:name) group by ^e:name ...` | warianty z licznościami | **pełny przebieg** |
+| absentAttrScan | `where [e:attr_absent_benchmark_probe] is not null limit ...` | filtr bez dopasowań po atrybucie niestandardowym | **pełny przebieg** |
+| likeScan | `where e:name like '%zzq%' order by ... limit ...` | filtr `like` bez dopasowań | **pełny przebieg** |
 
 Rejestrowane: czas ściany każdej próbki, rozmiar odpowiedzi (bajty), liczności
 (logi/trace'y/zdarzenia).
+
+> **Domyślne limity API i wynikający z nich podział na klasy obciążenia.**
+> Oba API stosują domyślne limity hierarchiczne **10 logów / 30 śladów /
+> 90 zdarzeń**, którymi ograniczany jest także jawny `limit`. Po stronie LOCAL
+> odwzorowuje to `processm.compatibility.default-limits`, wprost powielając
+> `LogsService.applyLimits()` systemu ProcessM — porównanie pozostaje więc
+> **symetryczne**, co potwierdza parytet liczności odpowiedzi (Q4): dla każdej
+> pary obie strony zwracają identyczne `logi/ślady/zdarzenia`.
+>
+> Konsekwencja dla planu eksperymentu jest jednak zasadnicza: **rozmiar odpowiedzi
+> nie zależy od rozmiaru zbioru**. Zapytanie `hierarchyWindow` zwraca dokładnie
+> 36 612 bajtów zarówno przy 100, jak i przy 10 000 śladach. Zapytanie, które
+> silnik potrafi obsłużyć z ograniczonego okna, kosztuje **O(okno)**, a nie O(n) —
+> i usunięcie klauzuli `limit` tego nie zmienia, bo limit domyślny wchodzi wtedy
+> na jej miejsce. Dopasowany wykładnik potęgowy takich zapytań wynosi α ≈ 0 przy
+> R² ≈ 0, czyli rysunek skalowania pokazuje wyłącznie szum.
+>
+> Dlatego o tym, czy zapytanie może wykazać skalowanie, decyduje jego **semantyka**,
+> nie okno. Klasa **pełny przebieg** obejmuje zapytania, których wynik wymaga
+> przejścia całego logu, zanim okno da się w ogóle zastosować: agregaty globalne
+> (`^^e:`), grupowanie śladów w warianty (`group by ^e:`) oraz predykaty, które
+> **nie mają dopasowań** — te ostatnie zmuszają do pełnego skanu i zwracają wynik
+> pusty, więc ich koszt zależy od danych, a rozmiar odpowiedzi nie. Wzorzec ten
+> nie jest hipotezą: potwierdza go pomiar `customAttrFilter` na `real-hospital`,
+> gdzie atrybut `attr_1` nie występuje — obie strony zwracają `0/0/0`, a czasy
+> wynoszą 131,7 ms (LOCAL) wobec 6 076,2 ms (REFERENCE).
+>
+> **Rysunki skalowania generowane są wyłącznie dla klasy „pełny przebieg”**;
+> dla klasy „okno” raportuje się dopasowane α i R² w tabeli, wraz z uwagą, że
+> α ≈ 0 wynika z planu eksperymentu, a nie z pomiaru.
+
+> **Podłoga pomiaru.** Zapytanie `minimalWindow` zwraca stały, najmniejszy możliwy
+> wynik, więc jego czas jest niezależny od danych i mierzy koszt obecny w każdej
+> innej liczbie sekcji Q2: transport HTTP, uwierzytelnienie, parsowanie
+> i planowanie. Na zbiorach syntetycznych profilu FULL koszt ten stanowił rzędu
+> 30–100 % mierzonej wartości (najtańszy pomiar całego przebiegu: 1,52 ms przy
+> medianie wszystkich median 6,09 ms). Podłoga nanoszona jest jako linia
+> odniesienia na każdy wykres Q2; różnicę między systemami wolno przypisywać
+> silnikowi składowania dopiero po jej odjęciu.
 
 > **DELETE celowo poza zakresem.** PQL ma instrukcję `delete`, ale w oryginalnym
 > ProcessM nie jest ona dostępna przez API REST (endpoint zapytań jest tylko do
@@ -185,9 +251,44 @@ Rejestrowane: czas ściany każdej próbki, rozmiar odpowiedzi (bajty), licznoś
   po stronie PostgreSQL `CHECKPOINT;`. Rozmiary porównują dane trwałe bez
   WAL po obu stronach: Neo4j `/data/databases` (bez logów transakcji),
   PostgreSQL `sum(pg_database_size(...))` (bez pg_wal). Wyniki trafiają do
-  `storage-scaling.csv` i na wykresy `storage_scaling_*` w raporcie;
-  raportowany przyrost oraz współczynnik ekspansji względem rozmiaru XES
-  (bajty bazy / bajty XES).
+  `storage-scaling.csv` i na wykresy `storage_scaling_*` w raporcie.
+
+  **Ekspansję raportuje się jako koszt krańcowy z regresji, nie jako iloraz
+  delta/XES w pojedynczym punkcie.** Silniki prealokują: po stronie REFERENCE
+  pierwsze importy dokładają ~13 MiB niezależnie od rozmiaru zbioru
+  (13,96 / 13,20 / 13,96 / 13,28 / 13,92 MiB dla pięciu najmniejszych zbiorów).
+  Iloraz `delta / xesBytes` jest wtedy hiperbolą `a/n + b`, a nie własnością
+  formatu: dla tego samego formatu daje 32,9× przy 100 śladach i 3,8× przy
+  10 000, co czyta się jak poprawę wraz z rozmiarem. Dopasowuje się więc
+
+  ```
+  delta = a + b · (liczba zdarzeń)
+  ```
+
+  i raportuje **b** (koszt krańcowy), **a** (prealokacja) oraz R². Na danych
+  profilu FULL model ten daje ekspansję krańcową **1,30× dla LOCAL** wobec
+  **3,53× dla REFERENCE** przy R² = 1,00, ze stałą 12,45 MiB po stronie
+  REFERENCE — i serie `trace-scaling` oraz `event-scaling` potwierdzają się
+  wzajemnie (1,30 vs 1,22 oraz 3,53 vs 3,54).
+
+  **Statusy pomiaru dysku.** Przyrost jest pomiarem wyłącznie wtedy, gdy jest
+  **ściśle dodatni**. Trzy tryby niepowodzenia mają osobne statusy, bo mają różne
+  przyczyny i różne konsekwencje:
+
+  | Status | Znaczenie |
+  |---|---|
+  | `OK` | delta > 0 — pomiar przypisywalny, wchodzi do tabel, wykresów i dopasowania |
+  | `BELOW_ALLOCATION_GRANULARITY` | delta = 0 — import nie przesunął store'u przez granicę alokacji |
+  | `CONTAMINATED_NEGATIVE_DELTA` | delta < 0 — baza **skurczyła się** w trakcie importu (autovacuum, reużycie stron, recykling WAL) |
+  | `UNAVAILABLE` | sonda nie zwróciła rozmiaru |
+
+  Rozdzielenie tych statusów nie jest kosmetyką. Traktowanie ujemnej delty jako
+  `OK` sprawiało, że wykres prowadził linię przez wartość **−19 746 816 B**
+  (REFERENCE/`trace-2000`), którą tabela obok tej samej komórki opisywała jako
+  „poniżej granulacji” — ta sama wielkość była w jednym dokumencie
+  przedstawiona na dwa sprzeczne sposoby. Obecnie tabele i wykresy stosują
+  **jeden wspólny filtr ważności**; pomiar nieważny rysowany jest jako przerwa
+  w linii z pustym znacznikiem, nigdy jako liczba.
 
   **Zmiana narzędzia (wersja sondy):** sonda została przeniesiona z PowerShella
   (`measure-storage-scaling.ps1`) na Pythona, żeby uruchamiała się na każdym
@@ -258,15 +359,43 @@ specyfikacją PQL”.
 
 1. Świeży stack (`docker compose down -v && up -d`), zapis `environment.json`
    (wersje, limity, sprzęt, konfiguracja pamięci baz).
-2. Pomiar pamięci spoczynkowej obu systemów (60 s próbkowania).
-3. Dla każdego datasetu: import do REFERENCE i LOCAL (pomiar Q1 + przyrost
+2. **Globalna rozgrzewka** (FULL: 40 rund całego zestawu zapytań na zbiorze
+   wyrzucanym, naprzemiennie między systemami), zanim cokolwiek jest zapisywane.
+
+   Uzasadnienie: rozgrzewki per zapytanie nie wystarczają, bo horyzont rozgrzewki
+   obejmuje **cały przebieg**, a nie pojedynczą parę. Dowodzą tego zbiory
+   replikacyjne (§Zbiory danych): ten sam zbiór 100×10×5 zmierzony jako 1., 6.
+   i 10. w sekwencji dawał w przebiegach sprzed tej poprawki mediany różniące się
+   do ×2,4 po stronie LOCAL (import: ×10,4), monotonicznie malejące z pozycją.
+   Faza ta pochłania również prealokację stron obu baz, dzięki czemu nie jest ona
+   doliczana do zbioru, który akurat wypadł pierwszy.
+3. Pomiar pamięci spoczynkowej obu systemów (60 s próbkowania).
+4. Dla każdego datasetu: import do REFERENCE i LOCAL (pomiar Q1 + przyrost
    dysku Q3), naprzemiennie: L, R, L, R…
-4. Faza zapytań: dla każdej pary (dataset, zapytanie) — rozgrzewka
+
+   **Kolejność zbiorów jest kontrbalansowana między przebiegami serii.** Protokół
+   naprzemienny L,R,L,R usuwa bias kolejności *systemów*, ale nie bias kolejności
+   *zbiorów* — a to w nim mieszka reszta rozgrzewki, uderzająca mocniej w LOCAL
+   (dwie JVM) niż w jedno-JVM-owy REFERENCE, czyli **przeciwko** badanej
+   implementacji. Trzy przebiegi serii uruchamia się więc jako:
+
+   ```bash
+   BENCHMARK_DATASET_ORDER=declared ./gradlew runBenchmarkFull
+   BENCHMARK_DATASET_ORDER=reversed ./gradlew runBenchmarkFull
+   BENCHMARK_DATASET_ORDER=random BENCHMARK_DATASET_ORDER_SEED=20260728 ./gradlew runBenchmarkFull
+   ```
+
+   Użyta kolejność i ziarno trafiają do `environment.json`, więc przebieg losowy
+   jest odtwarzalny.
+5. Faza zapytań: dla każdej pary (dataset, zapytanie) — rozgrzewka
    (FULL: 3 wykonania), potem repetycje (FULL: **30**) **naprzemiennie
    między systemami** (A,B,A,B…), z próbkowaniem pamięci w tle.
-   Pierwsza próbka po imporcie raportowana osobno jako `cold`.
-5. Sprzątanie datastore'ów `bench-*`.
-6. **Cały eksperyment powtarzany ≥3 razy** (osobne uruchomienia w różnym
+   Pierwsza próbka po imporcie raportowana osobno jako `cold`; dla **pierwszego**
+   zbioru w sekwencji raportowana jest w osobnej tabeli „pierwsze dotknięcie”
+   i **bez ilorazu L/R** — mierzy ładowanie klas i JIT, a nie zimny cache, więc
+   iloraz porównywałby rozruch JVM z rozgrzanym już procesem.
+6. Sprzątanie datastore'ów `bench-*`.
+7. **Cały eksperyment powtarzany ≥3 razy** (osobne uruchomienia w różnym
    czasie), wszystkie na tej samej wersji kodu — zmiana kodu mierzonego
    systemu rozpoczyna nową serię i wcześniejszych przebiegów nie łączy się
    z nowymi.
@@ -292,25 +421,68 @@ specyfikacją PQL”.
    python3 scripts/benchmarks/compare-runs.py tmp/benchmark-results/<runA> <runB> <runC>
    ```
 
-   **Warunek ważności przebiegu:** przebieg wolno wykorzystać w pracy tylko,
-   gdy `memory-results.csv` zawiera wszystkie trzy składniki
-   (`processm-neo4j`, `local-jvm`, `processm-server`). Brak serii `local-jvm`
-   oznacza, że strona LOCAL została policzona bez procesu aplikacji, a więc
-   zaniżona — taki przebieg jest nieważny dla Q3.
+   **Warunki ważności przebiegu.**
+
+   1. *Kompletność składników pamięci.* `memory-results.csv` musi zawierać obie
+      strony: aplikację i bazę LOCAL oraz `processm-server`. W konfiguracji
+      docelowej (obie aplikacje w kontenerach, §7) są to `processm-interpreter`
+      i `processm-neo4j` wobec `processm-server`, wszystkie mierzone tą samą sondą
+      `docker stats`. Obecność składnika **`local-jvm`** oznacza konfigurację
+      **deweloperską** — interpreter na hoście, mierzony RSS procesu — czyli obie
+      strony zmierzone różnymi sondami; taki przebieg jest **nieważny dla Q3**.
+
+   2. *Zgodność replikatów.* Zbiory `trace-100`, `event-10` i `attr-5` to ten sam
+      eksperyment (100 śladów × 10 zdarzeń × 5 atrybutów) pod trzema nazwami —
+      punkt przecięcia trzech serii skalowania; wygenerowane pliki różnią się
+      wyłącznie nazwą logu. Ich rozbieżność jest więc **czystym błędem pomiaru**.
+      Jeżeli rozrzut median między replikatami przekracza **×1,25**, przebieg
+      zmierzył własną rozgrzewkę, a nie różnicę między systemami, i nie wolno go
+      cytować jako dowodu przewagi żadnego z nich. Bramkę liczy i raportuje sam
+      generator raportu (sekcja „Kontrola replikacji”), a jej wynik jest podany
+      w nagłówku raportu przed jakąkolwiek liczbą.
+
+   Kontrola replikacyjna jest mocniejsza od porównania międzyprzebiegowego z punktu
+   wyżej: tamto porównuje ten sam zbiór na tej samej **pozycji w sekwencji**, więc
+   nie widzi biasu pozycji; replikaty zmieniają pozycję i właśnie ten bias mierzą.
 
 ### Statystyka
-Dla każdej pary (dataset, zapytanie, system): **mediana**, **IQR**, **p95**,
-min/max z 30 repetycji. Deklarowana różnica między systemami uznawana jest za
-istotną tylko, gdy przedziały IQR obu systemów są rozłączne — inaczej wynik
-opisywany jest jako porównywalny.
 
-Uzasadnienie rygoru: mediana tej samej pary (dataset, zapytanie, system)
-potrafi różnić się między przebiegami **na tej samej wersji kodu**, zwłaszcza
-przy zapytaniach rzędu pojedynczych milisekund, gdzie stały narzut HTTP i
-zmienny stan cache'y dominują nad kosztem samego zapytania. Skalę tego rozrzutu
-raportuje się z danych powtarzalności (§5 pkt 6) i **nie podaje się jej jako
-stałej z góry** — różnica median mniejsza niż zmierzony rozrzut run-to-run nie
-jest odróżnialna od szumu i nie może być podstawą wniosku o przewadze systemu.
+Dla każdej pary (dataset, zapytanie, system) raportuje się **medianę** i
+**kwartyle Q1–Q3** z 30 repetycji. Różnicę między systemami opisują trzy liczby:
+
+1. **Efekt** — iloraz median podany jako czynnik ≥ 1 wraz z kierunkiem
+   (`×2,66 (REFERENCE)`). Jedna kolumna nie miesza wtedy 0,02 z 4,49, a
+   najmocniejszy wynik pracy nie ukrywa się pod zapisem „0,02”.
+2. **Przedział ufności efektu** — 95% percentylowy bootstrap ilorazu median
+   (10 000 losowań, ziarno wyprowadzone z nazwy pary, więc przedział jest
+   odtwarzalny z artefaktów).
+3. **Test istotności** — Manna–Whitneya (dwustronny, przybliżenie normalne
+   z poprawką na wiązania i ciągłość) z korektą **Holma–Bonferroniego** na całą
+   rodzinę porównań przebiegu. Bez korekty przy ~130 porównaniach oczekiwać
+   należy ~7 fałszywych odkryć przy α = 0,05.
+
+**Werdykt „istotna” wymaga jednocześnie** p < 0,05 po korekcie, przedziału
+ufności nieobejmującego 1,00 **oraz** efektu przekraczającego zmierzony błąd
+pomiaru (rozrzut replikatów, §5 pkt 7). Efekt spełniający dwa pierwsze warunki,
+a nie trzeci, opisywany jest jako **„poniżej błędu pomiaru”** — jest wtedy
+realny, ale mniejszy niż to, o ile waha się sam pomiar, więc nie jest dowodem
+o systemach.
+
+> **Reguła rozłącznych IQR została wycofana.** IQR mierzy rozrzut *próby*, a nie
+> niepewność *mediany*: jego rozłączność nie kontroluje żadnego błędu I rodzaju
+> i zależy od `n` tylko przez estymator kwantyla. Na danych profilu FULL reguła
+> ta uznawała za istotne **86 % wszystkich par** (113 ze 132), z czego 74 % miało
+> efekt poniżej ×2 — czyli poniżej błędu, jaki replikaty wykazują na *identycznych*
+> danych. Kryterium odpalające prawie zawsze nie niesie informacji.
+
+**p95 podaje się wyłącznie przy `n ≥ 200`.** Przy `n = 30` kwantyl 0,95 jest
+interpolacją między 28. a 29. statystyką pozycyjną — opisuje konkretne losowanie,
+nie ogon rozkładu.
+
+**Zastrzeżenie o niezależności.** Repetycje wykonywane są seryjnie na tym samym
+rozgrzanym procesie, więc próbki są autoskorelowane; podane p są z tego powodu
+optymistyczne i pełnią rolę kryterium pomocniczego. Rozstrzygający jest efekt
+zestawiony z błędem pomiaru.
 
 Wszystkie kwantyle (mediana, Q1/Q3, p95) we wszystkich artefaktach —
 `query-summary.csv`, tabelach `thesis-report.md`/`thesis-tables.tex`
@@ -410,3 +582,34 @@ Wykresy generuje `scripts/benchmarks/plot-benchmark-results.py` z surowych CSV.
   atrybutowej trzeba albo podać wartość z testu izolowanego, albo wykluczyć
   ostatni punkt serii i to odnotować. Surowego `storage-scaling.csv` nie
   edytujemy (sekcja 6) — korekta należy do warstwy interpretacji.
+
+- **asymetria budżetu pamięci warstwy bazodanowej.** Obie aplikacje JVM dostają
+  tę samą stertę (`-Xmx`, zob. `environment.json`), ale bazy — nie. Neo4j ma
+  jawnie ustawiony heap i page cache (`NEO4J_server_memory_heap_max__size`,
+  `NEO4J_server_memory_pagecache_size`), podczas gdy PostgreSQL wewnątrz obrazu
+  `processm-server-full` działa na wartościach domyślnych (`shared_buffers`
+  rzędu 128 MB). Wpływa to nie tylko na Q3, ale i na Q2: przy 1 GB page cache
+  Neo4j komplet danych zbioru 10^5 zdarzeń mieści się w pamięci, podczas gdy
+  PostgreSQL polega na cache'u systemu gospodarza. **Kierunek obciążenia: na
+  korzyść LOCAL.** Zrównanie budżetów wymagałoby ingerencji w obraz REFERENCE,
+  co naruszałoby zasadę „zero modyfikacji systemów pod benchmark” (sekcja 2
+  pkt 1), dlatego asymetria jest raportowana, a nie usuwana — i musi być podana
+  w pracy przy każdym wniosku Q3-pamięć.
+
+- **domyślne limity odpowiedzi ograniczają zakres pytania Q2.** Oba API
+  przycinają wynik do 10 logów / 30 śladów / 90 zdarzeń (§Q2). Q2 mierzy więc
+  **opóźnienie ograniczonego okna**, a nie przepustowość; pytania o skalowanie
+  rozstrzyga wyłącznie klasa zapytań „pełny przebieg”. Jest to ograniczenie
+  zakresu wniosku, nie błąd pomiaru — symetria między systemami jest zachowana
+  i potwierdzona parytetem liczności (Q4).
+
+- **autokorelacja próbek.** Repetycje wykonywane są seryjnie na tym samym
+  rozgrzanym procesie, więc nie są niezależne; podane wartości p są z tego
+  powodu optymistyczne (§5, *Statystyka*). Rozstrzygający jest efekt zestawiony
+  ze zmierzonym błędem pomiaru, nie sama wartość p.
+
+- **bias pozycji w sekwencji zbiorów.** Rozgrzewka JVM obejmuje cały przebieg,
+  nie pojedyncze zapytanie, a protokół naprzemienny L,R,L,R jej nie neutralizuje.
+  Przeciwdziałają temu globalna rozgrzewka (§5 pkt 2) i kontrbalansowanie
+  kolejności zbiorów między przebiegami (§5 pkt 4); skalę residualnego biasu
+  mierzy kontrola replikacji (§5 pkt 7) i jest ona raportowana w każdym raporcie.

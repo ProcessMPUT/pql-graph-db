@@ -22,9 +22,11 @@ class BenchmarkResultsWriter(
         memorySamples: List<MemorySample> = emptyList(),
         memorySummaries: List<MemorySummary> = emptyList(),
         environmentDetails: Map<String, Any?> = emptyMap(),
+        querySpecs: List<BenchmarkQuerySpec> = emptyList(),
     ) {
         outputDirectory.createDirectories()
         writeDatasets(datasets)
+        writeQuerySpecs(querySpecs)
         writeImports(imports)
         writeQueries(queries)
         writeQuerySummaries(querySummaries)
@@ -63,6 +65,21 @@ class BenchmarkResultsWriter(
                     it.xesGzBytes,
                 )
             },
+        )
+    }
+
+    /**
+     * The workload class of each query, so downstream tooling does not have to keep
+     * its own copy of the query list. The scaling figures are selected from
+     * `workload` (only [WORKLOAD_FULL_PASS] queries can show scaling at all) rather
+     * than from a hard-coded whitelist — which is how `hoistedGroup`, the one query
+     * with a clean scaling law, used to be left out of every scaling figure.
+     */
+    private fun writeQuerySpecs(querySpecs: List<BenchmarkQuerySpec>) {
+        CsvWriter.write(
+            outputDirectory.resolve("queries.csv"),
+            listOf("queryLabel", "workload", "clause", "pql"),
+            querySpecs.map { listOf(it.label, it.workload, it.clause, it.query) },
         )
     }
 
@@ -135,6 +152,8 @@ class BenchmarkResultsWriter(
                 "queryLabel",
                 "samples",
                 "medianSeconds",
+                "q1Seconds",
+                "q3Seconds",
                 "p95Seconds",
                 "minSeconds",
                 "maxSeconds",
@@ -147,6 +166,8 @@ class BenchmarkResultsWriter(
                     it.queryLabel,
                     it.samples,
                     it.medianSeconds,
+                    it.q1Seconds,
+                    it.q3Seconds,
                     it.p95Seconds,
                     it.minSeconds,
                     it.maxSeconds,
@@ -234,6 +255,12 @@ class BenchmarkResultsWriter(
             "profile" to settings.profile.name.lowercase(),
             "warmups" to settings.profile.warmups,
             "repetitions" to settings.profile.repetitions,
+            "globalWarmupRounds" to settings.globalWarmupRounds,
+            // Position in the dataset sequence is a confounder the alternating
+            // protocol cannot remove; the order actually used must be recoverable
+            // from the artifacts, and a RANDOM order must be reproducible.
+            "datasetOrder" to settings.datasetOrder.name.lowercase(),
+            "datasetOrderSeed" to settings.datasetOrderSeed,
             "localApi" to settings.localApi,
             "referenceApi" to settings.referenceApi,
             "datasetFilter" to settings.datasetFilter.sorted(),
@@ -253,7 +280,9 @@ class BenchmarkResultsWriter(
                 appendLine()
                 appendLine("- Profile: ${settings.profile.name.lowercase()}")
                 appendLine("- Warmups per query: ${settings.profile.warmups}")
+                appendLine("- Global warm-up rounds before the first measured dataset: ${settings.globalWarmupRounds}")
                 appendLine("- Measured repetitions per query: ${settings.profile.repetitions}")
+                appendLine("- Dataset order: ${settings.datasetOrder.name.lowercase()} (seed ${settings.datasetOrderSeed})")
                 appendLine("- Java: ${System.getProperty("java.version")}")
                 appendLine("- OS: ${System.getProperty("os.name")} ${System.getProperty("os.version")}")
                 appendLine("- Available processors reported by JVM: ${Runtime.getRuntime().availableProcessors()}")
@@ -383,6 +412,8 @@ object QueryStatistics {
                     queryLabel = key.third,
                     samples = seconds.size,
                     medianSeconds = ThesisStatistics.quantile(seconds, 0.50),
+                    q1Seconds = ThesisStatistics.quantile(seconds, 0.25),
+                    q3Seconds = ThesisStatistics.quantile(seconds, 0.75),
                     p95Seconds = ThesisStatistics.quantile(seconds, 0.95),
                     minSeconds = seconds.first(),
                     maxSeconds = seconds.last(),

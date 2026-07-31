@@ -1,38 +1,86 @@
 [
   {
+    "label": "minimalWindow",
+    "query": "limit l:1, t:1, e:1",
+    "workload": "floor",
+    "clause": "najmniejsze możliwe okno — podłoga pomiaru (transport HTTP + planowanie)"
+  },
+  {
     "label": "hierarchyWindow",
-    "query": "limit l:1, t:10, e:20"
+    "query": "limit l:1, t:10, e:20",
+    "workload": "window",
+    "clause": "klauzula `limit` (okno hierarchii)"
   },
   {
     "label": "eventNameFilter",
-    "query": "where e:name is not null limit l:1, t:10, e:20"
+    "query": "where e:name is not null limit l:1, t:10, e:20",
+    "workload": "window",
+    "clause": "klauzula `where` po atrybucie standardowym"
   },
   {
     "label": "customAttrFilter",
-    "query": "where [e:attr_1] is not null limit l:1, t:10, e:20"
+    "query": "where [e:attr_1] is not null limit l:1, t:10, e:20",
+    "workload": "window",
+    "clause": "klauzula `where` po atrybucie niestandardowym"
   },
   {
     "label": "timestampNameOrder",
-    "query": "order by e:timestamp, e:name limit l:1, t:10, e:20"
+    "query": "order by e:timestamp, e:name limit l:1, t:10, e:20",
+    "workload": "window",
+    "clause": "klauzula `order by`"
   },
   {
     "label": "eventNameGroup",
-    "query": "group by e:name order by e:name limit l:1, t:10, e:20"
-  },
-  {
-    "label": "hoistedGroup",
-    "query": "group by ^e:name order by count(t:name) desc"
+    "query": "group by e:name order by e:name limit l:1, t:10, e:20",
+    "workload": "window",
+    "clause": "klauzula `group by` w obrębie śladu"
   },
   {
     "label": "hoistedWhere",
-    "query": "where ^e:name is not null limit l:1, t:10, e:20"
+    "query": "where ^e:name is not null limit l:1, t:10, e:20",
+    "workload": "window",
+    "clause": "filtr hoistowany (EXISTS/JOIN)"
   },
   {
     "label": "timestampAggregates",
-    "query": "select min(e:timestamp), max(e:timestamp), count(e:name)"
+    "query": "select min(e:timestamp), max(e:timestamp), count(e:name)",
+    "workload": "window",
+    "clause": "klauzule `select` + agregacje min/max/count w obrębie śladu"
   },
   {
     "label": "customAttributesProjection",
-    "query": "select [e:attr_1], [e:attr_5] limit l:1, t:10, e:20"
+    "query": "select [e:attr_1], [e:attr_5] limit l:1, t:10, e:20",
+    "workload": "window",
+    "clause": "projekcja atrybutów niestandardowych"
+  },
+  {
+    "label": "hoistedGroup",
+    "query": "group by ^e:name order by count(t:name) desc",
+    "workload": "fullPass",
+    "clause": "grupowanie śladów w warianty po hoistowanym atrybucie"
+  },
+  {
+    "label": "globalEventCount",
+    "query": "select l:name, count(t:name), count(^^e:name) group by l:name order by l:name limit e:1",
+    "workload": "fullPass",
+    "clause": "agregat globalny — zliczenie wszystkich śladów i zdarzeń logu"
+  },
+  {
+    "label": "variantGroupCount",
+    "query": "select count(t:name), count(^e:name) group by ^e:name order by count(t:name) desc limit l:1, t:3",
+    "workload": "fullPass",
+    "clause": "warianty procesu z licznościami (grupowanie + agregacja po hoistowanym atrybucie)"
+  },
+  {
+    "label": "absentAttrScan",
+    "query": "where [e:attr_absent_benchmark_probe] is not null limit l:1, t:10, e:20",
+    "workload": "fullPass",
+    "clause": "filtr po atrybucie nieobecnym w logu — pełny skan atrybutów, wynik pusty"
+  },
+  {
+    "label": "likeScan",
+    "query": "where e:name like '%zzq%' order by e:name, e:timestamp limit l:1, t:10, e:20",
+    "workload": "fullPass",
+    "clause": "filtr `like` po atrybucie standardowym bez dopasowań — pełny skan nazw zdarzeń"
   }
 ]

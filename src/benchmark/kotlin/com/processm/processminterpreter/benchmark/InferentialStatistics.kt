@@ -1,0 +1,379 @@
+package com.processm.processminterpreter.benchmark
+
+import kotlin.math.abs
+import kotlin.math.exp
+import kotlin.math.ln
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.sqrt
+import kotlin.random.Random
+
+/**
+ * Inferential statistics for the thesis comparison (METODOLOGIA §5, *Statystyka*).
+ *
+ * Replaces the earlier "disjoint IQR" rule, which was not a test: the IQR measures
+ * the **spread of the sample**, not the **uncertainty of the median**, so its
+ * disjointness controls no error rate and reacts to `n` only through the quantile
+ * estimator. On the FULL profile that rule declared 86 % of all (dataset, query)
+ * pairs significant, i.e. it carried almost no information.
+ *
+ * What is reported instead, for every pair:
+ *
+ * 1. **Bootstrap percentile CI for the ratio of medians** — the effect size with
+ *    its uncertainty, on the scale the thesis actually argues in ("LOCAL is ×k
+ *    faster"). Deterministic: the resampling seed is derived from the pair key,
+ *    so re-running the report on the same samples reproduces the same interval.
+ * 2. **Mann–Whitney U** (normal approximation, tie- and continuity-corrected)
+ *    with **Holm–Bonferroni** adjustment across all pairs compared in the run.
+ *    Without the adjustment, ~7 of 132 comparisons would be expected to reach
+ *    p < 0,05 by chance alone.
+ * 3. **Practical significance** — the effect must additionally exceed the
+ *    measurement error demonstrated *within the same run* by the replicate
+ *    datasets ([ReplicateControl]), never a threshold declared in advance.
+ *
+ * The samples are back-to-back executions against one warm process, so they are
+ * autocorrelated; the p-values are therefore optimistic and are reported only as
+ * a secondary criterion, never as the sole basis for a claim. This is stated in
+ * the report itself, not only here.
+ */
+object InferentialStatistics {
+    /** Resamples per bootstrap interval. 10 000 keeps the 2,5 %/97,5 % percentiles stable to ~0,01. */
+    const val BOOTSTRAP_RESAMPLES: Int = 10_000
+
+    /** Two-sided confidence level of every reported interval. */
+    const val CONFIDENCE_LEVEL: Double = 0.95
+
+    /** Family-wise error rate controlled by the Holm–Bonferroni adjustment. */
+    const val ALPHA: Double = 0.05
+
+    /**
+     * Percentile bootstrap CI for `median(local) / median(reference)`.
+     *
+     * Both samples are resampled independently with replacement (the systems are
+     * measured against separate processes, so the pairing between repetition *i*
+     * of LOCAL and of REFERENCE carries no information).
+     */
+    fun medianRatioConfidenceInterval(
+        local: List<Double>,
+        reference: List<Double>,
+        seed: Long,
+        resamples: Int = BOOTSTRAP_RESAMPLES,
+    ): ConfidenceInterval? {
+        if (local.isEmpty() || reference.isEmpty()) return null
+        val referenceMedian = ThesisStatistics.quantile(reference, 0.50)
+        if (referenceMedian <= 0.0) return null
+
+        val random = Random(seed)
+        val ratios = DoubleArray(resamples)
+        val localBuffer = DoubleArray(local.size)
+        val referenceBuffer = DoubleArray(reference.size)
+        var usable = 0
+        repeat(resamples) {
+            for (i in localBuffer.indices) localBuffer[i] = local[random.nextInt(local.size)]
+            for (i in referenceBuffer.indices) referenceBuffer[i] = reference[random.nextInt(reference.size)]
+            val denominator = medianOf(referenceBuffer)
+            if (denominator > 0.0) ratios[usable++] = medianOf(localBuffer) / denominator
+        }
+        if (usable == 0) return null
+        val sorted = ratios.copyOf(usable).also { it.sort() }.toList()
+        val tail = (1.0 - CONFIDENCE_LEVEL) / 2.0
+        return ConfidenceInterval(
+            point = ThesisStatistics.quantile(local, 0.50) / referenceMedian,
+            low = ThesisStatistics.quantile(sorted, tail),
+            high = ThesisStatistics.quantile(sorted, 1.0 - tail),
+        )
+    }
+
+    /**
+     * Two-sided Mann–Whitney U test (Wilcoxon rank-sum) via the normal
+     * approximation, with the standard tie correction and a continuity
+     * correction. Exact enough at the profile's `n = 30` per group; returns 1.0
+     * for degenerate inputs so a missing test can never manufacture significance.
+     */
+    fun mannWhitneyU(
+        a: List<Double>,
+        b: List<Double>,
+    ): Double {
+        if (a.isEmpty() || b.isEmpty()) return 1.0
+        val n1 = a.size.toDouble()
+        val n2 = b.size.toDouble()
+        val combined = (a.map { it to 0 } + b.map { it to 1 }).sortedBy { it.first }
+
+        // Mid-ranks: tied observations all receive the average of the ranks they span.
+        val ranks = DoubleArray(combined.size)
+        var tieCorrection = 0.0
+        var index = 0
+        while (index < combined.size) {
+            var end = index
+            while (end + 1 < combined.size && combined[end + 1].first == combined[index].first) end++
+            val midRank = (index + end + 2) / 2.0
+            for (i in index..end) ranks[i] = midRank
+            val tieSize = (end - index + 1).toDouble()
+            if (tieSize > 1) tieCorrection += tieSize * tieSize * tieSize - tieSize
+            index = end + 1
+        }
+
+        val rankSumA = combined.indices.filter { combined[it].second == 0 }.sumOf { ranks[it] }
+        val uA = rankSumA - n1 * (n1 + 1) / 2.0
+        val uB = n1 * n2 - uA
+        val u = min(uA, uB)
+
+        val n = n1 + n2
+        val meanU = n1 * n2 / 2.0
+        val varianceU = n1 * n2 / 12.0 * ((n + 1) - tieCorrection / (n * (n - 1)))
+        if (varianceU <= 0.0) return 1.0
+        // Continuity correction can push the numerator to or below zero when the
+        // samples are indistinguishable; short-circuit so the error term of the
+        // CDF approximation cannot report p slightly below 1 for identical inputs.
+        val numerator = abs(u - meanU) - 0.5
+        if (numerator <= 0.0) return 1.0
+        return (2.0 * (1.0 - standardNormalCdf(numerator / sqrt(varianceU)))).coerceIn(0.0, 1.0)
+    }
+
+    /**
+     * Holm–Bonferroni step-down adjustment. Controls the family-wise error rate
+     * across every comparison in the run while being uniformly more powerful than
+     * plain Bonferroni. Returned in the input order.
+     */
+    fun holmAdjust(pValues: List<Double>): List<Double> {
+        if (pValues.isEmpty()) return emptyList()
+        val order = pValues.indices.sortedBy { pValues[it] }
+        val adjusted = DoubleArray(pValues.size)
+        var running = 0.0
+        order.forEachIndexed { rank, original ->
+            val scaled = (pValues.size - rank) * pValues[original]
+            running = max(running, scaled)
+            adjusted[original] = min(1.0, running)
+        }
+        return adjusted.toList()
+    }
+
+    /**
+     * Ordinary least squares `y = intercept + slope * x` with the coefficient of
+     * determination. Used for the disk-growth model (Q3) — where a constant
+     * pre-allocation term makes the naive `delta / xesBytes` ratio a hyperbola
+     * rather than a property of the storage format — and, on log-transformed
+     * axes, for the query scaling exponent (Q2).
+     */
+    fun fitLinear(
+        xs: List<Double>,
+        ys: List<Double>,
+    ): LinearFit? {
+        require(xs.size == ys.size) { "fitLinear needs paired samples" }
+        if (xs.size < 3) return null
+        val meanX = xs.average()
+        val meanY = ys.average()
+        val sxx = xs.sumOf { (it - meanX) * (it - meanX) }
+        if (sxx <= 0.0) return null
+        val sxy = xs.indices.sumOf { (xs[it] - meanX) * (ys[it] - meanY) }
+        val slope = sxy / sxx
+        val intercept = meanY - slope * meanX
+        val totalSumOfSquares = ys.sumOf { (it - meanY) * (it - meanY) }
+        val residualSumOfSquares = xs.indices.sumOf {
+            val predicted = intercept + slope * xs[it]
+            (ys[it] - predicted) * (ys[it] - predicted)
+        }
+        val r2 = if (totalSumOfSquares > 0.0) 1.0 - residualSumOfSquares / totalSumOfSquares else Double.NaN
+        return LinearFit(intercept = intercept, slope = slope, r2 = r2, points = xs.size)
+    }
+
+    /**
+     * Scaling exponent `alpha` of `t ~ n^alpha`, fitted as a straight line in
+     * log10–log10 space. `alpha` near 0 with a low R² means the measured time does
+     * not depend on the dataset size at all — the situation the `limit`-bounded
+     * query workload produces, and the reason a scaling figure of such a query
+     * shows nothing but noise.
+     */
+    fun fitPowerLaw(
+        xs: List<Double>,
+        ys: List<Double>,
+    ): LinearFit? {
+        val pairs = xs.indices
+            .filter { xs[it] > 0.0 && ys[it] > 0.0 }
+            .map { log10(xs[it]) to log10(ys[it]) }
+        if (pairs.size < 3) return null
+        return fitLinear(pairs.map { it.first }, pairs.map { it.second })
+    }
+
+    private fun log10(value: Double): Double = ln(value) / ln(10.0)
+
+    private fun medianOf(values: DoubleArray): Double {
+        val sorted = values.copyOf().also { it.sort() }
+        val middle = sorted.size / 2
+        return if (sorted.size % 2 == 1) sorted[middle] else (sorted[middle - 1] + sorted[middle]) / 2.0
+    }
+
+    /** Abramowitz & Stegun 7.1.26 error-function approximation; |error| < 1.5e-7. */
+    fun standardNormalCdf(z: Double): Double {
+        val sign = if (z < 0) -1.0 else 1.0
+        val x = abs(z) / sqrt(2.0)
+        val t = 1.0 / (1.0 + 0.3275911 * x)
+        val y = 1.0 - (
+            ((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592
+            ) * t * exp(-x * x)
+        return 0.5 * (1.0 + sign * y)
+    }
+}
+
+data class ConfidenceInterval(
+    val point: Double,
+    val low: Double,
+    val high: Double,
+) {
+    /** True when the interval excludes 1.0, i.e. the direction of the difference is resolved. */
+    fun excludesUnity(): Boolean = low > 1.0 || high < 1.0
+}
+
+data class LinearFit(
+    val intercept: Double,
+    val slope: Double,
+    val r2: Double,
+    val points: Int,
+)
+
+/**
+ * Measurement error demonstrated by the run itself.
+ *
+ * The synthetic workload contains datasets that are **the same experiment under
+ * three names**: `trace-100`, `event-10` and `attr-5` are all 100 traces × 10
+ * events × 5 attributes — they are the point where the three scaling series
+ * intersect. Their generated files differ only in the log's `concept:name`.
+ *
+ * Measuring the same thing three times in one run therefore bounds the error of
+ * the whole experiment from below, and it does so *without* the confounder that
+ * the run-to-run comparison in §5 pkt 6 cannot remove: it varies position in the
+ * measurement sequence, which is exactly where the JVM warm-up bias lives.
+ *
+ * The spread is used two ways:
+ * - as the practical-significance floor: a median difference smaller than the
+ *   spread observed on identical data is not evidence about the systems;
+ * - as a run validity gate: if replicates of one dataset disagree beyond
+ *   [VALIDITY_GATE_SPREAD], the run's warm-up was insufficient and the run must
+ *   not be used as thesis data.
+ */
+object ReplicateControl {
+    /**
+     * Maximum tolerated max/min spread between replicate measurements of the same
+     * dataset shape before the run is declared invalid. A run at or below this
+     * still has measurable warm-up drift, which is why the measured spread — not
+     * this constant — is what the significance rule uses.
+     */
+    const val VALIDITY_GATE_SPREAD: Double = 1.25
+
+    /**
+     * Groups dataset names that describe an identical synthetic experiment.
+     * Real logs are excluded (their identity is the file, not the parameters).
+     */
+    fun replicateGroups(datasets: List<PreparedDataset>): List<List<String>> =
+        datasets
+            .filter { it.traces > 0 && it.eventsPerTrace > 0 }
+            .groupBy { Triple(it.traces, it.eventsPerTrace, it.attributesPerEvent) }
+            .values
+            .filter { it.size > 1 }
+            .map { group -> group.map { it.name }.sorted() }
+            .sortedBy { it.first() }
+
+    /**
+     * Per (query label, system) max/min spread across replicate datasets, and the
+     * worst spread overall. Returns null when the run has no replicate group.
+     */
+    fun measure(
+        datasets: List<PreparedDataset>,
+        queries: List<QueryBenchmarkResult>,
+    ): ReplicateReport? {
+        val groups = replicateGroups(datasets)
+        if (groups.isEmpty()) return null
+
+        val medians = queries
+            .filter { it.phase == QUERY_PHASE_WARM && it.status == "OK" }
+            .groupBy { Triple(it.datasetName, it.queryLabel, it.system) }
+            .mapValues { (_, samples) -> ThesisStatistics.quantile(samples.map { it.seconds }, 0.50) }
+
+        val entries = mutableListOf<ReplicateSpread>()
+        groups.forEach { group ->
+            val labels = queries.map { it.queryLabel }.distinct()
+            val systems = queries.map { it.system }.distinct()
+            labels.forEach { label ->
+                systems.forEach { system ->
+                    val values = group.mapNotNull { medians[Triple(it, label, system)] }.filter { it > 0.0 }
+                    if (values.size > 1) {
+                        entries += ReplicateSpread(
+                            datasets = group,
+                            queryLabel = label,
+                            system = system,
+                            minSeconds = values.min(),
+                            maxSeconds = values.max(),
+                        )
+                    }
+                }
+            }
+        }
+        if (entries.isEmpty()) return null
+        return ReplicateReport(groups = groups, spreads = entries.sortedByDescending { it.spread })
+    }
+}
+
+data class ReplicateSpread(
+    val datasets: List<String>,
+    val queryLabel: String,
+    val system: String,
+    val minSeconds: Double,
+    val maxSeconds: Double,
+) {
+    val spread: Double get() = if (minSeconds > 0.0) maxSeconds / minSeconds else Double.NaN
+}
+
+data class ReplicateReport(
+    val groups: List<List<String>>,
+    val spreads: List<ReplicateSpread>,
+) {
+    val worstSpread: Double get() = spreads.maxOfOrNull { it.spread } ?: Double.NaN
+
+    val medianSpread: Double
+        get() = spreads.map { it.spread }.filter { it.isFinite() }
+            .takeIf { it.isNotEmpty() }
+            ?.let { ThesisStatistics.quantile(it, 0.50) }
+            ?: Double.NaN
+
+    /** Worst spread seen for one query label, across systems — the floor that label's effects must clear. */
+    fun floorFor(queryLabel: String): Double =
+        spreads.filter { it.queryLabel == queryLabel }.maxOfOrNull { it.spread }?.takeIf { it.isFinite() } ?: 1.0
+
+    val runIsValid: Boolean get() = worstSpread.isFinite() && worstSpread <= ReplicateControl.VALIDITY_GATE_SPREAD
+}
+
+/** Effect size and both significance criteria for one (dataset, query) comparison. */
+data class ComparisonVerdict(
+    val datasetName: String,
+    val queryLabel: String,
+    val ratio: Double,
+    val confidenceInterval: ConfidenceInterval?,
+    val rawPValue: Double,
+    val adjustedPValue: Double,
+    /** Measurement-error floor this effect had to clear, from [ReplicateControl]. */
+    val practicalFloor: Double,
+) {
+    /** Effect size as a factor ≥ 1, direction-free. */
+    val magnitude: Double get() = if (ratio >= 1.0) ratio else 1.0 / ratio
+
+    val fasterSystem: String get() = if (ratio < 1.0) "LOCAL" else "REFERENCE"
+
+    val statisticallySignificant: Boolean
+        get() = adjustedPValue < InferentialStatistics.ALPHA &&
+            (confidenceInterval?.excludesUnity() ?: false)
+
+    val practicallySignificant: Boolean get() = magnitude >= practicalFloor
+
+    val verdict: SignificanceVerdict
+        get() = when {
+            !statisticallySignificant -> SignificanceVerdict.NOT_SIGNIFICANT
+            !practicallySignificant -> SignificanceVerdict.BELOW_MEASUREMENT_ERROR
+            else -> SignificanceVerdict.SIGNIFICANT
+        }
+}
+
+enum class SignificanceVerdict(val label: String) {
+    SIGNIFICANT("istotna"),
+    BELOW_MEASUREMENT_ERROR("poniżej błędu pomiaru"),
+    NOT_SIGNIFICANT("nieistotna"),
+}

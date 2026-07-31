@@ -8,6 +8,17 @@ import kotlin.io.path.relativeToOrSelf
 
 fun main(args: Array<String>) {
     val command = args.firstOrNull()?.lowercase()
+
+    // `report <runDir>` re-derives the thesis artifacts from an existing run's CSVs
+    // without touching the containers, so an improved analysis can be applied to runs
+    // that are already collected (METODOLOGIA §6).
+    if (command == "report") {
+        val runDirectory = args.getOrNull(1)?.let { Path.of(it) }
+            ?: error("Usage: report <benchmark-run-directory>")
+        RunReplay.rebuildReport(runDirectory)
+        return
+    }
+
     val profile = command
         ?.takeIf { it != "cleanup" }
         ?.let { BenchmarkProfile.valueOf(it.uppercase()) }
@@ -34,7 +45,13 @@ fun main(args: Array<String>) {
         "No benchmark datasets selected. Filter was: ${settings.datasetFilter}"
     }
 
-    val datasets = selectedSpecs.map { spec ->
+    val orderedSpecs = settings.datasetOrder.apply(selectedSpecs, settings.datasetOrderSeed)
+    println(
+        "Dataset order: ${settings.datasetOrder}" +
+            (if (settings.datasetOrder == DatasetOrder.RANDOM) " (seed ${settings.datasetOrderSeed})" else "") +
+            " — ${orderedSpecs.joinToString(", ") { it.name }}",
+    )
+    val datasets = orderedSpecs.map { spec ->
         println("Preparing dataset ${spec.name}")
         generator.prepare(spec, generatedDatasetsDirectory)
     }
@@ -62,6 +79,14 @@ fun main(args: Array<String>) {
     var fatalError: Throwable? = null
 
     try {
+        // Global warm-up (METODOLOGIA §5 pkt 3a) BEFORE anything is recorded — including
+        // before the idle baseline, so the baseline describes a warmed process rather
+        // than one still loading classes. Pays the JIT/class-loading/page-cache cost
+        // that the replicate datasets proved the per-query warm-ups cannot cover, and
+        // absorbs the databases' first-import page pre-allocation so it is not billed
+        // to whichever dataset happens to come first.
+        runGlobalWarmup(settings, config, clients, generator, generatedDatasetsDirectory, createdDataStores, runId)
+
         memorySampler.start()
         println("Sampling idle memory baseline for ${settings.profile.idleBaselineSeconds}s")
         memorySampler.sampleBlocking(MEMORY_PHASE_IDLE, settings.profile.idleBaselineSeconds)
@@ -201,6 +226,7 @@ fun main(args: Array<String>) {
         memorySamples = memorySampler.samples(),
         memorySummaries = memorySampler.summaries(),
         environmentDetails = EnvironmentProbe.collect(memoryContainers(settings, systems)),
+        querySpecs = config.queries,
     )
     // Thesis artifacts (METODOLOGIA §6): generated at the end of every run from the
     // in-memory records, never by re-reading the CSVs written above.
@@ -228,6 +254,69 @@ fun main(args: Array<String>) {
     if (strictErrors > 0) {
         error("Benchmark finished with $strictErrors infrastructure/runtime error(s). See $outputDirectory")
     }
+}
+
+/**
+ * Imports one throw-away dataset into both systems and executes the whole query set
+ * against it repeatedly, recording nothing.
+ *
+ * Why this exists: `trace-100`, `event-10` and `attr-5` are the same 100×10×5
+ * experiment under three names, and in the pre-fix runs their medians differed by up
+ * to ×2,4 on LOCAL, monotonically decreasing with position in the sequence (import:
+ * ×10,4). Three warm-ups per query cannot fix that — the warm-up horizon is the run,
+ * not the query. Failing to pay it here makes whichever dataset is measured first
+ * look slow, and the effect is larger for LOCAL (interpreter JVM + Neo4j JVM) than
+ * for the single-JVM REFERENCE.
+ *
+ * The dataset deliberately has the same shape as the replicate group, so the state it
+ * warms is the state the first measured dataset will need.
+ */
+private fun runGlobalWarmup(
+    settings: BenchmarkSettings,
+    config: BenchmarkConfig,
+    clients: Map<BenchmarkSystem, BenchmarkHttpClient>,
+    generator: XesDatasetGenerator,
+    generatedDatasetsDirectory: Path,
+    createdDataStores: MutableList<CreatedDataStoreHandle>,
+    runId: String,
+) {
+    val rounds = settings.profile.globalWarmupRounds
+    if (rounds <= 0 || clients.isEmpty()) return
+
+    val spec = BenchmarkDatasetSpec(
+        type = DatasetType.SYNTHETIC,
+        name = "warmup-throwaway",
+        series = "warmup",
+        traces = 100,
+        eventsPerTrace = 10,
+        attributesPerEvent = 5,
+    )
+    val dataset = generator.prepare(spec, generatedDatasetsDirectory)
+    println("Global warm-up: $rounds round(s) of ${config.queries.size} queries on ${spec.name} (not recorded)")
+
+    val handles = mutableListOf<ImportedDatasetHandle>()
+    clients.forEach { (system, client) ->
+        val storeName = "bench-$runId-${system.name}-warmup"
+        val storeId = runCatching { client.createDataStore(storeName) }.getOrNull() ?: return@forEach
+        createdDataStores += CreatedDataStoreHandle(system, storeName, storeId)
+        runCatching { client.uploadLogAndWait(storeId, dataset.file) }
+            .onSuccess { handles += ImportedDatasetHandle(system, dataset, storeId) }
+            .onFailure { println("WARNING: global warm-up import failed on ${system.name}: ${it.message}") }
+    }
+    if (handles.isEmpty()) {
+        println("WARNING: global warm-up imported nothing; measurements will include first-touch cost")
+        return
+    }
+    repeat(rounds) {
+        config.queries.forEach { query ->
+            // Interleaved exactly like the measured phase, so warm-up cannot
+            // advantage whichever system happens to go first.
+            handles.forEach { handle ->
+                runCatching { clients.getValue(handle.system).executeQuery(handle.dataStoreId, query.query) }
+            }
+        }
+    }
+    println("Global warm-up complete")
 }
 
 private fun recordedQuerySample(
@@ -459,11 +548,19 @@ private fun storageResult(
     after: Long?,
 ): StorageBenchmarkResult {
     val delta = if (before != null && after != null) after - before else null
+    // A per-dataset disk delta is only a measurement when it is strictly positive.
+    // The three failure modes are physically different and must not share a status:
+    // labelling a *negative* delta "OK" is what let charts draw a line through
+    // -19,7 MB (REFERENCE/trace-2000) while the table beside it printed
+    // "poniżej granulacji" for the same cell.
     val status = when {
-        delta == null -> "UNAVAILABLE"
-        delta > 0 -> "OK"
-        system.name == "local" -> "BELOW_ALLOCATION_GRANULARITY"
-        else -> "OK"
+        delta == null -> STORAGE_STATUS_UNAVAILABLE
+        delta > 0L -> STORAGE_STATUS_OK
+        // The database shrank across the import: autovacuum, page reuse or WAL
+        // recycling moved more bytes than the import added. Nothing about the
+        // dataset can be read off such a sample.
+        delta < 0L -> STORAGE_STATUS_CONTAMINATED
+        else -> STORAGE_STATUS_BELOW_GRANULARITY
     }
     return StorageBenchmarkResult(
         system = system.name,

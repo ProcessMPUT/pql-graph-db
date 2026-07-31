@@ -49,11 +49,30 @@ data class QueryBenchmarkSummary(
     val queryLabel: String,
     val samples: Int,
     val medianSeconds: Double,
+    /** Quartiles, so charts can draw the same spread the tables print. */
+    val q1Seconds: Double,
+    val q3Seconds: Double,
     val p95Seconds: Double,
     val minSeconds: Double,
     val maxSeconds: Double,
     val averageSeconds: Double,
 )
+
+/** Strictly positive delta — the only case that is an attributable measurement. */
+const val STORAGE_STATUS_OK = "OK"
+
+/** Delta is exactly zero: the import did not move the store past a filesystem allocation boundary. */
+const val STORAGE_STATUS_BELOW_GRANULARITY = "BELOW_ALLOCATION_GRANULARITY"
+
+/**
+ * Delta is negative — the store shrank across the import (autovacuum, page reuse,
+ * WAL recycling). Not "below granularity" and not a small number: no per-dataset
+ * quantity can be recovered from it, so it must never be tabulated or plotted.
+ */
+const val STORAGE_STATUS_CONTAMINATED = "CONTAMINATED_NEGATIVE_DELTA"
+
+/** The probe itself did not return a size. */
+const val STORAGE_STATUS_UNAVAILABLE = "UNAVAILABLE"
 
 data class StorageBenchmarkResult(
     val system: String,
@@ -64,7 +83,10 @@ data class StorageBenchmarkResult(
     val deltaToXesRatio: Double?,
     val deltaToGzipRatio: Double?,
     val status: String,
-)
+) {
+    /** True only for a delta that may be tabulated, plotted or fitted. */
+    val isAttributable: Boolean get() = status == STORAGE_STATUS_OK && (deltaBytes ?: 0L) > 0L
+}
 
 data class RoundtripBenchmarkResult(
     val datasetName: String,
