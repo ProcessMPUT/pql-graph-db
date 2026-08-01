@@ -130,7 +130,7 @@ const val WORKLOAD_FLOOR = "floor"
 const val WORKLOAD_WINDOW = "window"
 const val WORKLOAD_DATA_DEPENDENT = "dataDependent"
 const val BENCHMARK_SERIES_RANDOM_SEED = 20260728L
-const val CURRENT_BENCHMARK_PROTOCOL_VERSION = 9
+const val CURRENT_BENCHMARK_PROTOCOL_VERSION = 10
 const val POST_IDLE_WARMUP_MODE = "fresh-import-query-delete"
 const val REPLICATE_VALIDITY_STATISTIC = "query-spread-q3"
 

@@ -128,10 +128,20 @@ Compile the benchmark source set:
 ./gradlew compileBenchmarkKotlin
 ```
 
-Before every benchmark block, create the empty symmetric stack (destructive):
+Before the first benchmark block, build the image and create the empty symmetric
+stack (destructive):
 
 ```bash
 python3 scripts/benchmarks/prepare-benchmark-stack.py --confirm-destroy-volumes
+```
+
+Before subsequent blocks in the same final series, recreate the volumes without
+rebuilding LOCAL. Pass the exact LOCAL image ID recorded by the first block in
+`environment.json`:
+
+```bash
+python3 scripts/benchmarks/prepare-benchmark-stack.py --confirm-destroy-volumes \
+  --reuse-local-image-id sha256:...
 ```
 
 The preparation script applies `docker-compose.benchmark.yml`; do not start a

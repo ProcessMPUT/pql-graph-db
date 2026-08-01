@@ -42,7 +42,9 @@ consistent with each other. Use it rather than re-deriving:
   `thesis-report-series.md` (or explicitly diagnostic single-run report) and
   charts into one self-contained HTML file.
 - `benchmarks/prepare-benchmark-stack.py`: explicitly destructive setup for a
-  clean symmetric benchmark stack; builds the current `bootJar`, starts REFERENCE
+  clean symmetric benchmark stack; builds the current `bootJar` once per final
+  series, then accepts only an exact commit-labelled LOCAL image ID for later
+  fresh-volume blocks and isolated storage points; starts REFERENCE
   without fixture seeding through the benchmark Compose resource override, proves
   equal finite system-level memory budgets and zero datastores in both APIs, then
   writes the single-use fresh-volume/image-ID/resource marker consumed by

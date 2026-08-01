@@ -327,8 +327,16 @@ specyfikacją PQL”.
 
 ## 5. Protokół pomiarowy
 
-1. `scripts/benchmarks/prepare-benchmark-stack.py --confirm-destroy-volumes`
-   najpierw buduje `bootJar` z bieżącego źródła, następnie usuwa wolumeny,
+1. Przed pierwszym blokiem serii
+   `scripts/benchmarks/prepare-benchmark-stack.py --confirm-destroy-volumes`
+   buduje `bootJar` z bieżącego źródła i obraz LOCAL oznaczony commitem, a
+   następnie usuwa wolumeny. Przed kolejnymi blokami ten sam skrypt jest
+   wywoływany z `--reuse-local-image-id sha256:...`, gdzie wartością jest
+   dokładne image ID z pierwszego `environment.json`. Tryb ponownego użycia
+   odmawia startu, jeżeli tag wskazuje inny obraz, etykieta rewizji obrazu nie
+   odpowiada bieżącemu commitowi albo drzewo Git jest brudne. Dzięki temu każdy
+   blok ma świeże wolumeny, lecz żaden nie dostaje przypadkowo innego,
+   niereprodukowalnego bitowo obrazu z kolejnego builda. Skrypt następnie
    uruchamia wyłącznie mierzone usługi z nakładką
    `docker-compose.benchmark.yml`, weryfikuje równy skończony budżet pamięci bez
    swapu i tworzy konto REFERENCE
@@ -397,7 +405,7 @@ specyfikacją PQL”.
    Po sprzątaniu runner ponownie odczytuje stan wszystkich kontenerów i obecność
    procesów JVM; działający PID 1 lub wadliwy healthcheck nie zastępuje tej kontroli.
 8. **Finalny eksperyment zawiera co najmniej trzy ważne bloki FULL** na tej samej
-   wersji. Bieżący kontrakt zapisu ma `benchmarkProtocolVersion=9`; wersje poniżej
+   wersji. Bieżący kontrakt zapisu ma `benchmarkProtocolVersion=10`; wersje poniżej
    2 nie mają pełnej kontroli semantycznej, a wersja 2 kumuluje wszystkie datasety
    w pamięci baz i może mierzyć presję wspólnej VM zamiast bieżącego workloadu.
    Wersja 3 izoluje datasety, lecz nie kompensuje wychłodzenia przez pomiar `idle`;
@@ -408,7 +416,9 @@ specyfikacją PQL”.
    równy budżet pamięci całych aplikacji, końcową kontrolę OOM/JVM i 200 rund
    globalnej rozgrzewki, a wersja 8 podnosi limit pamięci pojedynczej transakcji
    Neo4j z 256 do 512 MiB bez zmiany budżetu cgroup całej aplikacji LOCAL;
-   wersja 9 zwiększa aktywację po 60-sekundowym oknie idle z 10 do 200 rund.
+   wersja 9 zwiększa aktywację po 60-sekundowym oknie idle z 10 do 200 rund, a
+   wersja 10 buduje LOCAL raz na serię i przy każdym kolejnym świeżym stacku
+   wymaga ponownego użycia dokładnie tego samego obrazu.
    Żadna z wcześniejszych wersji nie jest finalnym dowodem. `compare-runs.py` waliduje kompletność macierzy, 30 repetycji,
    roundtrip, sprzątanie, pamięć, środowisko, fingerprint i trzy wymagane kolejności. Skrypt
    nie wybiera „reprezentatywnego wyniku”: wszystkie bloki są jednostkami dowodu.

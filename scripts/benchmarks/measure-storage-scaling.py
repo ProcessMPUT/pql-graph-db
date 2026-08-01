@@ -130,12 +130,13 @@ def anchor_provenance(datasets_dir: Path) -> tuple[dict[str, str], str]:
     return image_ids, git_commit
 
 
-def prepare_clean_stack(args: argparse.Namespace) -> dict[str, object]:
+def prepare_clean_stack(args: argparse.Namespace, expected_local_image_id: str) -> dict[str, object]:
     script = Path(__file__).with_name("prepare-benchmark-stack.py")
     command = [
         sys.executable, str(script), "--confirm-destroy-volumes",
         "--local-api", args.local_api, "--reference-api", args.reference_api,
         "--processm-login", args.processm_login, "--processm-password", args.processm_password,
+        "--reuse-local-image-id", expected_local_image_id,
     ]
     code, output = run_capture(command, timeout=1_800.0)
     if code != 0:
@@ -299,7 +300,7 @@ def main() -> int:
         xes = datasets_dir / f"{name}.xes"
         gz = datasets_dir / f"{name}.xes.gz"
         info(f"[{index}/{len(names)}] {name}: preparing isolated stack")
-        proof = prepare_clean_stack(args)
+        proof = prepare_clean_stack(args, expected_image_ids["processm-interpreter"])
         if proof.get("gitCommit") != expected_git_commit:
             raise ScriptError(
                 f"isolated stack Git commit differs from the anchor run: "

@@ -10,6 +10,14 @@
 # Build the jar first: ./gradlew bootJar
 FROM eclipse-temurin:25-jre
 
+# The benchmark setup verifies this revision before it reuses an already-built
+# image for another fresh-volume block.  Rebuilding the same source can still
+# produce a different image ID (for example because package metadata changes),
+# so final replicate series reuse one exact image rather than merely trusting
+# the tag or source commit.
+ARG BENCHMARK_SOURCE_COMMIT=unknown
+LABEL org.opencontainers.image.revision="${BENCHMARK_SOURCE_COMMIT}"
+
 # The JRE image ships neither wget nor curl; the compose healthcheck needs one to
 # probe a real endpoint rather than merely checking that the port is open.
 RUN apt-get update \

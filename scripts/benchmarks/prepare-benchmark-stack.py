@@ -40,6 +40,8 @@ DEFAULT_LOGIN = "admin@example.com"
 DEFAULT_PASSWORD = "Admin1234"
 FRESH_STACK_MARKER = Path("tmp/benchmark-stack-ready.json")
 BENCHMARK_COMPOSE_FILE = "docker-compose.benchmark.yml"
+LOCAL_IMAGE = "processm-interpreter:local"
+SOURCE_REVISION_LABEL = "org.opencontainers.image.revision"
 MAX_MEASURED_SHARE_OF_DOCKER_MEMORY = 0.85
 MEASURED_CONTAINERS = {
     "processm-interpreter": "processm-interpreter",
@@ -56,6 +58,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--processm-login", default=DEFAULT_LOGIN)
     parser.add_argument("--processm-password", default=DEFAULT_PASSWORD)
     parser.add_argument("--health-timeout", type=float, default=300.0)
+    parser.add_argument(
+        "--reuse-local-image-id",
+        metavar="SHA256",
+        help=(
+            "do not rebuild LOCAL; require the named processm-interpreter:local image ID "
+            "and its embedded source revision to match the clean current checkout"
+        ),
+    )
     return parser.parse_args()
 
 
@@ -135,6 +145,66 @@ def build_local_jar() -> None:
         raise ScriptError(f"Gradle bootJar failed before stack destruction:\n{output.strip()}")
 
 
+def git_provenance() -> str:
+    code, commit = run_capture(["git", "rev-parse", "HEAD"], timeout=30.0)
+    if code != 0 or not commit.strip():
+        raise ScriptError("cannot resolve the Git commit for stack preparation")
+    status_code, status = run_capture(["git", "status", "--porcelain"], timeout=30.0)
+    if status_code != 0:
+        raise ScriptError("cannot verify that the Git worktree is clean")
+    if status.strip():
+        raise ScriptError(
+            "benchmark stack preparation requires a clean Git worktree; "
+            "commit the benchmark version on the side branch first"
+        )
+    return commit.strip()
+
+
+def local_image_provenance() -> tuple[str, str]:
+    code, output = run_capture(["docker", "image", "inspect", LOCAL_IMAGE], timeout=30.0)
+    if code != 0:
+        raise ScriptError(f"cannot inspect LOCAL image {LOCAL_IMAGE}: {output.strip()}")
+    try:
+        rows = json.loads(output)
+        image = rows[0]
+        image_id = str(image["Id"])
+        labels = image.get("Config", {}).get("Labels") or {}
+        revision = str(labels.get(SOURCE_REVISION_LABEL, ""))
+    except (json.JSONDecodeError, IndexError, KeyError, TypeError) as error:
+        raise ScriptError(f"malformed Docker inspection for {LOCAL_IMAGE}: {error}") from error
+    if not image_id.startswith("sha256:"):
+        raise ScriptError(f"LOCAL image has no exact sha256 ID: {image_id or '<missing>'}")
+    if not revision or revision == "unknown":
+        raise ScriptError(f"LOCAL image has no usable {SOURCE_REVISION_LABEL} label")
+    return image_id, revision
+
+
+def prepare_local_image(commit: str, reuse_image_id: str | None) -> tuple[str, str]:
+    if reuse_image_id:
+        if not reuse_image_id.startswith("sha256:"):
+            raise ScriptError("--reuse-local-image-id must be an exact sha256:... image ID")
+        image_id, revision = local_image_provenance()
+        if image_id != reuse_image_id:
+            raise ScriptError(
+                f"LOCAL image ID differs from requested reuse image: expected {reuse_image_id}, got {image_id}"
+            )
+        if revision != commit:
+            raise ScriptError(
+                f"LOCAL image source revision differs from current Git commit: expected {commit}, got {revision}"
+            )
+        return image_id, "reused"
+
+    info("Building the LOCAL executable JAR from the current source...")
+    build_local_jar()
+    compose("build", "--build-arg", f"BENCHMARK_SOURCE_COMMIT={commit}", "app")
+    image_id, revision = local_image_provenance()
+    if revision != commit:
+        raise ScriptError(
+            f"new LOCAL image source revision differs from current Git commit: expected {commit}, got {revision}"
+        )
+    return image_id, "built"
+
+
 def container_image_ids() -> dict[str, str]:
     image_ids: dict[str, str] = {}
     for component, container in MEASURED_CONTAINERS.items():
@@ -205,12 +275,15 @@ def main() -> int:
     marker = root / FRESH_STACK_MARKER
     # A failed preparation must never leave a proof from an older stack usable.
     marker.unlink(missing_ok=True)
-    info("Building the LOCAL executable JAR from the current source...")
-    build_local_jar()
+    git_commit = git_provenance()
+    expected_local_image_id, local_image_mode = prepare_local_image(
+        git_commit,
+        args.reuse_local_image_id,
+    )
     compose("down", "-v", "--remove-orphans")
     # Naming the services is deliberate: ordinary `docker compose up` also starts
     # processm-init, whose compatibility fixtures would seed only REFERENCE.
-    compose("up", "-d", "--build", "neo4j", "processm", "app")
+    compose("up", "-d", "--no-build", "neo4j", "processm", "app")
     compose(
         "run", "--rm", "-e", "PROCESSM_SEED_DATASETS=false",
         "processm-init",
@@ -220,9 +293,11 @@ def main() -> int:
     assert_empty_datastores(args)
     resource_budget = assert_symmetric_resource_budget()
     image_ids = container_image_ids()
-    git_code, git_commit = run_capture(["git", "rev-parse", "HEAD"], timeout=30.0)
-    if git_code != 0 or not git_commit.strip():
-        raise ScriptError("cannot record the Git commit for the fresh-stack marker")
+    if image_ids["processm-interpreter"] != expected_local_image_id:
+        raise ScriptError(
+            "running LOCAL container does not use the image verified before volume destruction: "
+            f"expected {expected_local_image_id}, got {image_ids['processm-interpreter']}"
+        )
     marker.parent.mkdir(parents=True, exist_ok=True)
     marker.write_text(
         json.dumps(
@@ -233,8 +308,10 @@ def main() -> int:
                 "freshVolumes": True,
                 "localDatastoreCount": 0,
                 "referenceDatastoreCount": 0,
-                "gitCommit": git_commit.strip(),
+                "gitCommit": git_commit,
                 "imageIds": image_ids,
+                "localImageMode": local_image_mode,
+                "localImageSourceRevision": git_commit,
                 "resourceBudget": resource_budget,
                 "command": "docker compose -f docker-compose.yml -f "
                 f"{BENCHMARK_COMPOSE_FILE} down -v --remove-orphans",
