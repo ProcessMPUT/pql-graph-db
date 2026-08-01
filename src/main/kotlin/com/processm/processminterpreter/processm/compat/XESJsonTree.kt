@@ -99,7 +99,16 @@ internal object XesJsonTreeReader {
 private fun normalizeMetadataValue(value: Any?): String =
     when (value) {
         null -> "null"
-        is List<*> -> value.map(::normalizeMetadataValue).sorted().joinToString(prefix = "[", postfix = "]")
+        // XML-to-JSON serializers use an object for one repeated XES element and
+        // an array for many. The container shape carries no XES semantics, so a
+        // singleton must compare like the object it contains. This applies at
+        // every metadata depth (classifier/extension/global and attributes nested
+        // in a global declaration).
+        is List<*> -> if (value.size == 1) {
+            normalizeMetadataValue(value.single())
+        } else {
+            value.map(::normalizeMetadataValue).sorted().joinToString(prefix = "[", postfix = "]")
+        }
         is Map<*, *> -> value.stringKeyMap()
             .entries
             .sortedBy { it.key }

@@ -19,6 +19,8 @@ import java.util.UUID
  *
  * Rules:
  * - Order-independent where the data gives us a stable key.
+ * - A single repeated XES element represented as an object or a one-element JSON
+ *   array is equivalent (the ProcessM XES-JSON single-or-array convention).
  * - `identity:id` must be present on the same side and with the same XES type,
  *   but its UUID value is ignored because ProcessM may assign unrelated ids.
  * - Ignored log/trace metadata is limited to the explicit key sets below.

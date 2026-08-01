@@ -549,6 +549,22 @@ class XESJsonComparatorTest {
     }
 
     @Test
+    fun `singleton structural metadata object and array are equivalent`() {
+        val classifier =
+            mapOf(
+                "@name" to "Activity",
+                "@scope" to "event",
+                "@keys" to "concept:name",
+            )
+        val local = listOf(mapOf("log" to mapOf("classifier" to listOf(classifier))))
+        val remote = listOf(mapOf("log" to mapOf("classifier" to classifier)))
+
+        val result = XESJsonComparator.compare(local, remote)
+
+        assertTrue(result.match, result.differences.joinToString("\n"))
+    }
+
+    @Test
     fun `global attribute metadata is compared deeply`() {
         val local =
             listOf(
