@@ -169,9 +169,9 @@ def make_run(root: Path, name: str, order: str, seed: int = RANDOM_SEED) -> Path
         )
     }
     environment = {
-        "benchmarkProtocolVersion": 8,
+        "benchmarkProtocolVersion": 9,
         "profile": "full", "warmups": 3, "repetitions": 30, "globalWarmupRounds": 200,
-        "postIdleWarmupRounds": 10,
+        "postIdleWarmupRounds": 200,
         "postIdleWarmupMode": "fresh-import-query-delete",
         "datasetOrder": order, "datasetOrderSeed": seed,
         "datasetFilter": [], "systemFilter": [], "keepBenchmarkDataStores": False,
@@ -243,7 +243,7 @@ class CompareRunsEndToEndTest(unittest.TestCase):
             runs = [make_run(root, f"run-{order}", order) for order in ("declared", "reversed", "random")]
             environment_path = runs[-1] / "environment.json"
             environment = json.loads(environment_path.read_text(encoding="utf-8"))
-            environment["postIdleWarmupRounds"] = 9
+            environment["postIdleWarmupRounds"] = 199
             environment_path.write_text(json.dumps(environment), encoding="utf-8")
 
             result = subprocess.run(
@@ -251,7 +251,7 @@ class CompareRunsEndToEndTest(unittest.TestCase):
                 text=True, capture_output=True, check=False,
             )
             self.assertNotEqual(0, result.returncode)
-            self.assertIn("runs differ in code, workload, images, Docker budget, or profile", result.stdout + result.stderr)
+            self.assertIn("wymagane co najmniej 200", result.stdout + result.stderr)
 
     def test_series_rejects_oom_killed_reference_even_when_container_is_running(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

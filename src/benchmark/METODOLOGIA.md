@@ -352,7 +352,7 @@ specyfikacją PQL”.
 4. Po rozgrzewce zbierany jest 60-sekundowy baseline pamięci. Okno bezczynności
    celowo wychładza procesy, dlatego bezpośrednio po nim oba systemy przechodzą
    nierejestrowany cykl: utworzenie świeżego datastore'u → import wyrzucanego
-   zbioru 100×10×5 → 10 rund aktywacyjnych → usunięcie datastore'u. Kolejność
+   zbioru 100×10×5 → 200 rund aktywacyjnych → usunięcie datastore'u. Kolejność
    systemów w zapytaniach jest naprzemienna. Sonda pamięci nie ma wtedy aktywnej
    fazy: cykl nie zanieczyszcza ani baseline'u `idle`, ani serii `queries`.
    Datastore globalnej rozgrzewki pozostaje obecny, więc stan tła pamięci przed
@@ -397,7 +397,7 @@ specyfikacją PQL”.
    Po sprzątaniu runner ponownie odczytuje stan wszystkich kontenerów i obecność
    procesów JVM; działający PID 1 lub wadliwy healthcheck nie zastępuje tej kontroli.
 8. **Finalny eksperyment zawiera co najmniej trzy ważne bloki FULL** na tej samej
-   wersji. Bieżący kontrakt zapisu ma `benchmarkProtocolVersion=8`; wersje poniżej
+   wersji. Bieżący kontrakt zapisu ma `benchmarkProtocolVersion=9`; wersje poniżej
    2 nie mają pełnej kontroli semantycznej, a wersja 2 kumuluje wszystkie datasety
    w pamięci baz i może mierzyć presję wspólnej VM zamiast bieżącego workloadu.
    Wersja 3 izoluje datasety, lecz nie kompensuje wychłodzenia przez pomiar `idle`;
@@ -407,7 +407,8 @@ specyfikacją PQL”.
    szerokiej niestabilności Q2 opisaną niżej, wersja 7 wprowadza skończony,
    równy budżet pamięci całych aplikacji, końcową kontrolę OOM/JVM i 200 rund
    globalnej rozgrzewki, a wersja 8 podnosi limit pamięci pojedynczej transakcji
-   Neo4j z 256 do 512 MiB bez zmiany budżetu cgroup całej aplikacji LOCAL.
+   Neo4j z 256 do 512 MiB bez zmiany budżetu cgroup całej aplikacji LOCAL;
+   wersja 9 zwiększa aktywację po 60-sekundowym oknie idle z 10 do 200 rund.
    Żadna z wcześniejszych wersji nie jest finalnym dowodem. `compare-runs.py` waliduje kompletność macierzy, 30 repetycji,
    roundtrip, sprzątanie, pamięć, środowisko, fingerprint i trzy wymagane kolejności. Skrypt
    nie wybiera „reprezentatywnego wyniku”: wszystkie bloki są jednostkami dowodu.
@@ -470,7 +471,13 @@ specyfikacją PQL”.
    (`20260801-162538`) potwierdził brak OOM i obniżył Q3 do ×1,15, lecz jego
    limit transakcji Neo4j 256 MiB przerwał eksport XES zbioru Hospital po
    osiągnięciu 254,5 MiB; v8 podnosi ten sufit do 512 MiB w niezmienionym
-   budżecie LOCAL 3,25 GiB. Wersje v6 i v7 nie są dopuszczane do serii finalnej.
+   budżecie LOCAL 3,25 GiB. Pierwszy kompletny blok v8 (`20260801-170734`)
+   zakończył się technicznie poprawnie, ale po 10 rundach aktywacyjnych nadal
+   wykazał szeroki dryf LOCAL: Q3 ×1,36 (maks. ×1,58), przy czym 13 z 14
+   najgorszych rozrzutów zapytań dotyczyło LOCAL, a pierwszy `trace-100` był
+   systematycznie wolniejszy od identycznych `event-10` i `attr-5`. Protokół v9
+   wykonuje po idle pełne 200 rund; nie rozluźnia progu jakości ×1,25. Wersje
+   v6–v8 nie są dopuszczane do serii finalnej.
    Niezależnie od bramki każdy
    zaakceptowany efekt musi przekroczyć faktycznie zmierzony floor swojej
    metryki, także wtedy, gdy jest on znacznie mniejszy lub większy niż ×1,25.

@@ -28,7 +28,9 @@ enum class BenchmarkProfile(
      * Executions on a freshly imported throw-away dataset immediately after the
      * idle-memory baseline. The complete unrecorded import/query/delete cycle
      * restores an active lifecycle state before the first measured dataset,
-     * without contaminating the idle samples.
+     * without contaminating the idle samples. A complete v8 block showed that
+     * 10 rounds still left the first replicate dataset broadly slower on LOCAL;
+     * FULL v9 therefore repeats the same 200-round workload after the idle window.
      */
     val postIdleWarmupRounds: Int,
 ) {
@@ -44,7 +46,7 @@ enum class BenchmarkProfile(
         repetitions = 30,
         idleBaselineSeconds = 60,
         globalWarmupRounds = 200,
-        postIdleWarmupRounds = 10,
+        postIdleWarmupRounds = 200,
     ),
 
     /**
@@ -57,7 +59,7 @@ enum class BenchmarkProfile(
         repetitions = 30,
         idleBaselineSeconds = 60,
         globalWarmupRounds = 200,
-        postIdleWarmupRounds = 10,
+        postIdleWarmupRounds = 200,
     ),
 }
 
@@ -128,7 +130,7 @@ const val WORKLOAD_FLOOR = "floor"
 const val WORKLOAD_WINDOW = "window"
 const val WORKLOAD_DATA_DEPENDENT = "dataDependent"
 const val BENCHMARK_SERIES_RANDOM_SEED = 20260728L
-const val CURRENT_BENCHMARK_PROTOCOL_VERSION = 8
+const val CURRENT_BENCHMARK_PROTOCOL_VERSION = 9
 const val POST_IDLE_WARMUP_MODE = "fresh-import-query-delete"
 const val REPLICATE_VALIDITY_STATISTIC = "query-spread-q3"
 

@@ -29,8 +29,9 @@ MS = 1000.0
 MIB = 1024.0 * 1024.0
 VALIDITY_GATE_DEFAULT = 1.25
 SERIES_RANDOM_SEED = 20260728
-BENCHMARK_PROTOCOL_VERSION = 8
+BENCHMARK_PROTOCOL_VERSION = 9
 MIN_GLOBAL_WARMUP_ROUNDS = 200
+MIN_POST_IDLE_WARMUP_ROUNDS = 200
 POST_IDLE_WARMUP_MODE = "fresh-import-query-delete"
 REPLICATE_VALIDITY_STATISTIC = "query-spread-q3"
 IMPORT_REPLICATE_LABEL = "IMPORT (Q1)"
@@ -360,8 +361,11 @@ def load_run(path: Path) -> RunData:
             f"globalna rozgrzewka ma {environment.get('globalWarmupRounds')!r} rund, "
             f"wymagane co najmniej {MIN_GLOBAL_WARMUP_ROUNDS}"
         )
-    if int(environment.get("postIdleWarmupRounds") or 0) <= 0:
-        issues.append("brak rozgrzewki aktywacyjnej po pomiarze bezczynności")
+    if int(environment.get("postIdleWarmupRounds") or 0) < MIN_POST_IDLE_WARMUP_ROUNDS:
+        issues.append(
+            f"rozgrzewka po bezczynności ma {environment.get('postIdleWarmupRounds')!r} rund, "
+            f"wymagane co najmniej {MIN_POST_IDLE_WARMUP_ROUNDS}"
+        )
     if environment.get("postIdleWarmupMode") != POST_IDLE_WARMUP_MODE:
         issues.append(f"tryb rozgrzewki po bezczynności inny niż {POST_IDLE_WARMUP_MODE}")
     if nested(environment, "experiment", "replicateValidityStatistic") != REPLICATE_VALIDITY_STATISTIC:
