@@ -76,7 +76,7 @@ Before collecting thesis results:
 METODOLOGIA §5 requires **at least three** valid FULL runs on one clean Git
 commit, with declared/reversed/random dataset order; the random block uses the
 preregistered seed `20260728`. Final evidence uses
-`benchmarkProtocolVersion=7`; versions before 2 have a weaker collection-time
+`benchmarkProtocolVersion=8`; versions before 2 have a weaker collection-time
 parity check, while version 2 also accumulated every dataset in both databases
 and can exhaust a shared Docker VM. Version 3 keeps only one measured dataset
 pair live at a time. Version 4 additionally performs an unrecorded activation
@@ -89,7 +89,9 @@ effect floor. Version 7 uses the benchmark Compose override to assign equal,
 finite no-swap memory budgets to the complete applications, rejects OOM/restart/
 missing-JVM state at the end of a run, and extends the FULL global warm-up to
 200 rounds after a complete v6 block proved that 40 rounds did not reach the
-LOCAL optimization horizon.
+LOCAL optimization horizon. Version 8 raises only Neo4j's transaction-memory
+ceiling from 256 MiB to 512 MiB, within the same complete-application cgroup
+budget, after the former ceiling rejected the Hospital round-trip export.
 Rebuilding a report never upgrades a run's protocol.
 A thesis-grade memory run
 must contain `processm-interpreter`, `processm-neo4j`, and `processm-server`

@@ -169,7 +169,7 @@ def make_run(root: Path, name: str, order: str, seed: int = RANDOM_SEED) -> Path
         )
     }
     environment = {
-        "benchmarkProtocolVersion": 7,
+        "benchmarkProtocolVersion": 8,
         "profile": "full", "warmups": 3, "repetitions": 30, "globalWarmupRounds": 200,
         "postIdleWarmupRounds": 10,
         "postIdleWarmupMode": "fresh-import-query-delete",
