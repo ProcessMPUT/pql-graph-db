@@ -28,7 +28,7 @@ enum class BenchmarkProfile(
     FULL(warmups = 3, repetitions = 30, idleBaselineSeconds = 60, globalWarmupRounds = 40),
 
     /**
-     * Deep size ladder for the Q2 scaling chapter (10^4 … 10^6 events, three decades).
+     * Common-domain size ladder for Q2 diagnostics (10^4 … 2×10^5 events).
      * Run separately from FULL: the thesis workload does not need to pay for it, and
      * the ladder needs the headroom to leave the fixed transport floor behind.
      */
@@ -102,7 +102,7 @@ const val WORKLOAD_FLOOR = "floor"
 const val WORKLOAD_WINDOW = "window"
 const val WORKLOAD_DATA_DEPENDENT = "dataDependent"
 const val BENCHMARK_SERIES_RANDOM_SEED = 20260728L
-const val CURRENT_BENCHMARK_PROTOCOL_VERSION = 2
+const val CURRENT_BENCHMARK_PROTOCOL_VERSION = 3
 
 @JsonIgnoreProperties(ignoreUnknown = true)
 data class BenchmarkQuerySpec(

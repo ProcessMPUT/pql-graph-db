@@ -136,7 +136,7 @@ tasks.register<JavaExec>("runBenchmarkFull") {
 
 tasks.register<JavaExec>("runBenchmarkScaling") {
     group = "benchmark"
-    description = "Runs the deep size ladder (10^4..10^6 events) for the Q2 scaling chapter."
+    description = "Runs the common-domain size ladder (10^4..2*10^5 events) for Q2 diagnostics."
     classpath = benchmarkSourceSet.runtimeClasspath
     mainClass.set("com.processm.processminterpreter.benchmark.BenchmarkRunnerKt")
     args("scaling")

@@ -72,7 +72,7 @@ dyskwalifikuje przebieg:
 
 | Seria | Datasety | Co bada |
 |---|---|---|
-| trace-scaling | 100 / 500 / 2000 / 10 000 / 50 000 trace'ów (10 zdarzeń/trace, 5 atrybutów/zdarzenie) | skalowanie po liczbie trace'ów (Q1, Q2) |
+| trace-scaling | 100 / 500 / 2000 / 10 000 / 20 000 trace'ów (10 zdarzeń/trace, 5 atrybutów/zdarzenie) | skalowanie po liczbie trace'ów (Q1, Q2) |
 | event-scaling | 5 / 10 / 50 / 200 / 1000 zdarzeń/trace (100 trace'ów) | skalowanie po głębokości trace'a |
 | attribute-scaling | 1 / 2 / 5 / 10 / 20 / 50 atrybutów/zdarzenie (100×10) | koszt atrybutów niestandardowych |
 | **shape-scaling** | 1000×10, 500×20, 100×100, 20×500, 10×1000 — **zawsze 10 000 zdarzeń** | kształt logu przy stałej objętości |
@@ -81,6 +81,14 @@ dyskwalifikuje przebieg:
 Syntetyczne datasety generuje `XesDatasetGenerator` (deterministyczny seed —
 identyczne pliki XES dla obu systemów). Profil SMOKE (test dymny) używa
 podzbioru; wyniki do pracy pochodzą wyłącznie z profilu FULL.
+
+Górny punkt osi trace wynosi 20 000, ponieważ oficjalny obraz REFERENCE odrzuca
+plik 50 000×10×5 odpowiedzią HTTP 400 „The file is not a valid XES file” także
+w izolowanej próbie na pustym stosie (`20260801-122052`, bez OOM). Plik przechodzi
+lokalny parser i ma poprawną strukturę XML, ale punkt spoza wspólnej dziedziny
+importu obu aplikacji nie może być użyty do porównania czasu. Ograniczenie jest
+cechą badanego zestawu aplikacja+wersja obrazu, a nie podstawą do przypisania
+REFERENCE czasu zerowego lub do ekstrapolacji wyniku LOCAL.
 
 **Dlaczego seria `shape-scaling`.** Trzy pierwsze serie nie są ortogonalne: każda
 z nich, zmieniając swój parametr, zmienia zarazem łączną objętość danych. Z samych
@@ -99,7 +107,8 @@ celowy pomiar tej samej wielkości trzy razy w różnych pozycjach sekwencji —
 warunek ważności przebiegu w §5.
 
 **Profil SCALING** (`./gradlew runBenchmarkScaling`) jest opcjonalną sondą
-diagnostyczną dla drabiny 10^4…10^6 zdarzeń. Nie zawiera pełnej macierzy FULL ani
+diagnostyczną dla drabiny 10^4…2×10^5 zdarzeń wspieranej przez oba systemy. Nie
+zawiera pełnej macierzy FULL ani
 kontroli replikacyjnej, dlatego jego pojedynczego przebiegu nie wolno łączyć z
 serią FULL ani używać jako samodzielnego dowodu przewagi. Podstawowy raport pracy
 opiera się na trzech kontrbalansowanych przebiegach profilu FULL.
@@ -323,10 +332,15 @@ specyfikacją PQL”.
    dzięki temu baseline i pomiary nie obejmują asymetrycznego kosztu kasowania ani
    ponownego wychłodzenia, ale Q3-pamięć dotyczy jawnie tego rozgrzanego stanu.
 4. Po rozgrzewce zbierany jest 60-sekundowy baseline pamięci. Następnie każdy
-   dataset trafia do osobnego datastore'u w obu systemach. System rozpoczynający
-   import zmienia się co dataset (LOCAL→REFERENCE, potem REFERENCE→LOCAL). Czas Q1
-   obejmuje upload i oczekiwanie na widoczność logu. Przyrosty dysku z tej fazy są
-   diagnostyczne, nie są finalną sondą Q3-dysk. Blok `reversed` odwraca także
+   dataset trafia do osobnego datastore'u w obu systemach. Dla jednego datasetu
+   wykonywany jest cały blok: import obu stron → zapytania → roundtrip LOCAL →
+   usunięcie obu datastore'ów; dopiero potem dopuszczany jest następny dataset.
+   Dzięki temu czas i pamięć zapytania nie zależą od obecności 24 niepowiązanych
+   baz, a oba systemy konkurują o budżet Docker VM tylko z tym samym aktualnym
+   zbiorem. System rozpoczynający import zmienia się co dataset (LOCAL→REFERENCE,
+   potem REFERENCE→LOCAL). Czas Q1 obejmuje upload i oczekiwanie na widoczność
+   logu. Przyrosty dysku z tej fazy są diagnostyczne, nie są finalną sondą
+   Q3-dysk. Blok `reversed` odwraca także
    system rozpoczynający import konkretnego datasetu względem `declared` (dla
    nieparzystej liczby datasetów wymaga to jawnego przesunięcia parzystości).
 5. **Kolejność datasetów jest kontrbalansowana między pełnymi przebiegami:**
@@ -348,13 +362,15 @@ specyfikacją PQL”.
    przerywa przebieg. Liczności odpowiedzi są porównywane w każdej repetycji warm,
    a pełna semantyka XES-JSON — dla ostatniej odpowiedzi warm; mismatch zachowuje
    surowe czasy, ale wyklucza parę z porównania wydajności.
-7. Runner zawsze próbuje usunąć utworzone datastore'y `bench-*`, także po błędzie,
-   i zapisuje wynik sprzątania. Po każdym bloku stack i tak jest odtwarzany od
+7. Runner usuwa parę datastore'ów po zakończeniu każdego datasetu i zawsze próbuje
+   usunąć pozostałe datastore'y `bench-*` także po błędzie. Każda próba trafia do
+   `cleanup-results.csv`. Po każdym pełnym bloku stack i tak jest odtwarzany od
    zera, aby drugi blok nie dziedziczył stron, WAL ani cache danych z pierwszego.
 8. **Finalny eksperyment zawiera co najmniej trzy ważne bloki FULL** na tej samej
-   wersji. Bieżący kontrakt zapisu ma `benchmarkProtocolVersion=2`; brak tego pola
-   oznacza starszy protokół bez pełnej kontroli semantycznej i dyskwalifikuje blok
-   jako finalny dowód. `compare-runs.py` waliduje kompletność macierzy, 30 repetycji,
+   wersji. Bieżący kontrakt zapisu ma `benchmarkProtocolVersion=3`; wersje poniżej
+   2 nie mają pełnej kontroli semantycznej, a wersja 2 kumuluje wszystkie datasety
+   w pamięci baz i może mierzyć presję wspólnej VM zamiast bieżącego workloadu.
+   Żadna z nich nie jest finalnym dowodem. `compare-runs.py` waliduje kompletność macierzy, 30 repetycji,
    roundtrip, sprzątanie, pamięć, środowisko, fingerprint i trzy wymagane kolejności. Skrypt
    nie wybiera „reprezentatywnego wyniku”: wszystkie bloki są jednostkami dowodu.
    Jeden środkowy blok jest wskazywany jedynie jako kotwica dla szczegółowych

@@ -85,7 +85,6 @@ fun main(args: Array<String>) {
     val roundtrips = mutableListOf<RoundtripBenchmarkResult>()
     val cleanup = mutableListOf<DataStoreCleanupResult>()
     val createdDataStores = mutableListOf<CreatedDataStoreHandle>()
-    val importedHandles = mutableListOf<ImportedDatasetHandle>()
     val memorySampler = MemorySampler(memorySources(settings, systems))
     var fatalError: Throwable? = null
 
@@ -102,138 +101,157 @@ fun main(args: Array<String>) {
         println("Sampling idle memory baseline for ${settings.profile.idleBaselineSeconds}s")
         memorySampler.sampleBlocking(MEMORY_PHASE_IDLE, settings.profile.idleBaselineSeconds)
 
-        datasets.forEachIndexed { datasetIndex, dataset ->
-            val importRound = counterbalancedImportRound(datasetIndex, datasets.size, settings.datasetOrder)
-            balancedOrder(systems, importRound).forEach { system ->
-                val client = clients.getValue(system)
-                val dataStoreName = "bench-$runId-${system.name}-${dataset.name}"
-                println("[${system.name}] Creating datastore $dataStoreName")
-                val dataStoreId = runCatching { client.createDataStore(dataStoreName) }
-                    .getOrElse { error ->
-                        imports += ImportBenchmarkResult(
-                            system = system.name,
-                            datasetName = dataset.name,
-                            run = 1,
-                            seconds = 0.0,
-                            status = "ERROR",
-                            dataStoreId = "",
-                            logCount = 0,
-                            details = error.message.orEmpty(),
-                        )
-                        return@forEach
-                    }
-                createdDataStores += CreatedDataStoreHandle(system, dataStoreName, dataStoreId)
-
-                val beforeStorage = storageMeter.measureStable(system.storage)
-                val importResult = runCatching { client.uploadLogAndWait(dataStoreId, dataset.file) }
-                val afterStorage = storageMeter.measureStable(system.storage)
-
-                importResult
-                    .onSuccess { result ->
-                        imports += ImportBenchmarkResult(
-                            system = system.name,
-                            datasetName = dataset.name,
-                            run = 1,
-                            seconds = result.seconds,
-                            status = "OK",
-                            dataStoreId = dataStoreId,
-                            logCount = result.logCount,
-                        )
-                        importedHandles += ImportedDatasetHandle(system, dataset, dataStoreId)
-                    }
-                    .onFailure { error ->
-                        imports += ImportBenchmarkResult(
-                            system = system.name,
-                            datasetName = dataset.name,
-                            run = 1,
-                            seconds = 0.0,
-                            status = "ERROR",
-                            dataStoreId = dataStoreId,
-                            logCount = 0,
-                            details = error.message.orEmpty(),
-                        )
-                    }
-
-                storage += storageResult(system, dataset, beforeStorage, afterStorage)
-            }
-        }
-
-        // Query phase (methodology 5.4): per (dataset, query) pair, one recorded cold
-        // execution per system first, then interleaved warmups, then interleaved
-        // measured repetitions (local, reference, local, reference, ...).
-        memorySampler.setPhase(MEMORY_PHASE_QUERIES)
+        // Protocol v3 isolates the live datastore working set per dataset. Keeping all
+        // 25 pairs resident made the two applications compete for the Docker VM budget
+        // and killed REFERENCE although the failing query itself used a small result
+        // window. Import, query, round-trip and cleanup therefore form one complete
+        // block before the next dataset is admitted. Dataset order is still varied
+        // between FULL runs, so any residual cache/JIT drift remains observable.
         val measuredQueries = config.queries
         var queryPairIndex = 0
-        datasets.forEach { dataset ->
-            val handles = importedHandles
-                .filter { it.dataset.name == dataset.name }
-                .sortedBy { handle -> systems.indexOf(handle.system) }
-            if (handles.isEmpty()) return@forEach
-            measuredQueries.forEach { query ->
-                println("Query ${query.label} on ${dataset.name} [${handles.joinToString(",") { it.system.name }}]")
-                val plan = buildQueryExecutionPlan(
-                    systemCount = handles.size,
-                    warmups = settings.profile.warmups,
-                    repetitions = settings.profile.repetitions,
-                    initialSystemIndex = queryPairIndex % handles.size,
-                )
-                queryPairIndex++
-                val pairSamples = mutableListOf<QueryBenchmarkResult>()
-                val lastWarmBodies = mutableMapOf<String, String>()
-                var pairFailure: QueryBenchmarkResult? = null
-                plan.forEach planStep@{ step ->
-                    if (pairFailure != null) return@planStep
-                    val handle = handles[step.systemIndex]
-                    val client = clients.getValue(handle.system)
-                    when (step.kind) {
-                        QueryStepKind.WARMUP -> client.executeQuery(handle.dataStoreId, query.query)
-                        QueryStepKind.COLD, QueryStepKind.MEASURED -> {
-                            val phase = if (step.kind == QueryStepKind.COLD) QUERY_PHASE_COLD else QUERY_PHASE_WARM
-                            val recorded = recordedQuerySample(client, handle, query.label, query.query, step.run, phase)
-                            pairSamples += recorded.first
-                            if (phase == QUERY_PHASE_WARM && recorded.second != null) {
-                                lastWarmBodies[handle.system.name] = recorded.second!!
+        datasets.forEachIndexed { datasetIndex, dataset ->
+            val datasetStores = mutableListOf<CreatedDataStoreHandle>()
+            val handles = mutableListOf<ImportedDatasetHandle>()
+            try {
+                val importRound = counterbalancedImportRound(datasetIndex, datasets.size, settings.datasetOrder)
+                balancedOrder(systems, importRound).forEach { system ->
+                    val client = clients.getValue(system)
+                    val dataStoreName = "bench-$runId-${system.name}-${dataset.name}"
+                    println("[${system.name}] Creating datastore $dataStoreName")
+                    val dataStoreId = runCatching { client.createDataStore(dataStoreName) }
+                        .getOrElse { error ->
+                            imports += ImportBenchmarkResult(
+                                system = system.name,
+                                datasetName = dataset.name,
+                                run = 1,
+                                seconds = 0.0,
+                                status = "ERROR",
+                                dataStoreId = "",
+                                logCount = 0,
+                                details = error.message.orEmpty(),
+                            )
+                            return@forEach
+                        }
+                    val created = CreatedDataStoreHandle(system, dataStoreName, dataStoreId)
+                    createdDataStores += created
+                    datasetStores += created
+
+                    val beforeStorage = storageMeter.measureStable(system.storage)
+                    val importResult = runCatching { client.uploadLogAndWait(dataStoreId, dataset.file) }
+                    val afterStorage = storageMeter.measureStable(system.storage)
+
+                    importResult
+                        .onSuccess { result ->
+                            imports += ImportBenchmarkResult(
+                                system = system.name,
+                                datasetName = dataset.name,
+                                run = 1,
+                                seconds = result.seconds,
+                                status = "OK",
+                                dataStoreId = dataStoreId,
+                                logCount = result.logCount,
+                            )
+                            handles += ImportedDatasetHandle(system, dataset, dataStoreId)
+                        }
+                        .onFailure { error ->
+                            imports += ImportBenchmarkResult(
+                                system = system.name,
+                                datasetName = dataset.name,
+                                run = 1,
+                                seconds = 0.0,
+                                status = "ERROR",
+                                dataStoreId = dataStoreId,
+                                logCount = 0,
+                                details = error.message.orEmpty(),
+                            )
+                        }
+
+                    storage += storageResult(system, dataset, beforeStorage, afterStorage)
+                }
+
+                require(handles.size == systems.size) {
+                    "Dataset ${dataset.name} imported on ${handles.size}/${systems.size} systems; " +
+                        "see import-results.csv"
+                }
+                handles.sortBy { handle -> systems.indexOf(handle.system) }
+
+                // Per (dataset, query) pair: one recorded cold execution per system,
+                // interleaved warmups, then 30 interleaved measured repetitions.
+                memorySampler.setPhase(MEMORY_PHASE_QUERIES)
+                measuredQueries.forEach { query ->
+                    println("Query ${query.label} on ${dataset.name} [${handles.joinToString(",") { it.system.name }}]")
+                    val plan = buildQueryExecutionPlan(
+                        systemCount = handles.size,
+                        warmups = settings.profile.warmups,
+                        repetitions = settings.profile.repetitions,
+                        initialSystemIndex = queryPairIndex % handles.size,
+                    )
+                    queryPairIndex++
+                    val pairSamples = mutableListOf<QueryBenchmarkResult>()
+                    val lastWarmBodies = mutableMapOf<String, String>()
+                    var pairFailure: QueryBenchmarkResult? = null
+                    plan.forEach planStep@{ step ->
+                        if (pairFailure != null) return@planStep
+                        val handle = handles[step.systemIndex]
+                        val client = clients.getValue(handle.system)
+                        when (step.kind) {
+                            QueryStepKind.WARMUP -> client.executeQuery(handle.dataStoreId, query.query)
+                            QueryStepKind.COLD, QueryStepKind.MEASURED -> {
+                                val phase = if (step.kind == QueryStepKind.COLD) QUERY_PHASE_COLD else QUERY_PHASE_WARM
+                                val recorded = recordedQuerySample(client, handle, query.label, query.query, step.run, phase)
+                                pairSamples += recorded.first
+                                if (phase == QUERY_PHASE_WARM && recorded.second != null) {
+                                    lastWarmBodies[handle.system.name] = recorded.second!!
+                                }
+                                if (recorded.first.status == "ERROR") pairFailure = recorded.first
                             }
-                            if (recorded.first.status == "ERROR") pairFailure = recorded.first
                         }
                     }
+                    queries += applyResponseParity(pairSamples, lastWarmBodies)
+                    pairFailure?.let {
+                        error("Query ${query.label} failed on ${dataset.name}/${it.system}: ${it.details}")
+                    }
                 }
-                queries += applyResponseParity(pairSamples, lastWarmBodies)
-                pairFailure?.let {
-                    error("Query ${query.label} failed on ${dataset.name}/${it.system}: ${it.details}")
+                // Round-trip export is a correctness check, not part of the Q3
+                // query-memory interval.
+                memorySampler.setPhase(null)
+
+                handles
+                    .filter { it.system.name == "local" }
+                    .forEach { handle ->
+                        println("[local] Roundtrip ${handle.dataset.name}")
+                        val detailsPath = outputDirectory.resolve("roundtrip-details").resolve("${handle.dataset.name}.txt")
+                        val result = runCatching {
+                            val exported = clients.getValue(handle.system).exportQueryAsXes(handle.dataStoreId)
+                            CanonicalXesComparator.compareFiles(handle.dataset.file, exported, detailsPath)
+                        }
+                        roundtrips += result.fold(
+                            onSuccess = {
+                                RoundtripBenchmarkResult(
+                                    datasetName = handle.dataset.name,
+                                    status = if (it.matches) "MATCH" else "MISMATCH",
+                                    differencesCount = it.differences.size,
+                                    detailsPath = if (it.matches) "" else detailsPath.relativeToOrSelf(Path.of("")).toString(),
+                                )
+                            },
+                            onFailure = {
+                                RoundtripBenchmarkResult(
+                                    datasetName = handle.dataset.name,
+                                    status = "ERROR",
+                                    differencesCount = 1,
+                                    detailsPath = it.message.orEmpty(),
+                                )
+                            },
+                        )
+                    }
+            } finally {
+                memorySampler.setPhase(null)
+                if (!settings.keepBenchmarkDataStores) {
+                    cleanup += cleanupCreatedDataStores(settings, datasetStores, clients)
+                    createdDataStores.removeAll(datasetStores.toSet())
                 }
             }
         }
-        memorySampler.setPhase(null)
-
-        importedHandles
-            .filter { it.system.name == "local" }
-            .forEach { handle ->
-                println("[local] Roundtrip ${handle.dataset.name}")
-                val detailsPath = outputDirectory.resolve("roundtrip-details").resolve("${handle.dataset.name}.txt")
-                val result = runCatching {
-                    val exported = clients.getValue(handle.system).exportQueryAsXes(handle.dataStoreId)
-                    CanonicalXesComparator.compareFiles(handle.dataset.file, exported, detailsPath)
-                }
-                roundtrips += result.fold(
-                    onSuccess = {
-                        RoundtripBenchmarkResult(
-                            datasetName = handle.dataset.name,
-                            status = if (it.matches) "MATCH" else "MISMATCH",
-                            differencesCount = it.differences.size,
-                            detailsPath = if (it.matches) "" else detailsPath.relativeToOrSelf(Path.of("")).toString(),
-                        )
-                    },
-                    onFailure = {
-                        RoundtripBenchmarkResult(
-                            datasetName = handle.dataset.name,
-                            status = "ERROR",
-                            differencesCount = 1,
-                            detailsPath = it.message.orEmpty(),
-                        )
-                    },
-                )
-            }
     } catch (error: Throwable) {
         fatalError = error
     } finally {
@@ -278,7 +296,8 @@ fun main(args: Array<String>) {
     }
     val strictErrors = imports.count { it.status != "OK" } +
         queries.count { it.status == "ERROR" } +
-        roundtrips.count { it.status == "ERROR" }
+        roundtrips.count { it.status == "ERROR" } +
+        cleanup.count { it.status !in setOf("DELETED", "SKIPPED") }
     if (strictErrors > 0) {
         error("Benchmark finished with $strictErrors infrastructure/runtime error(s). See $outputDirectory")
     }

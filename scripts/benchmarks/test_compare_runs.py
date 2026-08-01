@@ -162,7 +162,7 @@ def make_run(root: Path, name: str, order: str, seed: int = RANDOM_SEED) -> Path
         )
     }
     environment = {
-        "benchmarkProtocolVersion": 2,
+        "benchmarkProtocolVersion": 3,
         "profile": "full", "warmups": 3, "repetitions": 30, "globalWarmupRounds": 40,
         "datasetOrder": order, "datasetOrderSeed": seed,
         "datasetFilter": [], "systemFilter": [], "keepBenchmarkDataStores": False,

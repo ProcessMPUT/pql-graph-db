@@ -76,8 +76,10 @@ Before collecting thesis results:
 METODOLOGIA §5 requires **at least three** valid FULL runs on one clean Git
 commit, with declared/reversed/random dataset order; the random block uses the
 preregistered seed `20260728`. Final evidence uses
-`benchmarkProtocolVersion=2`; a missing field identifies a legacy run whose
-collection-time parity check was weaker, even if its report is rebuilt later.
+`benchmarkProtocolVersion=3`; versions before 2 have a weaker collection-time
+parity check, while version 2 also accumulated every dataset in both databases
+and can exhaust a shared Docker VM. Version 3 keeps only one measured dataset
+pair live at a time. Rebuilding a report never upgrades a run's protocol.
 A thesis-grade memory run
 must contain `processm-interpreter`, `processm-neo4j`, and `processm-server`
 from the same `docker stats` probe plus the per-timestamp aggregates

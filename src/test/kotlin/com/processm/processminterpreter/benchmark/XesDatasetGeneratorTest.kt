@@ -32,4 +32,15 @@ class XesDatasetGeneratorTest {
         assertEquals(12, stats.events)
         assertEquals(60, stats.eventAttributes)
     }
+
+    @Test
+    fun `full trace ladder stays inside the common import domain`() {
+        val traceCounts = BenchmarkConfig.load(BenchmarkProfile.FULL)
+            .datasets
+            .filter { it.series == "trace-scaling" }
+            .map { it.traces }
+
+        assertEquals(listOf(100, 500, 2_000, 10_000, 20_000), traceCounts)
+        assertEquals(3, CURRENT_BENCHMARK_PROTOCOL_VERSION)
+    }
 }

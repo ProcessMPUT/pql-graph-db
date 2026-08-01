@@ -14,7 +14,7 @@
     { "type": "SYNTHETIC", "name": "trace-500", "series": "trace-scaling", "traces": 500, "eventsPerTrace": 10, "attributesPerEvent": 5 },
     { "type": "SYNTHETIC", "name": "trace-2000", "series": "trace-scaling", "traces": 2000, "eventsPerTrace": 10, "attributesPerEvent": 5 },
     { "type": "SYNTHETIC", "name": "trace-10000", "series": "trace-scaling", "traces": 10000, "eventsPerTrace": 10, "attributesPerEvent": 5 },
-    { "type": "SYNTHETIC", "name": "trace-50000", "series": "trace-scaling", "traces": 50000, "eventsPerTrace": 10, "attributesPerEvent": 5 },
+    { "type": "SYNTHETIC", "name": "trace-20000", "series": "trace-scaling", "traces": 20000, "eventsPerTrace": 10, "attributesPerEvent": 5 },
 
     { "type": "SYNTHETIC", "name": "event-5", "series": "event-scaling", "traces": 100, "eventsPerTrace": 5, "attributesPerEvent": 5 },
     { "type": "SYNTHETIC", "name": "event-10", "series": "event-scaling", "traces": 100, "eventsPerTrace": 10, "attributesPerEvent": 5 },
@@ -42,8 +42,8 @@
   ],
   "scaling": [
     { "type": "SYNTHETIC", "name": "trace-1000", "series": "trace-scaling", "traces": 1000, "eventsPerTrace": 10, "attributesPerEvent": 5 },
+    { "type": "SYNTHETIC", "name": "trace-5000", "series": "trace-scaling", "traces": 5000, "eventsPerTrace": 10, "attributesPerEvent": 5 },
     { "type": "SYNTHETIC", "name": "trace-10000", "series": "trace-scaling", "traces": 10000, "eventsPerTrace": 10, "attributesPerEvent": 5 },
-    { "type": "SYNTHETIC", "name": "trace-50000", "series": "trace-scaling", "traces": 50000, "eventsPerTrace": 10, "attributesPerEvent": 5 },
-    { "type": "SYNTHETIC", "name": "trace-100000", "series": "trace-scaling", "traces": 100000, "eventsPerTrace": 10, "attributesPerEvent": 5 }
+    { "type": "SYNTHETIC", "name": "trace-20000", "series": "trace-scaling", "traces": 20000, "eventsPerTrace": 10, "attributesPerEvent": 5 }
   ]
 }
