@@ -44,7 +44,11 @@ services:
       - JAVA_OPTS=-Dprocessm.logs.limit.maxUploadSize=524288000
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "wget --spider -q http://localhost:2080/ 2>/dev/null; [ $? -ne 4 ]"]
+      # The unauthenticated root may legitimately answer with a non-2xx status
+      # (BusyBox wget exit 8), but a refused/reset connection is exit 1.  The old
+      # `!= 4` predicate therefore reported a container with an OOM-killed JVM as
+      # healthy merely because PostgreSQL and PID 1 were still alive.
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:2080/ 2>/dev/null; code=$$?; [ $$code -eq 0 ] || [ $$code -eq 8 ]"]
       interval: 10s
       timeout: 5s
       retries: 30

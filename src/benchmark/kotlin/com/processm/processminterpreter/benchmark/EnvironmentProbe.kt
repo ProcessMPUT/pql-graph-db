@@ -88,14 +88,48 @@ object EnvironmentProbe {
             ?: return mapOf("status" to "unavailable")
         val hostConfig = node.get("HostConfig")
         val config = node.get("Config")
+        val state = node.get("State")
         return mapOf(
             "status" to "ok",
             "image" to config?.get("Image")?.asText(),
             "imageId" to node.get("Image")?.asText(),
             "memoryLimitBytes" to limitOrUnlimited(hostConfig?.get("Memory")),
+            "memorySwapLimitBytes" to limitOrUnlimited(hostConfig?.get("MemorySwap")),
             "nanoCpus" to limitOrUnlimited(hostConfig?.get("NanoCpus")),
             "memoryConfigEnv" to memoryConfigEnv(config?.get("Env")),
+            "running" to state?.get("Running")?.asBoolean(),
+            "oomKilled" to state?.get("OOMKilled")?.asBoolean(),
+            "restartCount" to node.get("RestartCount")?.asLong(),
         )
+    }
+
+    /**
+     * Reject a container that still exists but lost its measured JVM.  The official
+     * REFERENCE image keeps PostgreSQL and PID 1 alive after the Java child is killed,
+     * so Docker's coarse container status alone is insufficient evidence that the
+     * application survived the run.
+     */
+    fun runtimeIssues(
+        environment: Map<String, Any?>,
+        requiredJvmContainers: Collection<String>,
+    ): List<String> {
+        val containers = environment["containers"] as? Map<*, *>
+            ?: return listOf("container environment is unavailable")
+        return requiredJvmContainers.distinct().flatMap { name ->
+            val details = containers[name] as? Map<*, *>
+                ?: return@flatMap listOf("$name: container facts are unavailable")
+            buildList {
+                if (details["status"] != "ok") add("$name: docker inspect failed")
+                if (details["running"] != true) add("$name: container is not running")
+                if (details["oomKilled"] != false) add("$name: OOM kill was observed")
+                if ((details["restartCount"] as? Number)?.toLong() != 0L) {
+                    add("$name: restart count is ${details["restartCount"] ?: "unknown"}")
+                }
+                if (details["effectiveJvmHeap"] in setOf(null, "unavailable")) {
+                    add("$name: measured JVM process is absent")
+                }
+            }
+        }
     }
 
     private fun dockerInfo(): Map<String, Any?> =

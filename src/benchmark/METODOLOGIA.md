@@ -52,12 +52,19 @@ dyskwalifikuje przebieg:
    pamięci obu baz oraz sterty interpretera jest udokumentowana
    w `environment.json` każdego przebiegu.
 
-   **Limity zasobów nie są narzucane** — kontenery współdzielą zasoby hosta,
-   co `environment.json` odnotowuje jako `unlimited` dla każdego z nich.
-   Parytet zapewnia symetryczna topologia i pomiar naprzemienny, a nie sztywne
-   limity; narzucenie ich wymagałoby podziału budżetu między dwa kontenery
-   LOCAL i jeden REFERENCE, co samo w sobie mogłoby zniekształcić wynik
-   (np. zbyt mały page cache jednej z baz).
+   **Pamięć jest limitowana na poziomie całej aplikacji**, nie pojedynczego JVM:
+   `docker-compose.benchmark.yml` przydziela LOCAL łącznie 3328 MiB
+   (interpreter 1280 MiB + Neo4j 2048 MiB) oraz REFERENCE 3328 MiB w jego
+   pojedynczym kontenerze aplikacja+PostgreSQL. `memswap_limit` jest równy
+   `mem_limit`, więc swap nie rozszerza żadnego budżetu. Przy zarejestrowanym
+   budżecie VM 7936 MiB pozostaje 1280 MiB (16,1%) dla systemu VM i Dockera.
+   Jest to jawna decyzja eksperymentalna: LOCAL musi podzielić swój równy budżet
+   między dwie usługi, bo taki jest koszt jego architektury. Wcześniejszy wariant
+   `unlimited` nie był neutralny — trzy JVM reklamowały łącznie ponad 14 GiB sterty
+   w VM 7,75 GiB i pełny blok `20260801-145312` zakończył się ubiciem JVM
+   REFERENCE przez OOM. Każdy przebieg zapisuje faktyczne limity, efektywne sterty,
+   `OOMKilled`, `RestartCount` i obecność procesów JVM; OOM, restart lub brak JVM
+   unieważnia blok.
 5. **Świeży stan dla pomiarów storage.** Finalne pomiary rozmiaru bazy
    wykonywane są na stacku postawionym od zera (`docker compose down -v`),
    żeby uniknąć fragmentacji i pozostałości po wcześniejszych eksperymentach.
@@ -322,7 +329,9 @@ specyfikacją PQL”.
 
 1. `scripts/benchmarks/prepare-benchmark-stack.py --confirm-destroy-volumes`
    najpierw buduje `bootJar` z bieżącego źródła, następnie usuwa wolumeny,
-   uruchamia wyłącznie mierzone usługi i tworzy konto REFERENCE
+   uruchamia wyłącznie mierzone usługi z nakładką
+   `docker-compose.benchmark.yml`, weryfikuje równy skończony budżet pamięci bez
+   swapu i tworzy konto REFERENCE
    **bez** importu fixture'ów kompatybilności. Skrypt oraz runner wymagają, by
    oba API wystawiały zero datastore'ów. Skrypt tworzy jednorazowy marker,
    który runner zużywa i archiwizuje jako `stack-preparation.json`; agregator
@@ -333,7 +342,7 @@ specyfikacją PQL”.
    kontenerów, efektywne ustawienia pamięci, commit i stan dirty Git oraz hash
    konfiguracji datasetów i zapytań. Serię wolno łączyć wyłącznie przy zgodnym
    fingerprintcie, commicie, obrazach i budżecie Docker VM; drzewo musi być czyste.
-3. **Globalna rozgrzewka** (FULL: 40 rund pełnego zestawu zapytań na wyrzucanym
+3. **Globalna rozgrzewka** (FULL: 200 rund pełnego zestawu zapytań na wyrzucanym
    zbiorze 100×10×5) odbywa się przed rejestrowaniem próbek. Kolejność systemów
    zmienia się w każdej rundzie. Błąd importu, zapytania albo semantyczny mismatch
    przerywa przebieg — rozgrzewka nie może ukrywać niesprawnego workloadu.
@@ -385,15 +394,19 @@ specyfikacją PQL”.
    usunąć pozostałe datastore'y `bench-*` także po błędzie. Każda próba trafia do
    `cleanup-results.csv`. Po każdym pełnym bloku stack i tak jest odtwarzany od
    zera, aby drugi blok nie dziedziczył stron, WAL ani cache danych z pierwszego.
+   Po sprzątaniu runner ponownie odczytuje stan wszystkich kontenerów i obecność
+   procesów JVM; działający PID 1 lub wadliwy healthcheck nie zastępuje tej kontroli.
 8. **Finalny eksperyment zawiera co najmniej trzy ważne bloki FULL** na tej samej
-   wersji. Bieżący kontrakt zapisu ma `benchmarkProtocolVersion=6`; wersje poniżej
+   wersji. Bieżący kontrakt zapisu ma `benchmarkProtocolVersion=7`; wersje poniżej
    2 nie mają pełnej kontroli semantycznej, a wersja 2 kumuluje wszystkie datasety
    w pamięci baz i może mierzyć presję wspólnej VM zamiast bieżącego workloadu.
    Wersja 3 izoluje datasety, lecz nie kompensuje wychłodzenia przez pomiar `idle`;
    wersja 4 aktywuje tylko zapytania na datastore utworzonym przed baseline'em,
    pozostawiając pierwszy świeży import w pozycji wyjątkowej; wersja 5 dodaje
-   pełny cykl świeżego importu i kasowania, a wersja 6 precyzuje odporną bramkę
-   szerokiej niestabilności Q2 opisaną niżej.
+   pełny cykl świeżego importu i kasowania, wersja 6 precyzuje odporną bramkę
+   szerokiej niestabilności Q2 opisaną niżej, a wersja 7 wprowadza skończony,
+   równy budżet pamięci całych aplikacji, końcową kontrolę OOM/JVM i 200 rund
+   globalnej rozgrzewki.
    Żadna z wcześniejszych wersji nie jest finalnym dowodem. `compare-runs.py` waliduje kompletność macierzy, 30 repetycji,
    roundtrip, sprzątanie, pamięć, środowisko, fingerprint i trzy wymagane kolejności. Skrypt
    nie wybiera „reprezentatywnego wyniku”: wszystkie bloki są jednostkami dowodu.
@@ -443,9 +456,17 @@ specyfikacją PQL”.
    całego bloku i per-zapytaniowego flooru liczyłoby ten sam lokalny problem
    podwójnie. Górny kwartyl odrzuca **szeroki** dryf protokołu, a maksimum nadal
    konserwatywnie ogranicza wniosek o konkretnym zapytaniu. W diagnostyce przed
-   serią finalną protokół v4 dawał Q3 ×1,26 (max ×1,40), natomiast dopiero pełny
+   serią finalną protokół v4 dawał Q3 ×1,26 (max ×1,40), natomiast pełny
    cykl aktywacyjny v5 obniżył Q3 do ×1,20 (max ×1,39); brak globalnej rozgrzewki
-   dawał maksimum do ×2,37 (Q2) i ×10,43 (Q1). Niezależnie od bramki każdy
+   dawał maksimum do ×2,37 (Q2) i ×10,43 (Q1). Były to jednak diagnostyki
+   zawierające wyłącznie trzy sąsiadujące replikaty. Pierwszy kompletny blok v6
+   (`20260801-145312`) wykazał, że 40 rund nadal nie obejmuje horyzontu pełnej
+   sekwencji: Q3 wyniosło ×1,57, a dla LOCAL mediana ilorazów 14 zapytań
+   `trace-100/event-10` wyniosła ×1,404 i `trace-100/attr-5` ×1,555, podczas gdy
+   późniejsze `event-10/attr-5` miało ×1,118 (maks. ×1,234). Ten sam blok ujawnił
+   OOM JVM REFERENCE po ostatnim mierzonym datasetcie. Z tego powodu v7 zwiększa
+   rozgrzewkę i wymusza budżety/stan runtime; v6 nie jest dopuszczany do serii
+   finalnej. Niezależnie od bramki każdy
    zaakceptowany efekt musi przekroczyć faktycznie zmierzony floor swojej
    metryki, także wtedy, gdy jest on znacznie mniejszy lub większy niż ×1,25.
 

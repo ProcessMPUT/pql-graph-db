@@ -276,6 +276,9 @@ fun main(args: Array<String>) {
     }
 
     val querySummaries = QueryStatistics.summarize(queries)
+    val measuredContainers = memoryContainers(settings, systems)
+    val environmentDetails = EnvironmentProbe.collect(measuredContainers)
+    val runtimeIssues = EnvironmentProbe.runtimeIssues(environmentDetails, measuredContainers)
     BenchmarkResultsWriter(outputDirectory).write(
         settings = settings,
         datasets = datasets,
@@ -287,7 +290,7 @@ fun main(args: Array<String>) {
         cleanup = cleanup,
         memorySamples = memorySampler.samples(),
         memorySummaries = memorySampler.summaries(),
-        environmentDetails = EnvironmentProbe.collect(memoryContainers(settings, systems)),
+        environmentDetails = environmentDetails,
         querySpecs = config.queries,
     )
     // Thesis artifacts (METODOLOGIA §6): generated at the end of every run from the
@@ -310,10 +313,12 @@ fun main(args: Array<String>) {
     if (mismatches > 0) {
         println("WARNING: $mismatches query sample(s) invalidated by response MISMATCH. See query-results.csv")
     }
+    runtimeIssues.forEach { println("ERROR: benchmark runtime state: $it") }
     val strictErrors = imports.count { it.status != "OK" } +
         queries.count { it.status == "ERROR" } +
         roundtrips.count { it.status == "ERROR" } +
-        cleanup.count { it.status !in setOf("DELETED", "SKIPPED") }
+        cleanup.count { it.status !in setOf("DELETED", "SKIPPED") } +
+        runtimeIssues.size
     if (strictErrors > 0) {
         error("Benchmark finished with $strictErrors infrastructure/runtime error(s). See $outputDirectory")
     }
@@ -343,12 +348,11 @@ private fun consumeFreshStackProof(outputDirectory: Path) {
  * against it repeatedly, recording nothing.
  *
  * Why this exists: `trace-100`, `event-10` and `attr-5` are the same 100×10×5
- * experiment under three names, and in the pre-fix runs their medians differed by up
- * to ×2,4 on LOCAL, monotonically decreasing with position in the sequence (import:
- * ×10,4). Three warm-ups per query cannot fix that — the warm-up horizon is the run,
- * not the query. Failing to pay it here makes whichever dataset is measured first
- * look slow, and the effect is larger for LOCAL (interpreter JVM + Neo4j JVM) than
- * for the single-JVM REFERENCE.
+ * experiment under three names, and complete diagnostic runs show their medians
+ * broadly decreasing with position. Three warm-ups per query cannot fix that — the
+ * warm-up horizon is the run, not the query. Failing to pay it here makes whichever
+ * dataset is measured first look slow, and the effect is larger for LOCAL
+ * (interpreter JVM + Neo4j JVM) than for the combined REFERENCE container.
  *
  * The dataset deliberately has the same shape as the replicate group, so the state it
  * warms is the state the first measured dataset will need.

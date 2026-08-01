@@ -43,8 +43,10 @@ consistent with each other. Use it rather than re-deriving:
   charts into one self-contained HTML file.
 - `benchmarks/prepare-benchmark-stack.py`: explicitly destructive setup for a
   clean symmetric benchmark stack; builds the current `bootJar`, starts REFERENCE
-  without fixture seeding and proves that both APIs expose zero datastores, then
-  writes the single-use fresh-volume/image-ID marker consumed by `BenchmarkRunner`.
+  without fixture seeding through the benchmark Compose resource override, proves
+  equal finite system-level memory budgets and zero datastores in both APIs, then
+  writes the single-use fresh-volume/image-ID/resource marker consumed by
+  `BenchmarkRunner`.
 - `benchmarks/compare-runs.py`: validates at least three counterbalanced FULL
   runs and estimates conclusions from all blocks. The anchor run is only the
   output location for `repeatability.*`, `series-*.csv`, the combined report,

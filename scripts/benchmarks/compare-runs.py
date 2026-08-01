@@ -29,7 +29,8 @@ MS = 1000.0
 MIB = 1024.0 * 1024.0
 VALIDITY_GATE_DEFAULT = 1.25
 SERIES_RANDOM_SEED = 20260728
-BENCHMARK_PROTOCOL_VERSION = 6
+BENCHMARK_PROTOCOL_VERSION = 7
+MIN_GLOBAL_WARMUP_ROUNDS = 200
 POST_IDLE_WARMUP_MODE = "fresh-import-query-delete"
 REPLICATE_VALIDITY_STATISTIC = "query-spread-q3"
 IMPORT_REPLICATE_LABEL = "IMPORT (Q1)"
@@ -300,7 +301,10 @@ class RunData:
         container_resources = {
             name: {
                 key: data.get(key)
-                for key in ("memoryLimitBytes", "nanoCpus", "memoryConfigEnv", "effectiveJvmHeap")
+                for key in (
+                    "memoryLimitBytes", "memorySwapLimitBytes", "nanoCpus",
+                    "memoryConfigEnv", "effectiveJvmHeap",
+                )
             }
             for name, data in containers.items()
             if isinstance(data, dict)
@@ -351,8 +355,11 @@ def load_run(path: Path) -> RunData:
             f"wersja protokołu {environment.get('benchmarkProtocolVersion')!r}, "
             f"wymagana {BENCHMARK_PROTOCOL_VERSION}"
         )
-    if int(environment.get("globalWarmupRounds") or 0) <= 0:
-        issues.append("brak globalnej rozgrzewki")
+    if int(environment.get("globalWarmupRounds") or 0) < MIN_GLOBAL_WARMUP_ROUNDS:
+        issues.append(
+            f"globalna rozgrzewka ma {environment.get('globalWarmupRounds')!r} rund, "
+            f"wymagane co najmniej {MIN_GLOBAL_WARMUP_ROUNDS}"
+        )
     if int(environment.get("postIdleWarmupRounds") or 0) <= 0:
         issues.append("brak rozgrzewki aktywacyjnej po pomiarze bezczynności")
     if environment.get("postIdleWarmupMode") != POST_IDLE_WARMUP_MODE:
@@ -399,6 +406,32 @@ def load_run(path: Path) -> RunData:
         data = containers.get(component) if isinstance(containers, dict) else None
         if not isinstance(data, dict) or not data.get("imageId"):
             issues.append(f"brak dokładnego imageId kontenera {component}")
+            continue
+        if data.get("running") is not True:
+            issues.append(f"kontener {component} nie działał na końcu przebiegu")
+        if data.get("oomKilled") is not False:
+            issues.append(f"kontener {component} odnotował OOM kill")
+        if data.get("restartCount") != 0:
+            issues.append(f"kontener {component} miał restartCount={data.get('restartCount')!r}")
+        if data.get("effectiveJvmHeap") in (None, "unavailable"):
+            issues.append(f"brak procesu JVM na końcu przebiegu w {component}")
+        memory_limit = data.get("memoryLimitBytes")
+        memory_swap = data.get("memorySwapLimitBytes")
+        if not isinstance(memory_limit, int) or memory_limit <= 0:
+            issues.append(f"kontener {component} nie ma skończonego limitu pamięci")
+        elif memory_swap != memory_limit:
+            issues.append(f"kontener {component} nie ma wyłączonego swapu w budżecie benchmarku")
+
+    if isinstance(containers, dict):
+        local_app = nested(containers, "processm-interpreter", "memoryLimitBytes")
+        local_db = nested(containers, "processm-neo4j", "memoryLimitBytes")
+        reference = nested(containers, "processm-server", "memoryLimitBytes")
+        if all(isinstance(value, int) for value in (local_app, local_db, reference)):
+            if local_app + local_db != reference:
+                issues.append(
+                    f"asymetryczny budżet pamięci: LOCAL={local_app + local_db} B, "
+                    f"REFERENCE={reference} B"
+                )
 
     memory_rows = read_csv(path / "memory-results.csv")
     components = {row.get("component", "") for row in memory_rows}

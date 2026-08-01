@@ -19,8 +19,9 @@ enum class BenchmarkProfile(
      *
      * Three warm-ups *per query* are not enough: the replicate datasets show that
      * the JVM's warm-up horizon spans the whole run (the same 100×10×5 dataset
-     * measured 1st, 6th and 10th in the sequence differed by up to ×2,4 on LOCAL).
-     * This phase pays that cost before any number is recorded.
+     * measured at separated positions differed broadly on LOCAL). A complete v6
+     * block still had Q3 ×1.57 after 40 rounds; FULL v7 therefore pays 200 rounds
+     * before any number is recorded.
      */
     val globalWarmupRounds: Int,
     /**
@@ -42,7 +43,7 @@ enum class BenchmarkProfile(
         warmups = 3,
         repetitions = 30,
         idleBaselineSeconds = 60,
-        globalWarmupRounds = 40,
+        globalWarmupRounds = 200,
         postIdleWarmupRounds = 10,
     ),
 
@@ -55,7 +56,7 @@ enum class BenchmarkProfile(
         warmups = 3,
         repetitions = 30,
         idleBaselineSeconds = 60,
-        globalWarmupRounds = 40,
+        globalWarmupRounds = 200,
         postIdleWarmupRounds = 10,
     ),
 }
@@ -127,7 +128,7 @@ const val WORKLOAD_FLOOR = "floor"
 const val WORKLOAD_WINDOW = "window"
 const val WORKLOAD_DATA_DEPENDENT = "dataDependent"
 const val BENCHMARK_SERIES_RANDOM_SEED = 20260728L
-const val CURRENT_BENCHMARK_PROTOCOL_VERSION = 6
+const val CURRENT_BENCHMARK_PROTOCOL_VERSION = 7
 const val POST_IDLE_WARMUP_MODE = "fresh-import-query-delete"
 const val REPLICATE_VALIDITY_STATISTIC = "query-spread-q3"
 
@@ -184,6 +185,9 @@ data class BenchmarkSettings(
      * matching the lifecycle that precedes later measured datasets. Version 6
      * gates broad run instability with the upper quartile of query/system
      * replicate spreads; each query's maximum spread remains its own effect floor.
+     * Version 7 gives both complete applications the same finite system-level
+     * cgroup budget, rejects OOM/restarted/missing-JVM containers, and extends the
+     * global warm-up beyond the optimization horizon observed in a complete run.
      */
     val protocolVersion: Int = CURRENT_BENCHMARK_PROTOCOL_VERSION,
     /**

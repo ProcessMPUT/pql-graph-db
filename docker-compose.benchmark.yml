@@ -1,0 +1,25 @@
+# Thesis benchmark resource policy.
+#
+# The Docker Desktop VM available on the measurement host exposes 7.75 GiB.  The
+# ordinary development stack deliberately has no cgroup limits, but that lets the
+# three JVMs advertise more than 14 GiB of heap in aggregate and the REFERENCE JVM
+# can be killed by the VM OOM controller near the end of a FULL run.  Thesis runs
+# use equal 3.25 GiB budgets per compared application, with 1.25 GiB left for the
+# Docker VM/kernel at the currently recorded VM size.
+services:
+  neo4j:
+    mem_limit: 2048m
+    memswap_limit: 2048m
+    environment:
+      - NEO4J_server_memory_heap_initial__size=512M
+      - NEO4J_server_memory_heap_max__size=768M
+      - NEO4J_server_memory_pagecache_size=512M
+      - NEO4J_db_memory_transaction_total_max=256M
+
+  app:
+    mem_limit: 1280m
+    memswap_limit: 1280m
+
+  processm:
+    mem_limit: 3328m
+    memswap_limit: 3328m

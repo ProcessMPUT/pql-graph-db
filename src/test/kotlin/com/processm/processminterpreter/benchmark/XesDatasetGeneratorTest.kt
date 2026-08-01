@@ -41,6 +41,6 @@ class XesDatasetGeneratorTest {
             .map { it.traces }
 
         assertEquals(listOf(100, 500, 2_000, 10_000, 20_000), traceCounts)
-        assertEquals(6, CURRENT_BENCHMARK_PROTOCOL_VERSION)
+        assertEquals(7, CURRENT_BENCHMARK_PROTOCOL_VERSION)
     }
 }

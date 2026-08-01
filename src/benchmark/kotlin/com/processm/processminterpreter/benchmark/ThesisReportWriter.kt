@@ -417,6 +417,28 @@ data class ThesisReportModel(
                 ?.joinToString("; ")
                 ?.ifBlank { MISSING }
                 ?: MISSING
+            val resourceLimits = (environment["containers"] as? Map<*, *>)
+                ?.entries
+                ?.sortedBy { it.key.toString() }
+                ?.joinToString("; ") { (name, details) ->
+                    val values = details as? Map<*, *>
+                    val memory = bytes(values?.get("memoryLimitBytes"))
+                    val swap = bytes(values?.get("memorySwapLimitBytes"))
+                    "$name=RAM $memory, RAM+swap $swap"
+                }
+                ?.ifBlank { MISSING }
+                ?: MISSING
+            val runtimeStates = (environment["containers"] as? Map<*, *>)
+                ?.entries
+                ?.sortedBy { it.key.toString() }
+                ?.joinToString("; ") { (name, details) ->
+                    val values = details as? Map<*, *>
+                    "$name=running:${values?.get("running") ?: MISSING}, " +
+                        "oom:${values?.get("oomKilled") ?: MISSING}, " +
+                        "restarts:${values?.get("restartCount") ?: MISSING}"
+                }
+                ?.ifBlank { MISSING }
+                ?: MISSING
 
             return ThesisTable(
                 slug = "srodowisko",
@@ -443,6 +465,8 @@ data class ThesisReportModel(
                     listOf("Commit Git / dirty", "${nested("source", "gitCommit") ?: MISSING} / ${nested("source", "gitDirty") ?: MISSING}"),
                     listOf("Image ID kontenerów", containers),
                     listOf("Efektywne sterty JVM kontenerów", heaps),
+                    listOf("Limity cgroup kontenerów", resourceLimits),
+                    listOf("Stan kontenerów po przebiegu", runtimeStates),
                     listOf("Profil benchmarku", settings.profile.name.lowercase()),
                     listOf("Wersja protokołu benchmarku", settings.protocolVersion.toString()),
                     listOf("Rundy globalnej rozgrzewki (przed pierwszym pomiarem)", settings.globalWarmupRounds.toString()),

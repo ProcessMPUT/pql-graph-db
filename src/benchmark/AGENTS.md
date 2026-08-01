@@ -76,7 +76,7 @@ Before collecting thesis results:
 METODOLOGIA §5 requires **at least three** valid FULL runs on one clean Git
 commit, with declared/reversed/random dataset order; the random block uses the
 preregistered seed `20260728`. Final evidence uses
-`benchmarkProtocolVersion=6`; versions before 2 have a weaker collection-time
+`benchmarkProtocolVersion=7`; versions before 2 have a weaker collection-time
 parity check, while version 2 also accumulated every dataset in both databases
 and can exhaust a shared Docker VM. Version 3 keeps only one measured dataset
 pair live at a time. Version 4 additionally performs an unrecorded activation
@@ -85,7 +85,11 @@ throw-away import, the activation queries, and datastore deletion, so the first
 measured dataset does not uniquely pay any part of the post-idle lifecycle.
 Version 6 gates broad Q2 instability on the upper quartile of query/system
 replicate spreads; the maximum for each query remains that query's practical
-effect floor.
+effect floor. Version 7 uses the benchmark Compose override to assign equal,
+finite no-swap memory budgets to the complete applications, rejects OOM/restart/
+missing-JVM state at the end of a run, and extends the FULL global warm-up to
+200 rounds after a complete v6 block proved that 40 rounds did not reach the
+LOCAL optimization horizon.
 Rebuilding a report never upgrades a run's protocol.
 A thesis-grade memory run
 must contain `processm-interpreter`, `processm-neo4j`, and `processm-server`
@@ -124,6 +128,12 @@ Before every benchmark block, create the empty symmetric stack (destructive):
 ```bash
 python3 scripts/benchmarks/prepare-benchmark-stack.py --confirm-destroy-volumes
 ```
+
+The preparation script applies `docker-compose.benchmark.yml`; do not start a
+thesis block with plain `docker compose up`. It verifies that the LOCAL app plus
+Neo4j cgroup limits equal the single combined REFERENCE limit, that swap is not
+available inside those budgets, and that the measured containers leave explicit
+headroom in the Docker VM.
 
 Run the smoke profile:
 

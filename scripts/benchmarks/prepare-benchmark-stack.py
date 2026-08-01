@@ -39,6 +39,8 @@ DEFAULT_REFERENCE_API = "http://localhost:80/api"
 DEFAULT_LOGIN = "admin@example.com"
 DEFAULT_PASSWORD = "Admin1234"
 FRESH_STACK_MARKER = Path("tmp/benchmark-stack-ready.json")
+BENCHMARK_COMPOSE_FILE = "docker-compose.benchmark.yml"
+MAX_MEASURED_SHARE_OF_DOCKER_MEMORY = 0.85
 MEASURED_CONTAINERS = {
     "processm-interpreter": "processm-interpreter",
     "processm-neo4j": "processm-neo4j",
@@ -58,10 +60,71 @@ def parse_args() -> argparse.Namespace:
 
 
 def compose(*args: str, timeout: float = 1_200.0) -> str:
-    code, output = run_capture(["docker", "compose", *args], timeout=timeout)
+    code, output = run_capture(
+        ["docker", "compose", "-f", "docker-compose.yml", "-f", BENCHMARK_COMPOSE_FILE, *args],
+        timeout=timeout,
+    )
     if code != 0:
         raise ScriptError(f"docker compose {' '.join(args)} failed:\n{output.strip()}")
     return output.strip()
+
+
+def container_memory_limits() -> dict[str, tuple[int, int]]:
+    """Return (RAM, RAM+swap) cgroup limits and reject uninspectable containers."""
+    limits: dict[str, tuple[int, int]] = {}
+    for component, container in MEASURED_CONTAINERS.items():
+        code, output = run_capture(
+            ["docker", "inspect", "--format", "{{.HostConfig.Memory}} {{.HostConfig.MemorySwap}}", container],
+            timeout=30.0,
+        )
+        fields = output.strip().split()
+        if code != 0 or len(fields) != 2 or not all(field.isdigit() for field in fields):
+            raise ScriptError(f"cannot read memory limits for {container}: {output.strip()}")
+        memory, memory_swap = map(int, fields)
+        if memory <= 0 or memory_swap != memory:
+            raise ScriptError(
+                f"{container} must have a finite no-swap benchmark limit; "
+                f"got memory={memory}, memory+swap={memory_swap}"
+            )
+        limits[component] = (memory, memory_swap)
+    return limits
+
+
+def docker_memory_bytes() -> int:
+    code, output = run_capture(["docker", "info", "--format", "{{.MemTotal}}"], timeout=30.0)
+    value = output.strip()
+    if code != 0 or not value.isdigit() or int(value) <= 0:
+        raise ScriptError(f"cannot read Docker memory budget: {output.strip()}")
+    return int(value)
+
+
+def assert_symmetric_resource_budget() -> dict[str, object]:
+    limits = container_memory_limits()
+    local_budget = limits["processm-interpreter"][0] + limits["processm-neo4j"][0]
+    reference_budget = limits["processm-server"][0]
+    if local_budget != reference_budget:
+        raise ScriptError(
+            f"benchmark memory budgets are asymmetric: LOCAL={local_budget} B, "
+            f"REFERENCE={reference_budget} B"
+        )
+    docker_budget = docker_memory_bytes()
+    measured_total = local_budget + reference_budget
+    if measured_total > docker_budget * MAX_MEASURED_SHARE_OF_DOCKER_MEMORY:
+        raise ScriptError(
+            f"measured containers reserve {measured_total / docker_budget:.1%} of Docker memory; "
+            f"maximum is {MAX_MEASURED_SHARE_OF_DOCKER_MEMORY:.0%} so the VM/kernel retains headroom"
+        )
+    return {
+        "policy": "equal-system-cgroup-no-swap",
+        "localBytes": local_budget,
+        "referenceBytes": reference_budget,
+        "dockerBytes": docker_budget,
+        "measuredShare": measured_total / docker_budget,
+        "containerLimits": {
+            component: {"memoryBytes": memory, "memorySwapBytes": memory_swap}
+            for component, (memory, memory_swap) in limits.items()
+        },
+    }
 
 
 def build_local_jar() -> None:
@@ -155,6 +218,7 @@ def main() -> int:
 
     wait_for_json(f"{args.local_api.rstrip('/')}/query/features", args.health_timeout)
     assert_empty_datastores(args)
+    resource_budget = assert_symmetric_resource_budget()
     image_ids = container_image_ids()
     git_code, git_commit = run_capture(["git", "rev-parse", "HEAD"], timeout=30.0)
     if git_code != 0 or not git_commit.strip():
@@ -171,7 +235,9 @@ def main() -> int:
                 "referenceDatastoreCount": 0,
                 "gitCommit": git_commit.strip(),
                 "imageIds": image_ids,
-                "command": "docker compose down -v --remove-orphans",
+                "resourceBudget": resource_budget,
+                "command": "docker compose -f docker-compose.yml -f "
+                f"{BENCHMARK_COMPOSE_FILE} down -v --remove-orphans",
             },
             indent=2,
             sort_keys=True,

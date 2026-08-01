@@ -158,16 +158,19 @@ def make_run(root: Path, name: str, order: str, seed: int = RANDOM_SEED) -> Path
     commit = "a" * 40
     containers = {
         component: {
-            "imageId": f"sha256:{index:064x}", "memoryLimitBytes": 1_000_000_000,
+            "imageId": f"sha256:{index:064x}",
+            "memoryLimitBytes": 1_000_000_000 if component != "processm-server" else 2_000_000_000,
+            "memorySwapLimitBytes": 1_000_000_000 if component != "processm-server" else 2_000_000_000,
             "nanoCpus": 2_000_000_000, "memoryConfigEnv": "fixed", "effectiveJvmHeap": "fixed",
+            "running": True, "oomKilled": False, "restartCount": 0,
         }
         for index, component in enumerate(
             ("processm-interpreter", "processm-neo4j", "processm-server"), start=1,
         )
     }
     environment = {
-        "benchmarkProtocolVersion": 6,
-        "profile": "full", "warmups": 3, "repetitions": 30, "globalWarmupRounds": 40,
+        "benchmarkProtocolVersion": 7,
+        "profile": "full", "warmups": 3, "repetitions": 30, "globalWarmupRounds": 200,
         "postIdleWarmupRounds": 10,
         "postIdleWarmupMode": "fresh-import-query-delete",
         "datasetOrder": order, "datasetOrderSeed": seed,
@@ -249,6 +252,26 @@ class CompareRunsEndToEndTest(unittest.TestCase):
             )
             self.assertNotEqual(0, result.returncode)
             self.assertIn("runs differ in code, workload, images, Docker budget, or profile", result.stdout + result.stderr)
+
+    def test_series_rejects_oom_killed_reference_even_when_container_is_running(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            runs = [make_run(root, f"run-{order}", order) for order in ("declared", "reversed", "random")]
+            environment_path = runs[0] / "environment.json"
+            environment = json.loads(environment_path.read_text(encoding="utf-8"))
+            reference = environment["containers"]["processm-server"]
+            reference["running"] = True
+            reference["oomKilled"] = True
+            reference["effectiveJvmHeap"] = "unavailable"
+            environment_path.write_text(json.dumps(environment), encoding="utf-8")
+
+            result = subprocess.run(
+                [sys.executable, str(SCRIPT), *(str(run) for run in runs), "--out-dir", str(root / "out")],
+                text=True, capture_output=True, check=False,
+            )
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("kontener processm-server odnotował OOM kill", result.stdout + result.stderr)
+            self.assertIn("brak procesu JVM", result.stdout + result.stderr)
 
 
 if __name__ == "__main__":
