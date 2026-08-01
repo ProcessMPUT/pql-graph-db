@@ -18,8 +18,8 @@ RUN apt-get update \
 
 WORKDIR /app
 
-# Only the executable boot jar; the "-plain" artifact is the library jar.
-COPY build/libs/processm-interpreter-*-SNAPSHOT.jar /app/application.jar
+# Exact bootJar output; never match the non-executable `-plain.jar` by accident.
+COPY build/libs/processm-interpreter.jar /app/application.jar
 
 # The heap is sized by the same rule the reference implementation applies to itself
 # (processm.launcher/src/main/docker/docker-start-processm.sh): half of the memory

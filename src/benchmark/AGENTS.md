@@ -24,6 +24,9 @@ fair or reproducible.
 - `BenchmarkResultsWriter.kt` owns CSV, JSON, Markdown, and environment output.
 - `resources/benchmark-datasets.json` defines scaling series and real datasets.
 - `resources/benchmark-queries.json` defines the stable query workload.
+  Its `scalingSeries` field is the predeclared query-axis interpretation
+  contract; response-window class alone is not enough because lower-scope
+  sorting, grouping, or aggregation can happen before a hierarchical limit.
 - `scripts/benchmarks/plot-benchmark-results.py` is the plotting companion,
   even though it lives outside this source set.
 
@@ -38,6 +41,9 @@ runner must exercise both systems through HTTP as an external client would.
    - trace series: vary trace count;
    - event series: vary events per trace;
    - attribute series: vary attributes per event.
+   Interpret a query trend only for a series named in that query's
+   `scalingSeries`; do not infer eligibility from `workload` or from a visually
+   convincing plot after the measurement.
 4. Keep fixed query text, warmup count, repetition count, limits, and response
    materialization rules across both systems.
 5. Do not count dataset generation, authentication, report writing, or cleanup
@@ -67,25 +73,31 @@ Before collecting thesis results:
 - repeat the full experiment more than once and retain every run directory;
 - do not edit or regenerate CSV files manually after a run.
 
-METODOLOGIA §5.6 requires **at least three** valid runs on one code version. A
-run is valid only if `memory-results.csv` carries all three components
-(`processm-neo4j`, `local-jvm`, `processm-server`) — a missing `local-jvm`
-series means the LOCAL side was measured without the application process.
-Pick the representative run and report the run-to-run spread with
-`scripts/benchmarks/compare-runs.py <runA> <runB> <runC>`; it enforces the
-validity check and the selection rule, so neither is done by hand.
+METODOLOGIA §5 requires **at least three** valid FULL runs on one clean Git
+commit, with declared/reversed/random dataset order; the random block uses the
+preregistered seed `20260728`. Final evidence uses
+`benchmarkProtocolVersion=2`; a missing field identifies a legacy run whose
+collection-time parity check was weaker, even if its report is rebuilt later.
+A thesis-grade memory run
+must contain `processm-interpreter`, `processm-neo4j`, and `processm-server`
+from the same `docker stats` probe plus the per-timestamp aggregates
+`local-total` and `reference-total`. The fallback `local-jvm` series is useful
+only for development and invalidates Q3. Combine runs with
+`scripts/benchmarks/compare-runs.py <runA> <runB> <runC>`; all runs are units
+of evidence. Its median-metric anchor is only a presentation location, never a
+replacement for cross-run estimation.
 
 Storage measurements require particular care. Database allocation, checkpoints,
 WAL/transaction logs, page cache, and filesystem allocation granularity can
 distort small deltas. Use a fresh stack for final storage runs and describe the
 measurement method in the thesis.
 
-The expansion-factor probe `scripts/benchmarks/measure-storage-scaling.py` was
-ported from PowerShell to Python so it runs on any host. The measurement method
-itself is unchanged — same container commands, same size sources, same dataset
-order, same CSV columns and number formatting — and METODOLOGIA records the
-change. Runs collected with either version stay comparable; note in the thesis
-which version produced a given run.
+The final expansion-factor probe
+`scripts/benchmarks/measure-storage-scaling.py` recreates the whole stack for
+every dataset and marks rows `measurementMode=isolated-fresh-stack`. Sequential
+legacy files are not comparable and plotting must reject them as final Q3
+evidence. The operation destroys Compose volumes and requires the explicit
+`--confirm-destroy-volumes` flag.
 
 ## Commands
 
@@ -96,6 +108,12 @@ Compile the benchmark source set:
 
 ```bash
 ./gradlew compileBenchmarkKotlin
+```
+
+Before every benchmark block, create the empty symmetric stack (destructive):
+
+```bash
+python3 scripts/benchmarks/prepare-benchmark-stack.py --confirm-destroy-volumes
 ```
 
 Run the smoke profile:
@@ -134,6 +152,21 @@ once before compiling, e.g. `for f in plots/*.svg; do rsvg-convert -f pdf -o
 Generated reports live under `tmp/` (gitignored) — do not commit run outputs;
 only the generator scripts are version-controlled.
 
+After three FULL blocks, validate and combine them before rendering HTML:
+
+```bash
+python3 scripts/benchmarks/compare-runs.py <declared-run> <reversed-run> <random-run>
+# The first command prints <anchor-run>. Attach the isolated Q3 probe there:
+python3 scripts/benchmarks/measure-storage-scaling.py \
+  --datasets-dir <anchor-run>/generated-datasets \
+  --out-csv <anchor-run>/storage-scaling.csv \
+  --confirm-destroy-volumes
+python3 scripts/benchmarks/plot-benchmark-results.py <anchor-run>
+# Refresh the combined report after the base report acquired figures and Q3:
+python3 scripts/benchmarks/compare-runs.py <declared-run> <reversed-run> <random-run>
+python3 scripts/benchmarks/render-report-html.py <anchor-run>
+```
+
 Relevant configuration:
 
 ```text
@@ -165,16 +198,18 @@ Each run must create an immutable directory under
 - `memory-results.csv`
 - `memory-summary.csv`
 - `environment.json`
+- `stack-preparation.json` (single-use proof of fresh Compose volumes and exact measured image IDs)
 - `cleanup-results.csv`
 
 Generated datasets and detailed mismatch files may also be retained when useful.
 Do not commit generated benchmark results unless the task explicitly requests a
 reviewable thesis result snapshot.
 
-Interpret query performance primarily with median and p95. Keep mean, min, max,
-sample count, status, and response size as supporting diagnostics. A speedup is
-valid only when both systems completed the same workload successfully and
-returned semantically compatible data.
+Interpret query performance primarily with median and Q1–Q3. Do not interpret
+p95 below 200 samples; the FULL profile has 30. Keep mean, min, max, sample
+count, status, and response size as supporting diagnostics. A speedup is valid
+only when both systems completed the same workload, returned semantically
+compatible data, and the direction repeats across the valid FULL blocks.
 
 ## Correctness Boundaries
 
@@ -205,6 +240,7 @@ When modifying benchmark code:
 ```bash
 ./gradlew compileKotlin compileTestKotlin compileBenchmarkKotlin
 ./gradlew test --tests 'com.processm.processminterpreter.benchmark.*'
+python3 scripts/benchmarks/prepare-benchmark-stack.py --confirm-destroy-volumes
 ./gradlew runBenchmarkSmoke
 ```
 

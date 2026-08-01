@@ -80,33 +80,40 @@ data class BenchmarkDatasetSpec(
  *
  * Both REST APIs apply default hierarchical limits (`processm.compatibility.default-limits`
  * mirrors ProcessM's own `LogsService.applyLimits()`: 10 logs / 30 traces / 90 events,
- * which also **cap** any explicit `limit`). Every response is therefore bounded, and
- * simply dropping the `limit` clause does not produce an O(n) query. Whether a query
- * scales with the dataset is decided by its semantics, not by its window:
+ * which also **cap** any explicit `limit`). Every response is therefore bounded, but
+ * the work needed before applying a scope's limit need not be: an event `ORDER BY`,
+ * `GROUP BY`, or aggregate can inspect every event of each surviving trace. Scaling
+ * eligibility is consequently declared per dataset series in [scalingSeries], not
+ * inferred from this broad presentation class.
  *
- * - [WORKLOAD_FLOOR] — the smallest possible window. Measures the cost that is present
- *   in every other number: HTTP transport, authentication, parsing, planning. Subtract
- *   it (or read it as the baseline) before attributing anything to the storage engine.
- * - [WORKLOAD_WINDOW] — the engine can satisfy the query from a bounded window and push
- *   the limit down, so the cost is O(window), not O(n). Useful for latency comparison,
- *   **useless for scaling** — a size axis has no causal path to the measured time.
- * - [WORKLOAD_FULL_PASS] — the semantics force a pass over the whole log before the
- *   window can be applied (global aggregates, trace-variant grouping, a predicate that
- *   matches nothing, `like` on an unindexed attribute). These are the only queries whose
- *   scaling figures carry information.
+ * - [WORKLOAD_FLOOR] — the smallest observed response window. It is a descriptive
+ *   low-work reference point, not a causal estimate of transport or planning overhead:
+ *   its execution path need not be the same as the other queries and it must not be
+ *   subtracted from them.
+ * - [WORKLOAD_WINDOW] — the response hierarchy is bounded. This usually makes the
+ *   query a latency workload, but a lower-scope sort/group/aggregate may still make a
+ *   particular scaling series informative.
+ * - [WORKLOAD_DATA_DEPENDENT] — the result depends on proving a property of the
+ *   dataset beyond the returned window (global aggregates, trace-variant grouping,
+ *   or a predicate with no matches). An index may still make one implementation
+ *   nearly flat; [scalingSeries] says which axes form an interpretable experiment.
  */
 const val WORKLOAD_FLOOR = "floor"
 const val WORKLOAD_WINDOW = "window"
-const val WORKLOAD_FULL_PASS = "fullPass"
+const val WORKLOAD_DATA_DEPENDENT = "dataDependent"
+const val BENCHMARK_SERIES_RANDOM_SEED = 20260728L
+const val CURRENT_BENCHMARK_PROTOCOL_VERSION = 2
 
 @JsonIgnoreProperties(ignoreUnknown = true)
 data class BenchmarkQuerySpec(
     val label: String,
     val query: String,
-    /** One of [WORKLOAD_FLOOR], [WORKLOAD_WINDOW], [WORKLOAD_FULL_PASS]. */
+    /** One of [WORKLOAD_FLOOR], [WORKLOAD_WINDOW], [WORKLOAD_DATA_DEPENDENT]. */
     val workload: String = WORKLOAD_WINDOW,
     /** Polish description of the PQL clause under test, used verbatim in figure captions. */
     val clause: String = "",
+    /** Dataset series for which this query's semantics leave a causal path from the varied axis to work. */
+    val scalingSeries: List<String> = emptyList(),
 )
 
 data class BenchmarkSettings(
@@ -139,6 +146,14 @@ data class BenchmarkSettings(
     val datasetOrder: DatasetOrder = DatasetOrder.DECLARED,
     val datasetOrderSeed: Long = 0L,
     /**
+     * Version of the collection-time claims that may be made about a run.
+     *
+     * Version 1 (or an absent field) checked only response counts from the last
+     * warm repetition. Version 2 checks counts in every measured repetition and
+     * strict XES-JSON semantics of the last response.
+     */
+    val protocolVersion: Int = CURRENT_BENCHMARK_PROTOCOL_VERSION,
+    /**
      * Defaults to the profile's value; carried explicitly so replaying an older run
      * reports the rounds that run actually performed (zero, before this phase existed)
      * rather than what the current profile would do.
@@ -159,8 +174,12 @@ data class BenchmarkSettings(
                 keepBenchmarkDataStores = booleanEnv("BENCHMARK_KEEP_DATASTORES", default = false),
                 localAppContainer = env("LOCAL_APP_CONTAINER", "processm-interpreter"),
                 datasetOrder = DatasetOrder.parse(env("BENCHMARK_DATASET_ORDER", DatasetOrder.DECLARED.name)),
-                datasetOrderSeed = env("BENCHMARK_DATASET_ORDER_SEED", "").toLongOrNull()
-                    ?: System.currentTimeMillis(),
+                // Keep the third counterbalancing block reproducible even when the
+                // operator omits the optional environment variable. compare-runs.py
+                // enforces the same preregistered seed for thesis evidence.
+                datasetOrderSeed = env("BENCHMARK_DATASET_ORDER_SEED", BENCHMARK_SERIES_RANDOM_SEED.toString())
+                    .toLongOrNull()
+                    ?: error("BENCHMARK_DATASET_ORDER_SEED must be an integer"),
             )
 
         private fun env(name: String, default: String): String =

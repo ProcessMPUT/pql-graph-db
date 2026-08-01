@@ -140,7 +140,13 @@ class BenchmarkHttpClient(
         // Response-count parsing happens outside the timed interval so Q4 parity
         // bookkeeping does not inflate the measured end-to-end latency.
         val counts = XesJsonCounting.count(body)
-        return TimedQueryResult(seconds = seconds, statusCode = statusCode, responseBytes = bytes, counts = counts)
+        return TimedQueryResult(
+            seconds = seconds,
+            statusCode = statusCode,
+            responseBytes = bytes,
+            counts = counts,
+            body = body,
+        )
     }
 
     fun exportQueryAsXes(dataStoreId: String): ByteArray {
@@ -252,6 +258,8 @@ data class TimedQueryResult(
     val statusCode: Int,
     val responseBytes: Long,
     val counts: XesJsonCounts = XesJsonCounts.EMPTY,
+    /** Raw response retained only long enough to perform untimed semantic parity. */
+    val body: String = "",
 )
 
 data class RemoteDataStore(

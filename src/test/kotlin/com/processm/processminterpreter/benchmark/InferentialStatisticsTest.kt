@@ -16,27 +16,21 @@ class InferentialStatisticsTest {
     }
 
     @Test
-    fun `mann whitney separates clearly different samples`() {
+    fun `wilcoxon separates consistently different paired samples`() {
         val a = (1..30).map { it.toDouble() }
         val b = (101..130).map { it.toDouble() }
-        assertTrue(InferentialStatistics.mannWhitneyU(a, b) < 1e-6, "fully separated samples must be significant")
+        assertTrue(InferentialStatistics.wilcoxonSignedRank(a, b) < 1e-6, "consistently signed differences must be significant")
     }
 
     @Test
-    fun `mann whitney finds no difference between identical samples`() {
+    fun `wilcoxon finds no difference between identical pairs`() {
         val a = (1..30).map { it.toDouble() }
-        assertEquals(1.0, InferentialStatistics.mannWhitneyU(a, a), 1e-9)
+        assertEquals(1.0, InferentialStatistics.wilcoxonSignedRank(a, a), 1e-9)
     }
 
     @Test
-    fun `mann whitney reproduces a hand-checked p value`() {
-        // n1 = n2 = 4, no ties, U = 1: exact two-sided p = 4/70 = 0.0571; the
-        // continuity-corrected normal approximation used here gives z = 1.8764,
-        // p = 0.06060. Both cross-checked by enumeration outside the test.
-        val a = listOf(1.0, 2.0, 3.0, 5.0)
-        val b = listOf(4.0, 6.0, 7.0, 8.0)
-        val p = InferentialStatistics.mannWhitneyU(a, b)
-        assertTrue(abs(p - 0.06060) < 1e-4, "expected p ~ 0.06060, was $p")
+    fun `wilcoxon rejects an incomplete pairing`() {
+        assertEquals(1.0, InferentialStatistics.wilcoxonSignedRank(listOf(1.0), listOf(2.0, 3.0)))
     }
 
     @Test
@@ -60,7 +54,7 @@ class InferentialStatisticsTest {
     fun `bootstrap interval brackets a clear ratio and excludes unity`() {
         val local = List(30) { 4.0 + it * 0.01 }
         val reference = List(30) { 8.0 + it * 0.01 }
-        val ci = InferentialStatistics.medianRatioConfidenceInterval(local, reference, seed = 42)
+        val ci = InferentialStatistics.pairedMedianRatioConfidenceInterval(local, reference, seed = 42)
         assertNotNull(ci)
         assertEquals(0.5, ci.point, 0.02)
         assertTrue(ci.low <= ci.point && ci.point <= ci.high, "point estimate must lie inside the interval")
@@ -70,7 +64,7 @@ class InferentialStatisticsTest {
     @Test
     fun `bootstrap interval covers unity for indistinguishable samples`() {
         val samples = List(30) { 5.0 + (it % 7) * 0.1 }
-        val ci = InferentialStatistics.medianRatioConfidenceInterval(samples, samples, seed = 7)
+        val ci = InferentialStatistics.pairedMedianRatioConfidenceInterval(samples, samples, seed = 7)
         assertNotNull(ci)
         assertFalse(ci.excludesUnity(), "identical samples must not resolve a direction")
     }
@@ -79,8 +73,8 @@ class InferentialStatisticsTest {
     fun `bootstrap interval is deterministic for a given seed`() {
         val local = List(30) { 3.0 + (it % 5) * 0.2 }
         val reference = List(30) { 5.0 + (it % 3) * 0.3 }
-        val first = InferentialStatistics.medianRatioConfidenceInterval(local, reference, seed = 123)
-        val second = InferentialStatistics.medianRatioConfidenceInterval(local, reference, seed = 123)
+        val first = InferentialStatistics.pairedMedianRatioConfidenceInterval(local, reference, seed = 123)
+        val second = InferentialStatistics.pairedMedianRatioConfidenceInterval(local, reference, seed = 123)
         assertEquals(first, second, "the reported interval must be reproducible from the artifacts")
     }
 
@@ -136,6 +130,24 @@ class InferentialStatisticsTest {
     }
 
     @Test
+    fun `real logs with coincident counts are not treated as replicates`() {
+        val groups = ReplicateControl.replicateGroups(
+            listOf(
+                dataset("synthetic-a", traces = 100, eventsPerTrace = 10, attributesPerEvent = 5),
+                dataset(
+                    "real-log",
+                    traces = 100,
+                    eventsPerTrace = 10,
+                    attributesPerEvent = 5,
+                    series = "real-validation",
+                ),
+            ),
+        )
+
+        assertTrue(groups.isEmpty())
+    }
+
+    @Test
     fun `replicate spread is measured across identical datasets`() {
         val datasets = listOf(
             dataset("trace-100", traces = 100, eventsPerTrace = 10, attributesPerEvent = 5),
@@ -148,6 +160,30 @@ class InferentialStatisticsTest {
         assertEquals(2.0, report.worstSpread, 1e-9)
         assertEquals(2.0, report.floorFor("q"), 1e-9)
         assertFalse(report.runIsValid, "a two-fold spread on identical data must fail the validity gate")
+    }
+
+    @Test
+    fun `one-shot import stability does not invalidate stable query measurements`() {
+        val datasets = listOf(
+            dataset("trace-100", traces = 100, eventsPerTrace = 10, attributesPerEvent = 5),
+            dataset("event-10", traces = 100, eventsPerTrace = 10, attributesPerEvent = 5),
+        )
+        val stableQueries = warmSamples("trace-100", "q", "local", 0.010) +
+            warmSamples("event-10", "q", "local", 0.010)
+        val imports = listOf(
+            ImportBenchmarkResult("local", "trace-100", 1, 1.0, "OK", "a", 1),
+            ImportBenchmarkResult("local", "event-10", 1, 2.0, "OK", "b", 1),
+        )
+
+        val report = ReplicateControl.measure(datasets, stableQueries, imports)
+
+        assertNotNull(report)
+        assertEquals(2.0, report.worstSpread, 1e-9)
+        assertEquals(1.0, report.worstQuerySpread, 1e-9)
+        assertEquals(2.0, report.worstImportSpread, 1e-9)
+        assertEquals(2.0, report.floorFor(IMPORT_REPLICATE_LABEL), 1e-9)
+        assertTrue(report.runIsValid)
+        assertFalse(report.importIsStable)
     }
 
     @Test
@@ -188,10 +224,11 @@ class InferentialStatisticsTest {
         traces: Int,
         eventsPerTrace: Int,
         attributesPerEvent: Int,
+        series: String = "test",
     ): PreparedDataset =
         PreparedDataset(
             name = name,
-            series = "test",
+            series = series,
             file = java.nio.file.Path.of("$name.xes"),
             traces = traces,
             eventsPerTrace = eventsPerTrace,

@@ -1,6 +1,8 @@
 package com.processm.processminterpreter.benchmark
 
 import java.nio.file.Path
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import kotlin.io.path.createDirectories
@@ -66,6 +68,15 @@ fun main(args: Array<String>) {
             it.authenticateIfSupported()
         }
     }
+    clients.forEach { (system, client) ->
+        val existing = client.listDataStores()
+        require(existing.isEmpty()) {
+            "${system.name} exposes ${existing.size} pre-existing datastore(s): " +
+                existing.joinToString { it.name } + ". Thesis runs require a clean stack; run " +
+                "scripts/benchmarks/prepare-benchmark-stack.py --confirm-destroy-volumes first."
+        }
+    }
+    consumeFreshStackProof(outputDirectory)
 
     val storageMeter = DockerStorageMeter()
     val imports = mutableListOf<ImportBenchmarkResult>()
@@ -91,8 +102,9 @@ fun main(args: Array<String>) {
         println("Sampling idle memory baseline for ${settings.profile.idleBaselineSeconds}s")
         memorySampler.sampleBlocking(MEMORY_PHASE_IDLE, settings.profile.idleBaselineSeconds)
 
-        datasets.forEach { dataset ->
-            systems.forEach { system ->
+        datasets.forEachIndexed { datasetIndex, dataset ->
+            val importRound = counterbalancedImportRound(datasetIndex, datasets.size, settings.datasetOrder)
+            balancedOrder(systems, importRound).forEach { system ->
                 val client = clients.getValue(system)
                 val dataStoreName = "bench-$runId-${system.name}-${dataset.name}"
                 println("[${system.name}] Creating datastore $dataStoreName")
@@ -151,8 +163,11 @@ fun main(args: Array<String>) {
         // measured repetitions (local, reference, local, reference, ...).
         memorySampler.setPhase(MEMORY_PHASE_QUERIES)
         val measuredQueries = config.queries
+        var queryPairIndex = 0
         datasets.forEach { dataset ->
-            val handles = importedHandles.filter { it.dataset.name == dataset.name }
+            val handles = importedHandles
+                .filter { it.dataset.name == dataset.name }
+                .sortedBy { handle -> systems.indexOf(handle.system) }
             if (handles.isEmpty()) return@forEach
             measuredQueries.forEach { query ->
                 println("Query ${query.label} on ${dataset.name} [${handles.joinToString(",") { it.system.name }}]")
@@ -160,20 +175,33 @@ fun main(args: Array<String>) {
                     systemCount = handles.size,
                     warmups = settings.profile.warmups,
                     repetitions = settings.profile.repetitions,
+                    initialSystemIndex = queryPairIndex % handles.size,
                 )
+                queryPairIndex++
                 val pairSamples = mutableListOf<QueryBenchmarkResult>()
-                plan.forEach { step ->
+                val lastWarmBodies = mutableMapOf<String, String>()
+                var pairFailure: QueryBenchmarkResult? = null
+                plan.forEach planStep@{ step ->
+                    if (pairFailure != null) return@planStep
                     val handle = handles[step.systemIndex]
                     val client = clients.getValue(handle.system)
                     when (step.kind) {
-                        QueryStepKind.WARMUP -> runCatching { client.executeQuery(handle.dataStoreId, query.query) }
-                        QueryStepKind.COLD ->
-                            pairSamples += recordedQuerySample(client, handle, query.label, query.query, step.run, QUERY_PHASE_COLD)
-                        QueryStepKind.MEASURED ->
-                            pairSamples += recordedQuerySample(client, handle, query.label, query.query, step.run, QUERY_PHASE_WARM)
+                        QueryStepKind.WARMUP -> client.executeQuery(handle.dataStoreId, query.query)
+                        QueryStepKind.COLD, QueryStepKind.MEASURED -> {
+                            val phase = if (step.kind == QueryStepKind.COLD) QUERY_PHASE_COLD else QUERY_PHASE_WARM
+                            val recorded = recordedQuerySample(client, handle, query.label, query.query, step.run, phase)
+                            pairSamples += recorded.first
+                            if (phase == QUERY_PHASE_WARM && recorded.second != null) {
+                                lastWarmBodies[handle.system.name] = recorded.second!!
+                            }
+                            if (recorded.first.status == "ERROR") pairFailure = recorded.first
+                        }
                     }
                 }
-                queries += applyResponseCountParity(pairSamples)
+                queries += applyResponseParity(pairSamples, lastWarmBodies)
+                pairFailure?.let {
+                    error("Query ${query.label} failed on ${dataset.name}/${it.system}: ${it.details}")
+                }
             }
         }
         memorySampler.setPhase(null)
@@ -246,7 +274,7 @@ fun main(args: Array<String>) {
     fatalError?.let { throw it }
     val mismatches = queries.count { it.status == QUERY_STATUS_MISMATCH }
     if (mismatches > 0) {
-        println("WARNING: $mismatches query sample(s) invalidated by response-count MISMATCH. See query-results.csv")
+        println("WARNING: $mismatches query sample(s) invalidated by response MISMATCH. See query-results.csv")
     }
     val strictErrors = imports.count { it.status != "OK" } +
         queries.count { it.status == "ERROR" } +
@@ -254,6 +282,25 @@ fun main(args: Array<String>) {
     if (strictErrors > 0) {
         error("Benchmark finished with $strictErrors infrastructure/runtime error(s). See $outputDirectory")
     }
+}
+
+/**
+ * Archives and consumes the proof emitted immediately after `docker compose down -v`.
+ * Zero datastore rows alone are insufficient: an old volume with manually deleted
+ * stores would otherwise pass the same check. Moving the marker makes it single-use,
+ * so every benchmark block requires a separate destructive preparation.
+ */
+private fun consumeFreshStackProof(outputDirectory: Path) {
+    val marker = Path.of("tmp", "benchmark-stack-ready.json")
+    require(Files.isRegularFile(marker)) {
+        "Missing single-use fresh-stack proof. Run " +
+            "scripts/benchmarks/prepare-benchmark-stack.py --confirm-destroy-volumes immediately before this block."
+    }
+    Files.move(
+        marker,
+        outputDirectory.resolve("stack-preparation.json"),
+        StandardCopyOption.REPLACE_EXISTING,
+    )
 }
 
 /**
@@ -280,7 +327,7 @@ private fun runGlobalWarmup(
     createdDataStores: MutableList<CreatedDataStoreHandle>,
     runId: String,
 ) {
-    val rounds = settings.profile.globalWarmupRounds
+    val rounds = settings.globalWarmupRounds
     if (rounds <= 0 || clients.isEmpty()) return
 
     val spec = BenchmarkDatasetSpec(
@@ -297,22 +344,36 @@ private fun runGlobalWarmup(
     val handles = mutableListOf<ImportedDatasetHandle>()
     clients.forEach { (system, client) ->
         val storeName = "bench-$runId-${system.name}-warmup"
-        val storeId = runCatching { client.createDataStore(storeName) }.getOrNull() ?: return@forEach
+        val storeId = runCatching { client.createDataStore(storeName) }
+            .getOrElse { error("Global warm-up datastore creation failed on ${system.name}: ${it.message}") }
         createdDataStores += CreatedDataStoreHandle(system, storeName, storeId)
         runCatching { client.uploadLogAndWait(storeId, dataset.file) }
-            .onSuccess { handles += ImportedDatasetHandle(system, dataset, storeId) }
-            .onFailure { println("WARNING: global warm-up import failed on ${system.name}: ${it.message}") }
+            .getOrElse { error("Global warm-up import failed on ${system.name}: ${it.message}") }
+        handles += ImportedDatasetHandle(system, dataset, storeId)
     }
-    if (handles.isEmpty()) {
-        println("WARNING: global warm-up imported nothing; measurements will include first-touch cost")
-        return
+    require(handles.size == clients.size) {
+        "Global warm-up imported ${handles.size}/${clients.size} system datasets"
     }
-    repeat(rounds) {
-        config.queries.forEach { query ->
-            // Interleaved exactly like the measured phase, so warm-up cannot
-            // advantage whichever system happens to go first.
-            handles.forEach { handle ->
-                runCatching { clients.getValue(handle.system).executeQuery(handle.dataStoreId, query.query) }
+    repeat(rounds) { round ->
+        config.queries.forEachIndexed { queryIndex, query ->
+            val results = mutableMapOf<String, TimedQueryResult>()
+            balancedOrder(handles, round * config.queries.size + queryIndex).forEach { handle ->
+                results[handle.system.name] = runCatching {
+                    clients.getValue(handle.system).executeQuery(handle.dataStoreId, query.query)
+                }.getOrElse {
+                    error("Global warm-up query ${query.label} failed on ${handle.system.name}: ${it.message}")
+                }
+            }
+            val local = results["local"]
+            val reference = results["reference"]
+            if (local != null && reference != null) {
+                require(local.counts == reference.counts) {
+                    "Global warm-up query ${query.label} count mismatch: local=${local.counts}, reference=${reference.counts}"
+                }
+                val semantic = XesJsonSemanticParity.compare(local.body, reference.body)
+                require(semantic.matches) {
+                    "Global warm-up query ${query.label} semantic mismatch: ${semantic.details}"
+                }
             }
         }
     }
@@ -326,37 +387,46 @@ private fun recordedQuerySample(
     pql: String,
     run: Int,
     phase: String,
-): QueryBenchmarkResult =
+): Pair<QueryBenchmarkResult, String?> =
     runCatching { client.executeQuery(handle.dataStoreId, pql) }.fold(
         onSuccess = {
             QueryBenchmarkResult(
-                system = handle.system.name,
-                datasetName = handle.dataset.name,
-                queryLabel = queryLabel,
-                run = run,
-                seconds = it.seconds,
-                status = "OK",
-                responseBytes = it.responseBytes,
-                phase = phase,
-                logCount = it.counts.logs,
-                traceCount = it.counts.traces,
-                eventCount = it.counts.events,
-            )
+                    system = handle.system.name,
+                    datasetName = handle.dataset.name,
+                    queryLabel = queryLabel,
+                    run = run,
+                    seconds = it.seconds,
+                    status = "OK",
+                    responseBytes = it.responseBytes,
+                    phase = phase,
+                    logCount = it.counts.logs,
+                    traceCount = it.counts.traces,
+                    eventCount = it.counts.events,
+                ) to it.body
         },
         onFailure = {
             QueryBenchmarkResult(
-                system = handle.system.name,
-                datasetName = handle.dataset.name,
-                queryLabel = queryLabel,
-                run = run,
-                seconds = 0.0,
-                status = "ERROR",
-                responseBytes = 0,
-                phase = phase,
-                details = it.message.orEmpty(),
-            )
+                    system = handle.system.name,
+                    datasetName = handle.dataset.name,
+                    queryLabel = queryLabel,
+                    run = run,
+                    seconds = 0.0,
+                    status = "ERROR",
+                    responseBytes = 0,
+                    phase = phase,
+                    details = it.message.orEmpty(),
+                ) to null
         },
     )
+
+private fun <T> balancedOrder(
+    values: List<T>,
+    round: Int,
+): List<T> {
+    if (values.size <= 1) return values
+    val start = Math.floorMod(round, values.size)
+    return values.indices.map { values[(start + it) % values.size] }
+}
 
 
 /**

@@ -3,6 +3,7 @@ package com.processm.processminterpreter.benchmark
 import java.time.Instant
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.TimeUnit
+import kotlin.math.roundToLong
 
 /**
  * Background memory sampler for Q3 (methodology 4/Q3 and 5.2/5.4).
@@ -68,6 +69,7 @@ class MemorySampler(
     fun summaries(): List<MemorySummary> = summarizeMemory(samples())
 
     private fun loop() {
+        var nextProbeNanos = System.nanoTime()
         while (running) {
             val currentPhase = phase
             if (currentPhase != null) {
@@ -83,8 +85,18 @@ class MemorySampler(
                     }
                 }
             }
+            nextProbeNanos += intervalMillis * 1_000_000L
+            val remainingNanos = nextProbeNanos - System.nanoTime()
+            if (remainingNanos <= 0L) {
+                // `docker stats --no-stream` can itself take longer than the target
+                // interval. Do not add another full sleep on top of that latency.
+                nextProbeNanos = System.nanoTime()
+                continue
+            }
             try {
-                Thread.sleep(intervalMillis)
+                val millis = remainingNanos / 1_000_000L
+                val nanos = (remainingNanos % 1_000_000L).toInt()
+                Thread.sleep(millis, nanos)
             } catch (_: InterruptedException) {
                 return
             }
@@ -92,19 +104,37 @@ class MemorySampler(
     }
 }
 
-fun summarizeMemory(samples: List<MemorySample>): List<MemorySummary> =
-    samples
+fun summarizeMemory(samples: List<MemorySample>): List<MemorySummary> {
+    fun summarize(rows: List<MemorySample>): List<MemorySummary> = rows
         .groupBy { it.component to it.phase }
         .map { (key, rows) ->
             val sorted = rows.map { it.bytes }.sorted()
             MemorySummary(
                 component = key.first,
                 phase = key.second,
-                medianBytes = sorted[(sorted.size - 1) / 2],
+                medianBytes = ThesisStatistics.quantile(sorted.map(Long::toDouble), 0.50).roundToLong(),
                 peakBytes = sorted.last(),
             )
         }
+
+    val totals = samples
+        .groupBy { it.timestamp to it.phase }
+        .flatMap { (key, rows) ->
+            val values = rows.associate { it.component to it.bytes }
+            buildList {
+                val interpreter = values["processm-interpreter"]
+                val neo4j = values["processm-neo4j"]
+                if (interpreter != null && neo4j != null) {
+                    add(MemorySample(key.first, key.second, "local-total", interpreter + neo4j))
+                }
+                values["processm-server"]?.let {
+                    add(MemorySample(key.first, key.second, "reference-total", it))
+                }
+            }
+        }
+    return (summarize(samples) + summarize(totals))
         .sortedWith(compareBy({ it.component }, { it.phase }))
+}
 
 /**
  * Samples container memory via `docker stats --no-stream` for the given container names.

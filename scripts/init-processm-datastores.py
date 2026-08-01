@@ -26,6 +26,9 @@ ORG = os.environ.get("PROCESSM_ORG", "TestOrg")
 XES_DIR = os.environ.get("XES_DIR", "/xes")
 IMPORT_TIMEOUT_SECONDS = int(os.environ.get("PROCESSM_IMPORT_TIMEOUT_SECONDS", "600"))
 POLL_INTERVAL_SECONDS = int(os.environ.get("PROCESSM_IMPORT_POLL_INTERVAL_SECONDS", "5"))
+SEED_DATASETS = os.environ.get("PROCESSM_SEED_DATASETS", "true").strip().lower() in {
+    "1", "true", "yes", "on",
+}
 
 
 def decode_json(body):
@@ -242,6 +245,10 @@ def wait_for_log_count(token, data_store_id, data_store_name, expected_count):
 def main():
     wait_for_processm()
     token = ensure_user()
+
+    if not SEED_DATASETS:
+        print("ProcessM account init complete; dataset seeding disabled.")
+        return
 
     failures = []
     for data_store_name, filename in DATASETS:

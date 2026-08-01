@@ -31,21 +31,28 @@ consistent with each other. Use it rather than re-deriving:
   `bootRun`, writing logs and PID files under `tmp/` and `build/`. `--port`
   selects the port; the name keeps the usual one.
 - `stop-app-8080.py`: stop only the application process for the selected port.
-- `init-processm-datastores.py`: create the reference user/datastores and upload
-  the fixed XES fixtures used for compatibility work.
+- `init-processm-datastores.py`: create the reference user and, unless
+  `PROCESSM_SEED_DATASETS=false`, upload the fixed compatibility fixtures.
 - `compatibility_query_set.py`: version-controlled query definitions. Imported
   by the report, not run directly, hence the importable underscore name.
 - `run-compatibility-report.py`: orchestrate matrix/dropdown/discovery reports.
 - `benchmarks/plot-benchmark-results.py`: create SVG plots from benchmark
   artifacts and embed them into the run's `thesis-report.md` and `.tex`.
-- `benchmarks/render-report-html.py`: fold `thesis-report.md` and its charts
-  into one self-contained HTML file (browser-viewable, print-to-PDF).
-- `benchmarks/compare-runs.py`: cross-run repeatability (METODOLOGIA §5 pkt 6) —
-  rejects runs whose memory series is incomplete, picks the representative run
-  by the fixed rule, and writes `repeatability.csv` / `repeatability.md`. A
-  single run cannot show reproducibility, so thesis numbers come from here.
-- `benchmarks/measure-storage-scaling.py`: sequential no-cleanup storage
-  probe answering the disk-scaling question (writes `storage-scaling.csv`).
+- `benchmarks/render-report-html.py`: fold the current
+  `thesis-report-series.md` (or explicitly diagnostic single-run report) and
+  charts into one self-contained HTML file.
+- `benchmarks/prepare-benchmark-stack.py`: explicitly destructive setup for a
+  clean symmetric benchmark stack; builds the current `bootJar`, starts REFERENCE
+  without fixture seeding and proves that both APIs expose zero datastores, then
+  writes the single-use fresh-volume/image-ID marker consumed by `BenchmarkRunner`.
+- `benchmarks/compare-runs.py`: validates at least three counterbalanced FULL
+  runs and estimates conclusions from all blocks. The anchor run is only the
+  output location for `repeatability.*`, `series-*.csv`, the combined report,
+  and `thesis-tables-series.tex`.
+- `benchmarks/test_compare_runs.py`: standard-library end-to-end contract test
+  for the three-block aggregator, including its rejection path.
+- `benchmarks/measure-storage-scaling.py`: isolated storage probe with a fresh
+  Compose stack per dataset (writes `storage-scaling.csv`).
 
 Do not combine unrelated startup, destructive cleanup, seeding, comparison, and
 plotting responsibilities into one script.
@@ -108,6 +115,12 @@ After changing a script:
 - verify exit status and generated artifacts;
 - check failure handling, not only the happy path. An unreachable API, a
   missing cases file and a non-2xx response are the paths that actually break.
+
+After changing the cross-run aggregator, run:
+
+```bash
+python3 -m unittest scripts/benchmarks/test_compare_runs.py -v
+```
 
 After changing ProcessM initialization, rebuild a fresh stack and verify every
 expected datastore and uploaded log. After changing compatibility queries or

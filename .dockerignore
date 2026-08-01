@@ -1,0 +1,10 @@
+*
+!Dockerfile
+!build/
+build/*
+!build/libs/
+build/libs/*
+!build/libs/processm-interpreter.jar
+!docker/
+docker/*
+!docker/entrypoint.sh

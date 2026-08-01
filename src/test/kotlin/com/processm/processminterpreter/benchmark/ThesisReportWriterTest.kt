@@ -36,7 +36,7 @@ class ThesisReportWriterTest {
     fun `documents the source-order finding for hoisted trace-variant invalidations`(
         @TempDir tempDir: Path,
     ) {
-        writeSyntheticRun(tempDir)
+        writeSyntheticRun(tempDir, sourceOrderCandidate = true)
         val md = tempDir.resolve("thesis-report.md").readText()
 
         assertTrue(
@@ -44,8 +44,8 @@ class ThesisReportWriterTest {
             "report must carry the dedicated spec-compliance section",
         )
         assertTrue(
-            md.contains("nie z błędu niniejszej implementacji"),
-            "the section must state the finding is not a defect of this implementation",
+            md.contains("generator nie diagnozuje przyczyny"),
+            "the section must distinguish a candidate signature from an automatic diagnosis",
         )
         assertTrue(
             md.contains("By omitting the `order by` clause, the components are returned in the same order"),
@@ -58,13 +58,25 @@ class ThesisReportWriterTest {
         // The hoisted pair is flagged in the invalidated list; the plain MISMATCH is not.
         assertTrue(
             md.contains("- ds-beta / hoistedGroup: MISMATCH") &&
-                md.substringAfter("- ds-beta / hoistedGroup:").substringBefore('\n').contains("kolejność źródłowa"),
-            "the hoisted pair must be marked as the source-order class",
+                md.substringAfter("- ds-beta / hoistedGroup:").substringBefore('\n').contains("kandydat"),
+            "the real hoisted pair must be marked only as a source-order candidate",
         )
         assertFalse(
-            md.substringAfter("- ds_alpha / custom_attr:").substringBefore('\n').contains("kolejność źródłowa"),
+            md.substringAfter("- ds_alpha / custom_attr:").substringBefore('\n').contains("kandydat"),
             "a plain count MISMATCH must NOT be attributed to the source-order deviation",
         )
+    }
+
+    @Test
+    fun `legacy protocol report does not claim full semantic parity`(
+        @TempDir tempDir: Path,
+    ) {
+        writeSyntheticRun(tempDir, protocolVersion = 1)
+        val md = tempDir.resolve("thesis-report.md").readText()
+
+        assertTrue(md.contains("według starszego protokołu"))
+        assertTrue(md.contains("pełna zgodność semantyczna nierozstrzygnięta"))
+        assertFalse(md.contains("3 par (dataset, zapytanie) zgodnych (OK)"))
     }
 
     @Test
@@ -87,7 +99,16 @@ class ThesisReportWriterTest {
 
         // Every research question gets an answer, including "unresolved" ones.
         assertTrue(md.contains("## Podsumowanie — odpowiedzi na pytania badawcze"), "report must open with per-question verdicts")
-        assertTrue(md.contains("**Q2 (zapytania).**") && md.contains("**Q4 (poprawność).**"), "Q2 and Q4 must be answered")
+        assertTrue(
+            md.contains("**Q1 (import, pojedynczy blok): nierozstrzygnięte.**") &&
+                md.contains("**Q2 (zapytania): nierozstrzygnięte.**") &&
+                md.contains("**Q4 (poprawność).**"),
+            "Q1, Q2 and Q4 must be answered",
+        )
+        assertTrue(
+            md.contains("Q1 ma osobną bramkę") && md.contains("Q1 pozostaje nierozstrzygnięte"),
+            "unstable one-shot imports must not be conflated with the Q2 validity gate",
+        )
 
         // ds_alpha and ds-beta share their parameters, so they are replicates: the same
         // experiment measured twice. Their disagreement is the run's measurement error
@@ -103,7 +124,11 @@ class ThesisReportWriterTest {
             md.contains("| hierarchyWindow | okno | 20.0 | [18.0; 22.0] | 50.0 | [48.0; 52.0] | ×2.50 (LOCAL) |"),
             "warm-stats row must match the hand-computed median/quartiles/advantage",
         )
-        assertTrue(md.contains("×2.50 (LOCAL)") && md.contains("istotna"), "a x2.5 effect above the error floor is significant")
+        assertTrue(md.contains("×2.50 (LOCAL)"), "the within-block effect size must remain visible")
+        assertTrue(
+            md.contains("przebieg nieważny — diagnostyka") && !md.contains("| istotna |"),
+            "an invalid replicate gate must suppress inferential per-pair verdicts",
+        )
 
         // ds-beta: 40 ms vs 50 ms is x1.25 — real and statistically resolvable, but
         // smaller than the x2.00 the replicates prove the measurement itself varies by.
@@ -123,22 +148,22 @@ class ThesisReportWriterTest {
         assertFalse(md.contains("p95 [ms]"), "p95 must not be tabulated at n far below the threshold")
         assertTrue(md.contains("kwantyl 0,95 jest funkcją dwóch obserwacji"), "the report must say why p95 is absent")
 
-        // Import row: 1 MiB XES, LOCAL 2.00 s vs REFERENCE 4.00 s -> x2.00 for LOCAL.
+        // A single run carries one import sample, so it must not manufacture an
+        // advantage verdict; cross-run Q1 aggregation is done by compare-runs.py.
         assertTrue(
-            md.contains("| ds_alpha | 1.00 | 100 | 1000 | 2.00 | 4.00 | ×2.00 (LOCAL) |"),
-            "import row must match the hand-computed advantage",
+            md.contains("| ds_alpha | 1.00 | 100 | 1000 | 2.00 | 4.00 |"),
+            "import row must preserve the two raw block measurements",
         )
 
-        // First-touch is separated from cold: the first dataset's first execution
-        // measures class loading and JIT, so it carries no L/R ratio.
-        assertTrue(md.contains("### Pierwsze dotknięcie"), "first-touch must have its own section")
-        assertTrue(md.contains("nie podano dla nich ilorazu"), "first-touch must state why it has no ratio")
-        assertFalse(
+        // Global warm-up removes the special first-touch class; all single cold
+        // samples remain diagnostics and appear in one table.
+        assertFalse(md.contains("### Pierwsze dotknięcie"), "global warm-up makes a separate first-touch class obsolete")
+        assertTrue(
             md.contains("| ds_alpha | hierarchyWindow | 100.0 | 200.0 |"),
-            "the first dataset must not appear in the cold table",
+            "the first dataset belongs in the common diagnostic cold table",
         )
         assertTrue(
-            md.contains("| ds-beta | hierarchyWindow | 70.0 | 80.0 | ×1.14 (LOCAL) |"),
+            md.contains("| ds-beta | hierarchyWindow | 70.0 | 80.0 |"),
             "cold row for a non-first dataset must carry the advantage",
         )
 
@@ -165,7 +190,7 @@ class ThesisReportWriterTest {
         assertEquals(
             10,
             tableCount,
-            "environment, replicate, import, 2 query tables, first-touch, cold, storage appendix, memory, roundtrip",
+            "environment, replicate, import, 2 query tables, cold, storage appendix, memory, roundtrip, caveats",
         )
         assertTrue(tex.contains("% generated by ThesisReportWriter run-test"), "tex must start with the generator comment")
         assertTrue(tex.contains("\\toprule") && tex.contains("\\midrule") && tex.contains("\\bottomrule"), "booktabs rules")
@@ -181,7 +206,11 @@ class ThesisReportWriterTest {
         assertFalse(md.contains("NaN"), "no NaN may leak into the report")
     }
 
-    private fun writeSyntheticRun(tempDir: Path) {
+    private fun writeSyntheticRun(
+        tempDir: Path,
+        sourceOrderCandidate: Boolean = false,
+        protocolVersion: Int = CURRENT_BENCHMARK_PROTOCOL_VERSION,
+    ) {
         val settings = BenchmarkSettings(
             profile = BenchmarkProfile.SMOKE,
             localApi = "http://localhost:8080/api",
@@ -193,10 +222,11 @@ class ThesisReportWriterTest {
             systemFilter = emptySet(),
             keepBenchmarkDataStores = false,
             localAppContainer = "processm-interpreter",
+            protocolVersion = protocolVersion,
         )
         val datasets = listOf(
             dataset("ds_alpha", tempDir),
-            dataset("ds-beta", tempDir),
+            dataset("ds-beta", tempDir, if (sourceOrderCandidate) "real-validation" else "synthetic"),
         )
         val imports = listOf(
             importResult("local", "ds_alpha", 2.0),
@@ -260,8 +290,10 @@ class ThesisReportWriterTest {
         )
         val memorySummaries = listOf(
             MemorySummary("processm-neo4j", MEMORY_PHASE_QUERIES, 1_073_741_824, 2_147_483_648),
-            MemorySummary("local-jvm", MEMORY_PHASE_QUERIES, 536_870_912, 1_073_741_824),
+            MemorySummary("processm-interpreter", MEMORY_PHASE_QUERIES, 536_870_912, 1_073_741_824),
             MemorySummary("processm-server", MEMORY_PHASE_QUERIES, 1_610_612_736, 3_221_225_472),
+            MemorySummary("local-total", MEMORY_PHASE_QUERIES, 1_610_612_736, 3_221_225_472),
+            MemorySummary("reference-total", MEMORY_PHASE_QUERIES, 1_610_612_736, 3_221_225_472),
         )
 
         ThesisReportWriter(tempDir).write(
@@ -276,7 +308,11 @@ class ThesisReportWriterTest {
             querySpecs = listOf(
                 BenchmarkQuerySpec("hierarchyWindow", "limit l:1, t:10, e:20"),
                 BenchmarkQuerySpec("custom_attr", "where [e:attr_1] is not null limit l:1, t:10"),
-                BenchmarkQuerySpec("hoistedGroup", "group by ^e:name order by count(t:name) desc", WORKLOAD_FULL_PASS),
+                BenchmarkQuerySpec(
+                    "hoistedGroup",
+                    "group by ^e:name order by count(t:name) desc",
+                    WORKLOAD_DATA_DEPENDENT,
+                ),
             ),
         )
     }
@@ -284,9 +320,10 @@ class ThesisReportWriterTest {
     private fun dataset(
         name: String,
         tempDir: Path,
+        series: String = "synthetic",
     ) = PreparedDataset(
         name = name,
-        series = "synthetic",
+        series = series,
         file = tempDir.resolve("$name.xes"),
         traces = 100,
         eventsPerTrace = 10,

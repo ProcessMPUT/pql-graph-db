@@ -3,6 +3,8 @@ package com.processm.processminterpreter.benchmark
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import java.lang.management.ManagementFactory
+import java.nio.file.Files
+import java.nio.file.Path
 
 /**
  * Collects the environment facts METODOLOGIA §2.4/§5.1 promises in every run's
@@ -17,15 +19,30 @@ object EnvironmentProbe {
     fun collect(containers: Collection<String>): Map<String, Any?> =
         mapOf(
             "host" to hostInfo(),
+            "dockerEngine" to dockerInfo(),
+            "source" to sourceInfo(),
             "containers" to containers.distinct().associateWith { containerInfo(it) },
         )
 
     private fun hostInfo(): Map<String, Any?> =
         mapOf(
-            "cpuModel" to (System.getenv("PROCESSOR_IDENTIFIER") ?: "unavailable"),
+            "cpuModel" to cpuModel(),
             "logicalProcessors" to Runtime.getRuntime().availableProcessors(),
             "totalPhysicalMemoryBytes" to totalPhysicalMemoryBytes(),
         )
+
+    private fun cpuModel(): String =
+        System.getenv("PROCESSOR_IDENTIFIER")
+            ?.takeIf { it.isNotBlank() }
+            ?: command("sysctl", "-n", "machdep.cpu.brand_string")
+            ?: runCatching {
+                Files.readAllLines(Path.of("/proc/cpuinfo"))
+                    .firstOrNull { it.startsWith("model name") }
+                    ?.substringAfter(':')
+                    ?.trim()
+            }.getOrNull()
+            ?.takeIf { it.isNotBlank() }
+            ?: System.getProperty("os.arch", "unavailable")
 
     private fun totalPhysicalMemoryBytes(): Any =
         (ManagementFactory.getOperatingSystemMXBean() as? com.sun.management.OperatingSystemMXBean)
@@ -74,11 +91,60 @@ object EnvironmentProbe {
         return mapOf(
             "status" to "ok",
             "image" to config?.get("Image")?.asText(),
+            "imageId" to node.get("Image")?.asText(),
             "memoryLimitBytes" to limitOrUnlimited(hostConfig?.get("Memory")),
             "nanoCpus" to limitOrUnlimited(hostConfig?.get("NanoCpus")),
             "memoryConfigEnv" to memoryConfigEnv(config?.get("Env")),
         )
     }
+
+    private fun dockerInfo(): Map<String, Any?> =
+        command("docker", "info", "--format", "{{json .}}")
+            ?.let(::parseDockerInfo)
+            ?: mapOf("status" to "unavailable")
+
+    /** Parses the stable subset of `docker info --format '{{json .}}'`. */
+    fun parseDockerInfo(json: String): Map<String, Any?> {
+        val node = runCatching { mapper.readTree(json) }.getOrNull()
+            ?: return mapOf("status" to "unavailable")
+        return mapOf(
+            "status" to "ok",
+            "serverVersion" to node.get("ServerVersion")?.asText(),
+            "operatingSystem" to node.get("OperatingSystem")?.asText(),
+            "osType" to node.get("OSType")?.asText(),
+            "architecture" to node.get("Architecture")?.asText(),
+            "logicalProcessors" to node.get("NCPU")?.asLong(),
+            // Docker Desktop runs a Linux VM. This is the actual global memory
+            // budget shared by the containers, not the host's physical RAM.
+            "totalMemoryBytes" to node.get("MemTotal")?.asLong(),
+        )
+    }
+
+    private fun sourceInfo(): Map<String, Any?> {
+        val commit = command("git", "rev-parse", "HEAD") ?: "unavailable"
+        // Generated benchmark outputs live in ignored tmp/, so untracked files can
+        // safely be included. Otherwise a new, uncommitted source file could change
+        // the measured code while environment.json still claimed a clean tree.
+        val status = commandAllowEmpty("git", "status", "--porcelain", "--untracked-files=all")
+        return mapOf(
+            "gitCommit" to commit,
+            "gitDirty" to when {
+                status == null -> "unavailable"
+                status.isEmpty() -> false
+                else -> true
+            },
+        )
+    }
+
+    private fun command(vararg command: String): String? =
+        commandAllowEmpty(*command)?.takeIf { it.isNotBlank() }
+
+    private fun commandAllowEmpty(vararg command: String): String? =
+        runCatching {
+            val process = ProcessBuilder(*command).redirectErrorStream(true).start()
+            val output = process.inputStream.readAllBytes().toString(Charsets.UTF_8).trim()
+            if (process.waitFor() == 0) output else null
+        }.getOrNull()
 
     /** Docker reports 0 for "no limit configured". */
     private fun limitOrUnlimited(node: JsonNode?): Any {

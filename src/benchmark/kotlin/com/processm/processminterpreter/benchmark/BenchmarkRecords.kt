@@ -133,7 +133,7 @@ data class MemorySample(
     val timestamp: String,
     /** Sampling phase: `idle` (baseline before imports) or `queries`. */
     val phase: String,
-    /** Measured component, e.g. `processm-server`, `processm-neo4j`, `local-jvm`. */
+    /** Measured component, e.g. `processm-server`, `processm-neo4j`, `processm-interpreter`. */
     val component: String,
     val bytes: Long,
 )

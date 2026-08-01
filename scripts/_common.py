@@ -49,6 +49,7 @@ __all__ = [
     "safe_filename",
     "run_capture",
     "is_windows",
+    "gradle_command",
 ]
 
 

@@ -68,11 +68,27 @@ class MemorySamplerTest {
 
         assertEquals(
             listOf(
-                MemorySummary("jvm", MEMORY_PHASE_QUERIES, medianBytes = 50, peakBytes = 70),
+                MemorySummary("jvm", MEMORY_PHASE_QUERIES, medianBytes = 60, peakBytes = 70),
                 MemorySummary("neo4j", MEMORY_PHASE_IDLE, medianBytes = 200, peakBytes = 300),
                 MemorySummary("neo4j", MEMORY_PHASE_QUERIES, medianBytes = 500, peakBytes = 500),
             ),
             summaries,
         )
+    }
+
+    @Test
+    fun `summarize computes system totals before taking their median`() {
+        val samples = listOf(
+            MemorySample("t1", MEMORY_PHASE_QUERIES, "processm-interpreter", 10),
+            MemorySample("t1", MEMORY_PHASE_QUERIES, "processm-neo4j", 100),
+            MemorySample("t1", MEMORY_PHASE_QUERIES, "processm-server", 80),
+            MemorySample("t2", MEMORY_PHASE_QUERIES, "processm-interpreter", 100),
+            MemorySample("t2", MEMORY_PHASE_QUERIES, "processm-neo4j", 10),
+            MemorySample("t2", MEMORY_PHASE_QUERIES, "processm-server", 90),
+        )
+
+        val summaries = summarizeMemory(samples).associateBy { it.component }
+        assertEquals(110, summaries.getValue("local-total").medianBytes)
+        assertEquals(85, summaries.getValue("reference-total").medianBytes)
     }
 }

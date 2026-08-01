@@ -1,5 +1,6 @@
 package com.processm.processminterpreter.benchmark
 
+import com.fasterxml.jackson.core.type.TypeReference
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import java.nio.file.Path
 import kotlin.io.path.Path
@@ -86,13 +87,14 @@ object RunReplay {
         val querySpecs = readQuerySpecs(runDirectory).ifEmpty { inferQuerySpecs(queries) }
 
         // Also (re)write queries.csv: the chart generator selects scaling figures
-        // from the workload class, so a replayed older run must carry the same
-        // classification the report just used, or the two would disagree about
-        // which figures are meaningful.
+        // from the explicit query-series contract, so a replayed older run must
+        // carry the same metadata the report just used.
         CsvWriter.write(
             runDirectory.resolve("queries.csv"),
-            listOf("queryLabel", "workload", "clause", "pql"),
-            querySpecs.map { listOf(it.label, it.workload, it.clause, it.query) },
+            listOf("queryLabel", "workload", "scalingSeries", "clause", "pql"),
+            querySpecs.map {
+                listOf(it.label, it.workload, it.scalingSeries.sorted().joinToString(";"), it.clause, it.query)
+            },
         )
 
         ThesisReportWriter(runDirectory).write(
@@ -112,8 +114,9 @@ object RunReplay {
     private fun readEnvironment(runDirectory: Path): Map<String, Any?> {
         val file = runDirectory.resolve("environment.json")
         if (!file.isRegularFile()) return emptyMap()
-        @Suppress("UNCHECKED_CAST")
-        return runCatching { mapper.readValue(file.readText(), Map::class.java) as Map<String, Any?> }
+        return runCatching {
+            mapper.readValue(file.readText(), object : TypeReference<Map<String, Any?>>() {})
+        }
             .getOrDefault(emptyMap())
     }
 
@@ -140,6 +143,9 @@ object RunReplay {
                 DatasetOrder.parse(environment["datasetOrder"] as? String ?: DatasetOrder.DECLARED.name)
             }.getOrDefault(DatasetOrder.DECLARED),
             datasetOrderSeed = (environment["datasetOrderSeed"] as? Number)?.toLong() ?: 0L,
+            // Absent in legacy runs. This prevents a rebuilt report from claiming
+            // that collection-time semantic checks existed before they were added.
+            protocolVersion = (environment["benchmarkProtocolVersion"] as? Number)?.toInt() ?: 1,
             // Absent in runs collected before the global warm-up phase existed: those
             // runs performed zero rounds, and saying so is the point of the banner.
             globalWarmupRounds = (environment["globalWarmupRounds"] as? Number)?.toInt() ?: 0,
@@ -162,15 +168,32 @@ object RunReplay {
             )
         }
 
-    private fun readQuerySpecs(runDirectory: Path): List<BenchmarkQuerySpec> =
-        CsvReader.read(runDirectory.resolve("queries.csv")).map { row ->
+    private fun readQuerySpecs(runDirectory: Path): List<BenchmarkQuerySpec> {
+        val known = runCatching { BenchmarkConfig.load(BenchmarkProfile.FULL).queries }
+            .getOrDefault(emptyList())
+            .associateBy { it.label }
+        return CsvReader.read(runDirectory.resolve("queries.csv")).map { row ->
+            val label = row.getValue("queryLabel")
+            val recordedSeries = row["scalingSeries"]
+                ?.split(';')
+                ?.map { it.trim() }
+                ?.filter { it.isNotEmpty() }
+                .orEmpty()
             BenchmarkQuerySpec(
-                label = row.getValue("queryLabel"),
+                label = label,
                 query = row["pql"].orEmpty(),
-                workload = row["workload"]?.ifBlank { WORKLOAD_WINDOW } ?: WORKLOAD_WINDOW,
+                workload = when (val recorded = row["workload"]?.ifBlank { WORKLOAD_WINDOW } ?: WORKLOAD_WINDOW) {
+                    "fullPass" -> WORKLOAD_DATA_DEPENDENT
+                    else -> recorded
+                },
                 clause = row["clause"].orEmpty(),
+                // Runs predating this column are reinterpreted with the current,
+                // explicitly reviewed query-axis contract rather than by guessing
+                // from the coarse workload class.
+                scalingSeries = recordedSeries.ifEmpty { known[label]?.scalingSeries.orEmpty() },
             )
         }
+    }
 
     /**
      * Older runs predate `queries.csv`. Their workload class is recovered from the

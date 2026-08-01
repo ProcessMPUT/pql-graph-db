@@ -2,6 +2,7 @@ package com.processm.processminterpreter.benchmark
 
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import java.nio.file.Path
+import java.security.MessageDigest
 import kotlin.io.path.createDirectories
 import kotlin.io.path.writeText
 
@@ -34,7 +35,7 @@ class BenchmarkResultsWriter(
         writeRoundtrips(roundtrips)
         writeMemory(memorySamples, memorySummaries)
         writeCleanup(cleanup)
-        writeEnvironment(settings, environmentDetails)
+        writeEnvironment(settings, environmentDetails, datasets, querySpecs)
         writeSummary(settings, datasets, imports, queries, querySummaries, storage, roundtrips, cleanup, memorySamples)
     }
 
@@ -68,18 +69,14 @@ class BenchmarkResultsWriter(
         )
     }
 
-    /**
-     * The workload class of each query, so downstream tooling does not have to keep
-     * its own copy of the query list. The scaling figures are selected from
-     * `workload` (only [WORKLOAD_FULL_PASS] queries can show scaling at all) rather
-     * than from a hard-coded whitelist — which is how `hoistedGroup`, the one query
-     * with a clean scaling law, used to be left out of every scaling figure.
-     */
+    /** Query semantics used by every downstream table and figure. */
     private fun writeQuerySpecs(querySpecs: List<BenchmarkQuerySpec>) {
         CsvWriter.write(
             outputDirectory.resolve("queries.csv"),
-            listOf("queryLabel", "workload", "clause", "pql"),
-            querySpecs.map { listOf(it.label, it.workload, it.clause, it.query) },
+            listOf("queryLabel", "workload", "scalingSeries", "clause", "pql"),
+            querySpecs.map {
+                listOf(it.label, it.workload, it.scalingSeries.sorted().joinToString(";"), it.clause, it.query)
+            },
         )
     }
 
@@ -250,8 +247,11 @@ class BenchmarkResultsWriter(
     private fun writeEnvironment(
         settings: BenchmarkSettings,
         environmentDetails: Map<String, Any?> = emptyMap(),
+        datasets: List<PreparedDataset> = emptyList(),
+        querySpecs: List<BenchmarkQuerySpec> = emptyList(),
     ) {
         val environment = mapOf(
+            "benchmarkProtocolVersion" to settings.protocolVersion,
             "profile" to settings.profile.name.lowercase(),
             "warmups" to settings.profile.warmups,
             "repetitions" to settings.profile.repetitions,
@@ -266,6 +266,12 @@ class BenchmarkResultsWriter(
             "datasetFilter" to settings.datasetFilter.sorted(),
             "systemFilter" to settings.systemFilter.sorted(),
             "keepBenchmarkDataStores" to settings.keepBenchmarkDataStores,
+            "experiment" to mapOf(
+                "fingerprintSha256" to experimentFingerprint(datasets, querySpecs),
+                "datasetCount" to datasets.size,
+                "queryCount" to querySpecs.size,
+                "replicateValidityGate" to ReplicateControl.VALIDITY_GATE_SPREAD,
+            ),
             "javaVersion" to System.getProperty("java.version"),
             "osName" to System.getProperty("os.name"),
             "osVersion" to System.getProperty("os.version"),
@@ -278,6 +284,7 @@ class BenchmarkResultsWriter(
                 appendLine()
                 appendLine("## Runtime")
                 appendLine()
+                appendLine("- Benchmark protocol version: ${settings.protocolVersion}")
                 appendLine("- Profile: ${settings.profile.name.lowercase()}")
                 appendLine("- Warmups per query: ${settings.profile.warmups}")
                 appendLine("- Global warm-up rounds before the first measured dataset: ${settings.globalWarmupRounds}")
@@ -298,19 +305,20 @@ class BenchmarkResultsWriter(
                 appendLine("- Local storage probe: logical file size of Neo4j `/data/databases` and `/data/transactions`; Neo4j community edition has no manual checkpoint procedure, so sizes reflect the naturally checkpointed state (stabilized by repeated reads)")
                 appendLine("- Reference storage probe: allocated directory size of ProcessM PostgreSQL `/var/lib/postgresql/data`, after an explicit `CHECKPOINT;`")
                 appendLine("- Host hardware, Docker container limits, and database memory configuration are recorded in `environment.json` (`host` / `containers` keys)")
+                appendLine("- Docker engine/VM budget, exact image IDs, Git commit/dirty state, and the workload fingerprint are recorded in `environment.json`")
                 appendLine()
                 appendLine("## Measurement Protocol")
                 appendLine()
                 appendLine("- Both systems are measured through HTTP API as black-box services.")
                 appendLine("- Operations are issued sequentially by one benchmark runner, not concurrently.")
-                appendLine("- Every dataset/system pair gets a fresh datastore for this run.")
+                appendLine("- The runner refuses to start unless both APIs expose zero pre-existing datastores; every dataset/system pair then gets a fresh datastore for this run.")
                 appendLine("- Benchmark datastores use the `bench-` prefix and are deleted after the run unless `BENCHMARK_KEEP_DATASTORES=true`.")
                 appendLine("- Storage is measured as stabilized directory size before and after importing a dataset.")
-                appendLine("- Memory is sampled every 1 s by a background daemon thread: `docker stats` for `processm-server` and `processm-neo4j` plus host JVM RSS (`tasklist`) for the local application; phases: `idle` (${settings.profile.idleBaselineSeconds} s baseline before imports) and `queries`.")
+                appendLine("- Memory sampling targets a 1 s pause between probes; the raw timestamps in `memory-results.csv` are authoritative because `docker stats --no-stream` adds probe latency. Both applications and databases use the same Docker probe in thesis-grade runs; phases: `idle` (${settings.profile.idleBaselineSeconds} s baseline before imports) and `queries`.")
                 appendLine("- Each (dataset, query) pair runs one recorded `cold` execution per system before warmups; measured repetitions alternate between systems (local, reference, local, reference, ...).")
-                appendLine("- Response log/trace/event counts of the last warm sample are compared between systems; on divergence all samples of the pair are marked `MISMATCH` (Q4 parity).")
-                appendLine("- Neo4j may report `BELOW_ALLOCATION_GRANULARITY` on already-grown stores; use fresh storage and `BENCHMARK_DATASET_FILTER` for thesis-grade per-dataset storage measurements.")
-                appendLine("- Query charts should use medians or p95 values from `query-summary.csv`, not single samples.")
+                appendLine("- Log/trace/event counts are compared in every measured warm repetition. The last warm responses are also checked with the strict XES-JSON semantic comparator; on divergence all samples of the pair are marked `MISMATCH` (Q4 parity).")
+                appendLine("- Per-dataset rows in `storage-results.csv` are protocol diagnostics. Thesis-grade Q3 disk evidence comes only from `measure-storage-scaling.py`, one fresh stack per dataset.")
+                appendLine("- Query charts use medians from `query-summary.csv`, not single samples. p95 is not interpreted below 200 repetitions.")
                 appendLine()
                 appendLine("## Recommended Manual Controls")
                 appendLine()
@@ -320,6 +328,34 @@ class BenchmarkResultsWriter(
                 appendLine("- Run the compatibility report before using benchmark results as thesis evidence.")
             },
         )
+    }
+
+    private fun experimentFingerprint(
+        datasets: List<PreparedDataset>,
+        querySpecs: List<BenchmarkQuerySpec>,
+    ): String {
+        val canonical = buildString {
+            datasets.sortedBy { it.name }.forEach {
+                appendLine(
+                    listOf(
+                        "dataset", it.name, it.series, it.traces, it.eventsPerTrace,
+                        it.totalEvents, it.attributesPerEvent, it.totalAttributes,
+                        it.xesBytes, it.xesGzBytes,
+                    ).joinToString("\u001f"),
+                )
+            }
+            querySpecs.sortedBy { it.label }.forEach {
+                appendLine(
+                    listOf(
+                        "query", it.label, it.workload, it.scalingSeries.sorted().joinToString(";"),
+                        it.clause, it.query,
+                    ).joinToString("\u001f"),
+                )
+            }
+        }
+        return MessageDigest.getInstance("SHA-256")
+            .digest(canonical.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
     }
 
     private fun writeSummary(
@@ -346,7 +382,7 @@ class BenchmarkResultsWriter(
             appendLine("- Keep benchmark datastores: ${settings.keepBenchmarkDataStores}")
             appendLine("- Datasets: ${datasets.size}")
             appendLine("- Import results: ${imports.size}, errors: $importErrors")
-            appendLine("- Query samples: ${queries.size}, errors: $queryErrors, response-count mismatches: $queryMismatches")
+            appendLine("- Query samples: ${queries.size}, errors: $queryErrors, response mismatches: $queryMismatches")
             appendLine("- Query summaries: ${querySummaries.size}")
             appendLine("- Memory samples: ${memorySamples.size}")
             appendLine("- Storage measurements: ${storage.size}, errors: $storageErrors")

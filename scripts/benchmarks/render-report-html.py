@@ -46,7 +46,7 @@ STYLE = """
     color: #475569; background: #f8fafc; }
 """
 
-IMAGE_RE = re.compile(r"^!\[([^\]]*)\]\(([^)]+\.svg)\)\s*$")
+IMAGE_RE = re.compile(r"^!\[([^\]]*)\]\(([^)]+\.svg)\)\s*$", re.MULTILINE)
 HEADING_RE = re.compile(r"^(#{1,3})\s+(.*)$")
 COMMENT_RE = re.compile(r"^<!--.*-->\s*$")
 CODE_SPAN_RE = re.compile(r"`([^`]+)`")
@@ -175,6 +175,15 @@ class Renderer:
                 self.out.append("</ul>")
                 continue
 
+            # one or more Markdown quote lines
+            if line.lstrip().startswith(">"):
+                quoted = []
+                while i < n and lines[i].lstrip().startswith(">"):
+                    quoted.append(lines[i].lstrip()[1:].lstrip())
+                    i += 1
+                self.out.append(f"<blockquote><p>{inline(' '.join(quoted))}</p></blockquote>")
+                continue
+
             # paragraph: gather until a blank line or a block starter
             para = []
             while i < n and lines[i].strip() and not COMMENT_RE.match(lines[i]):
@@ -183,6 +192,7 @@ class Renderer:
                     HEADING_RE.match(stripped)
                     or IMAGE_RE.match(stripped)
                     or stripped.lstrip().startswith("- ")
+                    or stripped.lstrip().startswith(">")
                     or stripped.lstrip().startswith("|")
                 ):
                     break
@@ -195,20 +205,53 @@ class Renderer:
 
 
 def build(run_dir: Path, out_path: Path) -> None:
-    md_text = (run_dir / "thesis-report.md").read_text(encoding="utf-8")
-
-    # A single run cannot show that the numbers reproduce, and METODOLOGIA §5.6
-    # requires the run-to-run spread to be reported. Fold it in when
-    # compare-runs.py has produced it, so the shared HTML is self-contained
-    # evidence rather than one run in isolation.
-    repeatability = run_dir / "repeatability.md"
-    if repeatability.is_file():
-        md_text += "\n\n" + repeatability.read_text(encoding="utf-8")
+    base = run_dir / "thesis-report.md"
+    series = run_dir / "thesis-report-series.md"
+    if series.is_file():
+        if series.stat().st_mtime < base.stat().st_mtime:
+            raise SystemExit(
+                "error: thesis-report-series.md is older than thesis-report.md; "
+                "rerun compare-runs.py after rebuilding plots",
+            )
+        md_text = series.read_text(encoding="utf-8")
+        required_series_files = (
+            "repeatability.csv",
+            "series-comparison.csv",
+            "series-import.csv",
+            "series-import-comparison.csv",
+            "series-scaling.csv",
+            "thesis-tables-series.tex",
+        )
+        missing_series_files = [name for name in required_series_files if not (run_dir / name).is_file()]
+        if missing_series_files:
+            raise SystemExit(
+                "error: final report is missing cross-run artifacts: " + ", ".join(missing_series_files),
+            )
+        required_final_sections = (
+            "## Werdykt serii — Q2",
+            "## Q2 — skalowanie między przebiegami",
+            "## Q4 — zgodność odpowiedzi między przebiegami",
+            "Kompletna izolowana sonda storage została dołączona",
+        )
+        missing = [section for section in required_final_sections if section not in md_text]
+        if missing:
+            raise SystemExit(
+                "error: thesis-report-series.md is not a complete final report; missing: "
+                + ", ".join(missing),
+            )
+        missing_plots = [
+            rel_path for _alt, rel_path in IMAGE_RE.findall(md_text)
+            if not (run_dir / rel_path).is_file()
+        ]
+        if missing_plots:
+            raise SystemExit("error: final report references missing plots: " + ", ".join(missing_plots))
     else:
+        md_text = base.read_text(encoding="utf-8")
         md_text += (
-            "\n\n## Powtarzalność pomiarów\n\n"
-            "*Brak danych powtarzalności — uruchom `scripts/benchmarks/compare-runs.py`"
-            " na co najmniej trzech przebiegach (METODOLOGIA §5 pkt 6).*\n"
+            "\n\n## Analiza serii przebiegów\n\n"
+            "*Brak ważnej serii — ten dokument opisuje tylko jeden blok eksperymentalny. "
+            "Uruchom `compare-runs.py` na co najmniej trzech kontrbalansowanych przebiegach; "
+            "pojedynczego bloku nie wolno wysyłać jako raportu końcowego.*\n"
         )
 
     body = Renderer(run_dir).render(md_text)

@@ -65,6 +65,12 @@ tasks.generateGrammarSource {
     arguments = arguments + listOf("-visitor", "-no-listener")
 }
 
+tasks.bootJar {
+    // Dockerfile copies this exact artifact. A wildcard also matched the
+    // non-executable `-plain.jar`, making the measured LOCAL image ambiguous.
+    archiveFileName.set("processm-interpreter.jar")
+}
+
 val benchmarkSourceSet = sourceSets.create("benchmark") {
     java {
         setSrcDirs(listOf("src/benchmark/kotlin"))

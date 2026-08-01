@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import math
 from collections import defaultdict
 from typing import Callable
@@ -22,9 +23,9 @@ COLORS = {
     "reference": "#dc2626",
 }
 RIBBON_OPACITY = 0.16
-# Grey band drawn behind every Q2 chart at the dataset-independent cost of a
-# request (transport, auth, parse, plan). Without it a reader cannot tell how
-# much of a 6 ms bar belongs to the storage engine at all.
+# Dashed context lines drawn on Q2 charts at the median latency of the
+# smallest-window workload. They are descriptive only: the path still loads and
+# serializes metadata, so they do not isolate transport, planning, or storage.
 FLOOR_FILL = "#94a3b8"
 
 
@@ -33,6 +34,16 @@ def read_csv(path: Path) -> list[dict[str, str]]:
         return []
     with path.open(newline="", encoding="utf-8-sig") as handle:
         return list(csv.DictReader(handle))
+
+
+def read_json(path: Path) -> dict[str, object]:
+    if not path.is_file():
+        return {}
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
 
 
 def number(value: str | None) -> float:
@@ -187,7 +198,7 @@ def write_svg(
     plotted as zero — which is how a database that shrank by 19,7 MB once became
     a V-shaped dip in a chart whose own table called the same cell unmeasurable.
 
-    `floor` draws a horizontal band at the dataset-independent request cost.
+    `floor` draws horizontal reference lines for the smallest observed window.
     `annotate_fit` prints the fitted alpha and R^2 per series, so a flat noisy
     line is labelled as such instead of inviting a trend reading.
     """
@@ -305,7 +316,7 @@ def write_svg(
             )
             lines.append(
                 f'<text x="{WIDTH - PAD_RIGHT - 4}" y="{py - 5:.2f}" text-anchor="end" font-family="Arial" '
-                f'font-size="11" fill="{colour}">podłoga {name}: {format_num(value)}</text>'
+                f'font-size="11" fill="{colour}">najmniejsze okno {name}: {format_num(value)}</text>'
             )
 
     fit_notes: list[tuple[str, str]] = []
@@ -607,7 +618,7 @@ def inject_markdown_block(result_dir: Path, prefix: str, block: str) -> None:
     """Inserts a marker-delimited markdown block at the end of a named section.
 
     Used for content that must be computed from CSVs the runner never sees (the
-    sequential storage probe), so the report keeps a single source of truth per
+    isolated storage probe), so the report keeps a single source of truth per
     number instead of the reader meeting two different disk figures.
     """
     if not block:
@@ -736,17 +747,21 @@ SCALING_AXES = [
     ("trace-scaling", "traces", "Liczba trace'ów", True),
     ("event-scaling", "totalEvents", "Łączna liczba zdarzeń", True),
     ("attribute-scaling", "attributesPerEvent", "Atrybuty na zdarzenie", True),
-    ("shape-scaling", "eventsPerTrace", "Zdarzeń na ślad (stała objętość logu)", True),
+    ("shape-scaling", "eventsPerTrace", "Zdarzeń na ślad (stała liczba zdarzeń)", True),
 ]
 
 
 def load_query_specs(result_dir: Path) -> dict[str, dict[str, str]]:
-    """Workload class and clause description per query, written by the runner.
+    """Workload class, scaling axes and clause description written by the runner.
 
     Falls back to an empty mapping for runs collected before `queries.csv`
     existed; callers then treat every query as unclassified rather than guessing.
     """
     return {row["queryLabel"]: row for row in read_csv(result_dir / "queries.csv") if row.get("queryLabel")}
+
+
+def declared_scaling_series(spec: dict[str, str]) -> set[str]:
+    return {value.strip() for value in spec.get("scalingSeries", "").split(";") if value.strip()}
 
 
 def storage_row_is_valid(row: dict[str, str]) -> bool:
@@ -757,7 +772,11 @@ def storage_row_is_valid(row: dict[str, str]) -> bool:
     measurements that exist but carry no per-dataset quantity — plotting them as
     numbers is what produced a line dipping below zero mid-series.
     """
-    if row.get("status") != "OK":
+    # The main protocol cannot checkpoint Neo4j Community symmetrically with
+    # PostgreSQL, so its LOCAL cell is deliberately non-numeric in the report
+    # table and must also be non-plottable here. The isolated storage probe uses
+    # a clean Neo4j restart and is charted through a separate path.
+    if row.get("system") == "local" or row.get("status") != "OK":
         return False
     return number(row.get("deltaBytes")) > 0
 
@@ -805,11 +824,10 @@ def measurement_floor(
     queries: list[dict[str, str]],
     query_specs: dict[str, dict[str, str]],
 ) -> dict[str, float]:
-    """Median time of the `floor` query per system, in milliseconds.
+    """Median time of the smallest-window query per system, in milliseconds.
 
-    Drawn on every query chart as a dashed reference line: it is the cost of a
-    request that touches almost no data, so the distance between a curve and this
-    line is the only part attributable to the storage engine.
+    Drawn as descriptive end-to-end context. It still reads and serializes log
+    metadata, so it is not subtracted and carries no causal storage attribution.
     """
     floor_labels = {label for label, spec in query_specs.items() if spec.get("workload") == "floor"}
     if not floor_labels:
@@ -827,55 +845,284 @@ def measurement_floor(
     }
 
 
-def storage_model_block(result_dir: Path, datasets: dict[str, dict[str, str]]) -> str:
-    """Markdown table of the fitted disk-growth model from the sequential probe.
+def validated_storage_scaling(
+    result_dir: Path,
+    datasets: dict[str, dict[str, str]],
+) -> tuple[list[dict[str, str]], str]:
+    """Return the complete isolated Q3 matrix, or an explicit rejection reason."""
+    raw = read_csv(result_dir / "storage-scaling.csv")
+    if not raw:
+        return [], "brak pliku `storage-scaling.csv`"
+    if any(row.get("measurementMode") != "isolated-fresh-stack" for row in raw):
+        return [], "plik zawiera wiersze starej sondy sekwencyjnej"
 
-    `delta = a + b * events` separates what the allocator does (the intercept)
-    from what the storage format costs (the slope). Reporting `delta / xesBytes`
-    at a single point instead makes the same format look like a 32,9x expansion at
-    100 traces and 3,8x at 10 000, because the constant term dominates the small
-    datasets.
+    expected_names = {
+        name for name, dataset in datasets.items()
+        if dataset.get("series") in {axis[0] for axis in SCALING_AXES}
+    }
+    expected = {(name, system) for name in expected_names for system in ("local", "reference")}
+    counts: dict[tuple[str, str], int] = defaultdict(int)
+    preparation_ids: dict[str, set[str]] = defaultdict(set)
+    issues: list[str] = []
+    environment = read_json(result_dir / "environment.json")
+    expected_commit = (
+        environment.get("source", {}).get("gitCommit")
+        if isinstance(environment.get("source"), dict)
+        else None
+    )
+    environment_containers = environment.get("containers", {})
+
+    def environment_image(component: str) -> str | None:
+        data = environment_containers.get(component) if isinstance(environment_containers, dict) else None
+        return data.get("imageId") if isinstance(data, dict) else None
+
+    expected_images = {
+        "localAppImageId": environment_image("processm-interpreter"),
+        "localDbImageId": environment_image("processm-neo4j"),
+        "referenceImageId": environment_image("processm-server"),
+    }
+    for row in raw:
+        key = (row.get("datasetName", ""), row.get("system", ""))
+        counts[key] += 1
+        preparation_ids[key[0]].add(row.get("stackPreparationId", ""))
+        before = number(row.get("beforeBytes"))
+        after = number(row.get("afterBytes"))
+        delta = number(row.get("deltaBytes"))
+        dataset_xes = number(datasets.get(key[0], {}).get("xesBytes"))
+        recorded_xes = number(row.get("xesBytes"))
+        if not all(math.isfinite(value) for value in (before, after, delta, dataset_xes, recorded_xes)):
+            issues.append(f"nienumeryczny wiersz {key[0]}/{key[1]}")
+        elif delta <= 0 or abs((after - before) - delta) > 0.5:
+            issues.append(f"niespójna delta {key[0]}/{key[1]}")
+        elif recorded_xes != dataset_xes:
+            issues.append(f"inny plik XES {key[0]}/{key[1]}")
+        if not row.get("stackPreparedAtUtc") or not row.get("stackPreparationId"):
+            issues.append(f"brak dowodu świeżego stacku {key[0]}/{key[1]}")
+        if not expected_commit or row.get("gitCommit") != expected_commit:
+            issues.append(f"inny commit sondy {key[0]}/{key[1]}")
+        if any(not image_id or row.get(column) != image_id for column, image_id in expected_images.items()):
+            issues.append(f"inne image ID sondy {key[0]}/{key[1]}")
+    actual = set(counts)
+    if actual != expected:
+        issues.append(f"niepełna macierz {len(actual)}/{len(expected)}")
+    if any(count != 1 for count in counts.values()):
+        issues.append("zduplikowane punkty")
+    if any(len(ids) != 1 or "" in ids for ids in preparation_ids.values()):
+        issues.append("systemy datasetu nie współdzielą jednego dowodu przygotowania")
+    nonempty_ids = {next(iter(ids)) for ids in preparation_ids.values() if len(ids) == 1 and "" not in ids}
+    if len(nonempty_ids) != len(expected_names):
+        issues.append("dowód przygotowania stacku został użyty dla więcej niż jednego datasetu")
+    if issues:
+        return [], "; ".join(dict.fromkeys(issues))
+    return join_dataset(raw, datasets), ""
+
+
+def storage_model_block(rows: list[dict[str, str]], rejection_reason: str) -> str:
+    """Markdown table of the fitted disk-growth model from isolated imports.
+
+    `delta = a + b * xesBytes` directly estimates marginal database bytes per
+    uncompressed XES byte. Every point starts from fresh volumes, so the intercept
+    captures initialization without one dataset inheriting another's preallocation.
     """
-    rows = join_dataset(read_csv(result_dir / "storage-scaling.csv"), datasets)
     if not rows:
-        return ""
+        return (
+            "<!-- plots:block:storage-model -->\n\n"
+            f"*Brak finalnego modelu Q3-dysk: {rejection_reason}. Raport wymaga kompletnej "
+            "macierzy izolowanych importów, po jednym punkcie na świeżym stacku.*\n\n"
+            "<!-- /plots:block -->\n"
+        )
     lines = [
-        "| Seria | System | Punkty | Stała a [MiB] | Koszt krańcowy b [B/zdarzenie] "
-        "| Ekspansja krańcowa [B/B XES] | R² |",
-        "| :--- | :--- | ---: | ---: | ---: | ---: | ---: |",
+        "| Seria | System | Punkty | Stała a [MiB] | Ekspansja krańcowa b [B/B XES] | R² | Ocena modelu |",
+        "| :--- | :--- | ---: | ---: | ---: | ---: | :--- |",
     ]
     emitted = False
     for series_name, _, _, _ in SCALING_AXES:
+        if series_name == "shape-scaling":
+            continue
         for system in ("local", "reference"):
             points = [
-                (number(r.get("totalEvents")), number(r.get("deltaBytes")), number(r.get("xesBytes")))
+                (number(r.get("xesBytes")), number(r.get("deltaBytes")))
                 for r in rows
                 if r.get("series") == series_name and r.get("system") == system
             ]
             points = [p for p in points if all(math.isfinite(v) for v in p) and p[0] > 0 and p[1] > 0]
-            fit = fit_linear([(events, delta) for events, delta, _ in points])
+            fit = fit_linear(points)
             if not fit:
                 continue
             intercept, slope, r2 = fit
-            xes_per_event = sum(p[2] for p in points) / sum(p[0] for p in points)
-            expansion = slope / xes_per_event if xes_per_event > 0 else float("nan")
             lines.append(
                 f"| {series_name} | {system} | {len(points)} | {intercept / (1024 * 1024):.2f} "
-                f"| {slope:.0f} | {expansion:.2f} | {r2:.2f} |"
+                f"| {slope:.2f} | {r2:.2f} | {storage_fit_interpretation(slope, r2)} |"
             )
             emitted = True
     if not emitted:
         return ""
     lines.append("")
     lines.append(
-        "*Model dopasowany do wyników sondy sekwencyjnej (`storage-scaling.csv`) — pomiaru "
-        "przypisywalnego per dataset dla **obu** systemów. Stała **a** opisuje prealokację "
-        "silnika, współczynnik **b** — format składowania; to **b** jest wielkością, którą "
-        "należy cytować jako ekspansję. Jeżeli nachylenie z tej tabeli zgadza się z nachyleniem "
-        "modelu z protokołu benchmarku (sekcja Q3), oba niezależne pomiary potwierdzają się "
-        "wzajemnie; rozjazd nachyleń jest sygnałem do weryfikacji importem w izolacji.*"
+        "*Każdy punkt pochodzi z osobnego świeżego stacku (`measurementMode=isolated-fresh-stack`). "
+        "Model `delta = a + b · xesBytes` oddziela stały koszt inicjalizacji (**a**) od "
+        "krańcowej ekspansji trwałych danych (**b**). Serię `shape-scaling` raportuje się "
+        "punktowo: ma stałą liczbę zdarzeń, ale zmienną liczbę trace'ów i bajtów XES. "
+        "Współczynnik b jest interpretowany tylko przy b > 0 i R² ≥ 0.30.*"
     )
     return "<!-- plots:block:storage-model -->\n\n" + "\n".join(lines) + "\n\n<!-- /plots:block -->\n"
+
+
+TEX_STORAGE_START = "% plots:storage-model:start"
+TEX_STORAGE_END = "% plots:storage-model:end"
+
+
+def storage_fit_interpretation(slope: float, r2: float) -> str:
+    if not math.isfinite(r2) or r2 < 0.30:
+        return "niska jakość dopasowania"
+    if slope <= 0:
+        return "nachylenie niefizyczne — bez interpretacji"
+    return "model interpretowalny"
+
+
+def inject_storage_model_tex(result_dir: Path, rows: list[dict[str, str]]) -> None:
+    """Keep the isolated Q3 disk model available to the LaTeX report as well."""
+    tex = result_dir / "thesis-tables.tex"
+    if not tex.is_file():
+        return
+    table_rows: list[tuple[str, str, int, float, float, float, str]] = []
+    for series_name, _, _, _ in SCALING_AXES:
+        if series_name == "shape-scaling":
+            continue
+        for system in ("local", "reference"):
+            points = [
+                (number(row.get("xesBytes")), number(row.get("deltaBytes")))
+                for row in rows
+                if row.get("series") == series_name and row.get("system") == system
+            ]
+            points = [point for point in points if all(math.isfinite(value) for value in point) and min(point) > 0]
+            fit = fit_linear(points)
+            if fit:
+                intercept, slope, r2 = fit
+                table_rows.append(
+                    (
+                        series_name,
+                        system,
+                        len(points),
+                        intercept / (1024 * 1024),
+                        slope,
+                        r2,
+                        storage_fit_interpretation(slope, r2),
+                    ),
+                )
+
+    block = [TEX_STORAGE_START]
+    if table_rows:
+        block += [
+            r"\begin{table}[htbp]",
+            r"\centering",
+            r"\caption{Q3-dysk: model izolowanych przyrostów $\Delta=a+b\cdot\mathrm{XES}$}",
+            r"\label{tab:bench-storage-isolated-model}",
+            r"\begin{tabular}{llrrrrl}",
+            r"\toprule",
+            r"Seria & System & Punkty & $a$ [MiB] & $b$ [B/B XES] & $R^2$ & Ocena \\",
+            r"\midrule",
+        ]
+        block += [
+            f"{tex_escape(series)} & {tex_escape(system)} & {count} & {intercept:.2f} & "
+            f"{slope:.2f} & {r2:.2f} & {tex_escape(interpretation)} \\\\"
+            for series, system, count, intercept, slope, r2, interpretation in table_rows
+        ]
+        block += [
+            r"\bottomrule",
+            r"\end{tabular}",
+            r"\begin{minipage}{\linewidth}\footnotesize Każdy punkt pochodzi z osobnego świeżego stacku; $a$ opisuje stały koszt inicjalizacji, a $b$ krańcową ekspansję trwałych danych. Interpretacja $b$ wymaga $b>0$ i $R^2\geq0.30$.\end{minipage}",
+            r"\end{table}",
+        ]
+    block.append(TEX_STORAGE_END)
+    replacement = "\n".join(block)
+    text = tex.read_text(encoding="utf-8")
+    if TEX_STORAGE_START in text and TEX_STORAGE_END in text:
+        head, rest = text.split(TEX_STORAGE_START, 1)
+        _, tail = rest.split(TEX_STORAGE_END, 1)
+        text = head.rstrip() + "\n\n" + replacement + tail
+    else:
+        text = text.rstrip() + "\n\n" + replacement + "\n"
+    tex.write_text(text, encoding="utf-8")
+
+
+def update_storage_summary(result_dir: Path, rows: list[dict[str, str]]) -> None:
+    """Keep the Q3-disk answer synchronized with the post-run isolated probe."""
+    report = result_dir / "thesis-report.md"
+    if not report.is_file():
+        return
+    if rows:
+        interpretable_slopes: dict[str, list[float]] = defaultdict(list)
+        fitted_models = 0
+        for series_name, _, _, _ in SCALING_AXES:
+            if series_name == "shape-scaling":
+                continue
+            for system in ("local", "reference"):
+                points = [
+                    (number(row.get("xesBytes")), number(row.get("deltaBytes")))
+                    for row in rows
+                    if row.get("series") == series_name and row.get("system") == system
+                ]
+                fit = fit_linear(points)
+                if fit:
+                    fitted_models += 1
+                    _intercept, slope, r2 = fit
+                    if storage_fit_interpretation(slope, r2) == "model interpretowalny":
+                        interpretable_slopes[system].append(slope)
+        if fitted_models == 6:
+            ranges = []
+            for system in ("local", "reference"):
+                values = interpretable_slopes[system]
+                if values:
+                    ranges.append(f"{system.upper()} {min(values):.2f}–{max(values):.2f} B/B XES")
+            range_text = "; ".join(ranges) if ranges else "brak wiarygodnego dodatniego nachylenia"
+            replacement = (
+                "- **Q3 (dysk).** Kompletna izolowana sonda storage została dołączona. "
+                f"Interpretowalne modele (b > 0 i R² ≥ 0.30): "
+                f"{len(interpretable_slopes['local']) + len(interpretable_slopes['reference'])}/6; "
+                f"zakresy b: {range_text}. Ze względu na zależność od serii raport nie redukuje "
+                "wyniku do jednego rankingu."
+            )
+        else:
+            rows = []
+    if not rows:
+        replacement = (
+            "- **Q3 (dysk).** Wynik daje osobna sonda izolowanych importów. Bez kompletnego "
+            "`storage-scaling.csv` pytanie pozostaje nierozstrzygnięte."
+        )
+    text = report.read_text(encoding="utf-8")
+    text = re.sub(
+        r"- \*\*Q3 \(dysk\)\.\*\*.*?(?=\n- \*\*Q3 \(pamięć\)\.\*\*)",
+        replacement,
+        text,
+        flags=re.S,
+    )
+    report.write_text(text, encoding="utf-8")
+
+
+def has_current_series_report(result_dir: Path) -> bool:
+    """Accept cross-run CSVs only when compare-runs produced a current report.
+
+    Auxiliary CSVs can outlive a rebuilt single-run report.  Treating their
+    mere presence as proof of a valid series made single-block plots inherit
+    stale cross-run captions and aggregates.
+    """
+    base = result_dir / "thesis-report.md"
+    series = result_dir / "thesis-report-series.md"
+    required_csv = ("series-import.csv", "repeatability.csv", "series-scaling.csv")
+    if (
+        not base.is_file()
+        or not series.is_file()
+        or series.stat().st_mtime < base.stat().st_mtime
+        or any(not (result_dir / name).is_file() for name in required_csv)
+    ):
+        return False
+    text = series.read_text(encoding="utf-8")
+    return (
+        "## Werdykt serii — Q2" in text
+        and "## Q2 — skalowanie między przebiegami" in text
+        and "## Q4 — zgodność odpowiedzi między przebiegami" in text
+    )
 
 
 def main() -> int:
@@ -886,10 +1133,42 @@ def main() -> int:
     result_dir = args.result_dir
     plots_dir = result_dir / "plots"
     plots_dir.mkdir(parents=True, exist_ok=True)
+    for stale_plot in plots_dir.glob("*.svg"):
+        stale_plot.unlink()
 
     datasets = {row["datasetName"]: row for row in read_csv(result_dir / "datasets.csv")}
     imports = join_dataset(read_csv(result_dir / "import-results.csv"), datasets)
+    current_series = has_current_series_report(result_dir)
+    series_imports = read_csv(result_dir / "series-import.csv") if current_series else []
+    if series_imports:
+        imports = join_dataset(
+            [dict(row, seconds=row.get("medianSeconds", ""), status="OK") for row in series_imports],
+            datasets,
+        )
+        import_evidence = "mediany z pełnych bloków"
+        import_low_field, import_high_field = "minSeconds", "maxSeconds"
+    else:
+        import_evidence = "pojedyncze czasy bloku"
+        import_low_field, import_high_field = None, None
+
     queries = join_dataset(read_csv(result_dir / "query-summary.csv"), datasets)
+    repeatability = read_csv(result_dir / "repeatability.csv") if current_series else []
+    if repeatability:
+        queries = join_dataset(
+            [
+                dict(
+                    row,
+                    medianSeconds=str(number(row.get("medianMs")) / 1000.0),
+                    q1Seconds=str(number(row.get("minMs")) / 1000.0),
+                    q3Seconds=str(number(row.get("maxMs")) / 1000.0),
+                )
+                for row in repeatability
+            ],
+            datasets,
+        )
+        query_evidence = "mediana median bloków; pasmo min–max między blokami"
+    else:
+        query_evidence = "mediana i kwartyle bloku kotwiczącego"
     storage = join_dataset(read_csv(result_dir / "storage-results.csv"), datasets)
     query_specs = load_query_specs(result_dir)
     quartiles = quartile_fields(result_dir, queries)
@@ -900,10 +1179,16 @@ def main() -> int:
         import_rows = [r for r in imports if r.get("series") == series_name and r.get("status") == "OK"]
         write_svg(
             plots_dir / f"import_by_{axis}.svg",
-            f"Import: skalowanie — {label.lower()}",
+            f"Import ({import_evidence}): skalowanie — {label.lower()}",
             axis_label,
             "Czas importu [s] (skala log)",
-            line_series(import_rows, axis, "seconds"),
+            line_series(
+                import_rows,
+                axis,
+                "seconds",
+                low_field=import_low_field,
+                high_field=import_high_field,
+            ),
             log_x=log_x,
             log_y=True,
             annotate_fit=log_x,
@@ -926,14 +1211,13 @@ def main() -> int:
             log_y=True,
         )
 
-        # Scaling figures are emitted only for queries whose semantics can depend
-        # on dataset size. A `window` query is bounded by the API's default limits
-        # on both sides, so its "scaling" chart would show noise around a constant
-        # and invite a trend reading that the data cannot support.
+        # Scaling is a query-axis property. A bounded response can still require
+        # sorting/grouping all events of each retained trace; conversely, varying
+        # unused custom attributes says nothing about an event-name query.
         labels = [
             label_name
             for label_name in sorted({r.get("queryLabel", "") for r in queries if r.get("series") == series_name})
-            if query_specs.get(label_name, {}).get("workload") != "window"
+            if series_name in declared_scaling_series(query_specs.get(label_name, {}))
         ]
         for query_label in labels:
             query_rows = [
@@ -942,7 +1226,7 @@ def main() -> int:
             ]
             write_svg(
                 plots_dir / f"query_{query_label}_by_{axis}.svg",
-                f"{query_label}: skalowanie mediany czasu zapytania",
+                f"{query_label}: skalowanie ({query_evidence})",
                 axis_label,
                 "Mediana [ms] (skala log)",
                 line_series(
@@ -957,10 +1241,16 @@ def main() -> int:
 
     # Local-vs-reference comparison and speedup charts per dataset (log scale so
     # ms-vs-minutes differences stay readable), plus memory and import overviews.
-    highlight_datasets = [
-        name for name in datasets
-        if datasets[name].get("series") == "real-validation" or name in ("trace-10000", "event-200")
-    ]
+    highlight_datasets = [name for name in datasets if datasets[name].get("series") == "real-validation"]
+    for series_name in ("trace-scaling", "event-scaling", "attribute-scaling", "shape-scaling"):
+        candidates = [
+            (number(row.get("xesBytes")), name)
+            for name, row in datasets.items()
+            if row.get("series") == series_name
+        ]
+        if candidates:
+            highlight_datasets.append(max(candidates)[1])
+    highlight_datasets = list(dict.fromkeys(highlight_datasets))
     query_labels = sorted({r.get("queryLabel", "") for r in queries})
     embed: list[str] = []
     for ds_name in highlight_datasets:
@@ -988,7 +1278,7 @@ def main() -> int:
         )
         write_speedup_svg(
             plots_dir / f"query_speedup_{ds_name}.svg",
-            f"{ds_name}: przewaga local nad reference",
+            f"{ds_name}: iloraz median reference/local",
             ratios,
         )
         embed += [f"query_compare_{ds_name}.svg", f"query_speedup_{ds_name}.svg"]
@@ -1005,7 +1295,7 @@ def main() -> int:
             import_series[system].append(median(rows))
     write_grouped_bars_svg(
         plots_dir / "import_compare.svg",
-        "Import: mediana czasu (najwieksze datasety)",
+        f"Import: {import_evidence} (wybrane datasety)",
         import_cats,
         import_series,
         "Sekundy",
@@ -1035,22 +1325,19 @@ def main() -> int:
         COLORS.update(colors_backup)
         embed.append("memory_queries_phase.svg")
 
-    # Five queries covering distinct PQL clauses (thesis question 4): limit,
-    # where on a custom attribute, order by, group by, select with aggregations.
-    # Which queries get a scaling figure is decided by their workload class, not
-    # by a list kept here. The old hard-coded whitelist held five `window` queries
-    # — all bounded by the API's default limits, so all flat — and omitted
-    # `hoistedGroup`, the one query with a clean scaling law on both systems.
+    # The query metadata declares the informative dataset series explicitly.
+    # This avoids both plotting a bounded query against an unrelated axis and
+    # losing lower-scope work performed before a hierarchical response limit.
     grid_queries = [
         (label, spec.get("clause", ""))
         for label, spec in sorted(query_specs.items())
-        if spec.get("workload") == "fullPass"
+        if declared_scaling_series(spec)
     ]
     grid_axes = [
         ("traces", "a) liczba śladów"),
         ("totalEvents", "b) liczba zdarzeń"),
         ("attributesPerEvent", "c) liczba atrybutów na zdarzenie"),
-        ("eventsPerTrace", "d) kształt logu przy stałej objętości"),
+        ("eventsPerTrace", "d) kształt logu przy stałej liczbie zdarzeń"),
     ]
     query_grid: list[tuple[str, str]] = []
     for axis, axis_caption in grid_axes:
@@ -1061,22 +1348,22 @@ def main() -> int:
         ]
         if not block:
             continue
-        query_grid.append(("", f"**Skalowanie zapytań — {axis_caption}**"))
+        query_grid.append(("", f"**Skalowanie zapytań — {axis_caption} ({query_evidence})**"))
         query_grid.extend(block)
     if not grid_queries:
         query_grid.append(
             (
                 "",
-                "*Brak rysunków skalowania: przebieg nie zawiera zapytań klasy „pełny przebieg”. "
-                "Zapytania ograniczone oknem nie mogą wykazać zależności od rozmiaru danych — "
-                "zob. tabelę dopasowanych wykładników.*",
+                "*Brak rysunków skalowania: `queries.csv` nie deklaruje żadnej "
+                "interpretowalnej pary zapytanie–seria.*",
             ),
         )
 
     # Storage-scaling probe results (scripts/benchmarks/measure-storage-scaling.py):
-    # sequential no-cleanup imports give attributable per-dataset disk deltas for
-    # BOTH systems, unlike the benchmark's own storage rows (thesis question 5).
-    storage_scaling = join_dataset(read_csv(result_dir / "storage-scaling.csv"), datasets)
+    # Each point is an isolated fresh-stack import for both systems. Legacy
+    # sequential rows are deliberately ignored because file preallocation made a
+    # delta depend on which dataset happened to precede it.
+    storage_scaling, storage_rejection = validated_storage_scaling(result_dir, datasets)
     if storage_scaling:
         for series_name, axis, label, log_x in SCALING_AXES:
             axis_label = label + (" (skala log)" if log_x else "")
@@ -1101,10 +1388,11 @@ def main() -> int:
         (
             "Import (Q1)",
             [
-                ("import_by_traces.svg", "Rys. Q1a: skalowanie czasu importu — a) liczba śladów."),
-                ("import_by_totalEvents.svg", "Rys. Q1b: skalowanie czasu importu — b) liczba zdarzeń."),
-                ("import_by_attributesPerEvent.svg", "Rys. Q1c: skalowanie czasu importu — c) liczba atrybutów na zdarzenie."),
-                ("import_compare.svg", "Rys. Q1d: mediany czasu importu dla największych datasetów."),
+                ("import_by_traces.svg", f"Rys. Q1a: skalowanie czasu importu — a) liczba śladów ({import_evidence})."),
+                ("import_by_totalEvents.svg", f"Rys. Q1b: skalowanie czasu importu — b) liczba zdarzeń ({import_evidence})."),
+                ("import_by_attributesPerEvent.svg", f"Rys. Q1c: skalowanie czasu importu — c) liczba atrybutów na zdarzenie ({import_evidence})."),
+                ("import_by_eventsPerTrace.svg", f"Rys. Q1d: czas importu przy stałych 10 000 zdarzeń i zmiennym kształcie logu ({import_evidence})."),
+                ("import_compare.svg", f"Rys. Q1e: {import_evidence} dla wybranych największych datasetów."),
             ],
             "section-end",
         ),
@@ -1116,9 +1404,10 @@ def main() -> int:
         (
             "Przestrzeń dyskowa",
             [
-                ("storage_scaling_delta_by_traces.svg", "Rys. Q3a: przyrost dysku po imporcie — a) liczba śladów (sonda sekwencyjna, oba systemy, skala log-log)."),
+                ("storage_scaling_delta_by_traces.svg", "Rys. Q3a: przyrost dysku po imporcie — a) liczba śladów (izolowany świeży stack dla każdego punktu)."),
                 ("storage_scaling_delta_by_totalEvents.svg", "Rys. Q3b: przyrost dysku po imporcie — b) liczba zdarzeń."),
                 ("storage_scaling_delta_by_attributesPerEvent.svg", "Rys. Q3c: przyrost dysku po imporcie — c) liczba atrybutów na zdarzenie."),
+                ("storage_scaling_delta_by_eventsPerTrace.svg", "Rys. Q3d: przyrost dysku przy stałych 10 000 zdarzeń i zmiennym kształcie logu."),
             ],
             "section-end",
         ),
@@ -1138,7 +1427,7 @@ def main() -> int:
         (
             "Pamięć operacyjna",
             [
-                ("memory_queries_phase.svg", "Rys. Q3c: zużycie RAM w fazie zapytań (mediana i peak, per komponent)."),
+                ("memory_queries_phase.svg", "Rys. Q3e: zużycie RAM w fazie zapytań (mediana i peak, per komponent)."),
             ],
             "section-end",
         ),
@@ -1148,14 +1437,20 @@ def main() -> int:
             (
                 f"Zapytania (Q2), dataset {ds_name}",
                 [
-                    (f"query_compare_{ds_name}.svg", f"Rys.: {ds_name} — mediany czasu odpowiedzi obu systemów (skala log)."),
-                    (f"query_speedup_{ds_name}.svg", f"Rys.: {ds_name} — stosunek median REFERENCE/LOCAL; wartości powyżej ×1 oznaczają przewagę LOCAL."),
+                    (f"query_compare_{ds_name}.svg", f"Rys.: {ds_name} — czas odpowiedzi obu systemów ({query_evidence}; skala log)."),
+                    (f"query_speedup_{ds_name}.svg", f"Rys.: {ds_name} — stosunek median REFERENCE/LOCAL; wartości powyżej ×1 oznaczają krótszą zaobserwowaną medianę LOCAL."),
                 ],
                 "section-end",
             ),
         )
+    update_storage_summary(result_dir, storage_scaling)
     inject_into_sections(result_dir, anchors)
-    inject_markdown_block(result_dir, "Przestrzeń dyskowa", storage_model_block(result_dir, datasets))
+    inject_markdown_block(
+        result_dir,
+        "Przestrzeń dyskowa",
+        storage_model_block(storage_scaling, storage_rejection),
+    )
+    inject_storage_model_tex(result_dir, storage_scaling)
     append_tex_figures(result_dir, anchors)
 
     print(f"Wrote SVG plots to {plots_dir}")

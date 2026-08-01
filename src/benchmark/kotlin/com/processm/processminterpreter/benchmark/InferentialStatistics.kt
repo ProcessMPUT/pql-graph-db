@@ -19,11 +19,11 @@ import kotlin.random.Random
  *
  * What is reported instead, for every pair:
  *
- * 1. **Bootstrap percentile CI for the ratio of medians** — the effect size with
+ * 1. **Paired bootstrap percentile CI for the ratio of medians** — the effect size with
  *    its uncertainty, on the scale the thesis actually argues in ("LOCAL is ×k
  *    faster"). Deterministic: the resampling seed is derived from the pair key,
  *    so re-running the report on the same samples reproduces the same interval.
- * 2. **Mann–Whitney U** (normal approximation, tie- and continuity-corrected)
+ * 2. **Wilcoxon signed-rank test** (normal approximation, tie- and continuity-corrected)
  *    with **Holm–Bonferroni** adjustment across all pairs compared in the run.
  *    Without the adjustment, ~7 of 132 comparisons would be expected to reach
  *    p < 0,05 by chance alone.
@@ -49,17 +49,17 @@ object InferentialStatistics {
     /**
      * Percentile bootstrap CI for `median(local) / median(reference)`.
      *
-     * Both samples are resampled independently with replacement (the systems are
-     * measured against separate processes, so the pairing between repetition *i*
-     * of LOCAL and of REFERENCE carries no information).
+     * Repetition *i* on both systems is one adjacent, deliberately interleaved block.
+     * Resampling the pair together preserves the shared temporal drift that an
+     * independent bootstrap would incorrectly treat as two unrelated samples.
      */
-    fun medianRatioConfidenceInterval(
+    fun pairedMedianRatioConfidenceInterval(
         local: List<Double>,
         reference: List<Double>,
         seed: Long,
         resamples: Int = BOOTSTRAP_RESAMPLES,
     ): ConfidenceInterval? {
-        if (local.isEmpty() || reference.isEmpty()) return null
+        if (local.isEmpty() || local.size != reference.size) return null
         val referenceMedian = ThesisStatistics.quantile(reference, 0.50)
         if (referenceMedian <= 0.0) return null
 
@@ -69,8 +69,11 @@ object InferentialStatistics {
         val referenceBuffer = DoubleArray(reference.size)
         var usable = 0
         repeat(resamples) {
-            for (i in localBuffer.indices) localBuffer[i] = local[random.nextInt(local.size)]
-            for (i in referenceBuffer.indices) referenceBuffer[i] = reference[random.nextInt(reference.size)]
+            for (i in localBuffer.indices) {
+                val sampledPair = random.nextInt(local.size)
+                localBuffer[i] = local[sampledPair]
+                referenceBuffer[i] = reference[sampledPair]
+            }
             val denominator = medianOf(referenceBuffer)
             if (denominator > 0.0) ratios[usable++] = medianOf(localBuffer) / denominator
         }
@@ -85,49 +88,40 @@ object InferentialStatistics {
     }
 
     /**
-     * Two-sided Mann–Whitney U test (Wilcoxon rank-sum) via the normal
-     * approximation, with the standard tie correction and a continuity
-     * correction. Exact enough at the profile's `n = 30` per group; returns 1.0
-     * for degenerate inputs so a missing test can never manufacture significance.
+     * Two-sided Wilcoxon signed-rank test for paired repetitions via the normal
+     * approximation, with tie and continuity correction. Zero differences are
+     * discarded. Returns 1.0 for missing/degenerate inputs so a broken pairing can
+     * never manufacture significance.
      */
-    fun mannWhitneyU(
+    fun wilcoxonSignedRank(
         a: List<Double>,
         b: List<Double>,
     ): Double {
-        if (a.isEmpty() || b.isEmpty()) return 1.0
-        val n1 = a.size.toDouble()
-        val n2 = b.size.toDouble()
-        val combined = (a.map { it to 0 } + b.map { it to 1 }).sortedBy { it.first }
-
-        // Mid-ranks: tied observations all receive the average of the ranks they span.
-        val ranks = DoubleArray(combined.size)
+        if (a.isEmpty() || a.size != b.size) return 1.0
+        val differences = a.indices.map { a[it] - b[it] }.filter { it != 0.0 }
+        if (differences.isEmpty()) return 1.0
+        val ordered = differences.withIndex().sortedBy { abs(it.value) }
+        val ranks = DoubleArray(differences.size)
         var tieCorrection = 0.0
         var index = 0
-        while (index < combined.size) {
+        while (index < ordered.size) {
             var end = index
-            while (end + 1 < combined.size && combined[end + 1].first == combined[index].first) end++
+            while (end + 1 < ordered.size && abs(ordered[end + 1].value) == abs(ordered[index].value)) end++
             val midRank = (index + end + 2) / 2.0
-            for (i in index..end) ranks[i] = midRank
+            for (i in index..end) ranks[ordered[i].index] = midRank
             val tieSize = (end - index + 1).toDouble()
             if (tieSize > 1) tieCorrection += tieSize * tieSize * tieSize - tieSize
             index = end + 1
         }
 
-        val rankSumA = combined.indices.filter { combined[it].second == 0 }.sumOf { ranks[it] }
-        val uA = rankSumA - n1 * (n1 + 1) / 2.0
-        val uB = n1 * n2 - uA
-        val u = min(uA, uB)
-
-        val n = n1 + n2
-        val meanU = n1 * n2 / 2.0
-        val varianceU = n1 * n2 / 12.0 * ((n + 1) - tieCorrection / (n * (n - 1)))
-        if (varianceU <= 0.0) return 1.0
-        // Continuity correction can push the numerator to or below zero when the
-        // samples are indistinguishable; short-circuit so the error term of the
-        // CDF approximation cannot report p slightly below 1 for identical inputs.
-        val numerator = abs(u - meanU) - 0.5
+        val positiveRank = differences.indices.filter { differences[it] > 0.0 }.sumOf { ranks[it] }
+        val n = differences.size.toDouble()
+        val mean = n * (n + 1.0) / 4.0
+        val variance = n * (n + 1.0) * (2.0 * n + 1.0) / 24.0 - tieCorrection / 48.0
+        if (variance <= 0.0) return 1.0
+        val numerator = abs(positiveRank - mean) - 0.5
         if (numerator <= 0.0) return 1.0
-        return (2.0 * (1.0 - standardNormalCdf(numerator / sqrt(varianceU)))).coerceIn(0.0, 1.0)
+        return (2.0 * (1.0 - standardNormalCdf(numerator / sqrt(variance)))).coerceIn(0.0, 1.0)
     }
 
     /**
@@ -179,10 +173,9 @@ object InferentialStatistics {
 
     /**
      * Scaling exponent `alpha` of `t ~ n^alpha`, fitted as a straight line in
-     * log10–log10 space. `alpha` near 0 with a low R² means the measured time does
-     * not depend on the dataset size at all — the situation the `limit`-bounded
-     * query workload produces, and the reason a scaling figure of such a query
-     * shows nothing but noise.
+     * log10–log10 space. Eligibility for interpreting a fit is a separate,
+     * predeclared query-series property: hierarchical response limits do not imply
+     * that a lower-scope sort, group, or aggregate can avoid reading all children.
      */
     fun fitPowerLaw(
         xs: List<Double>,
@@ -247,9 +240,8 @@ data class LinearFit(
  * The spread is used two ways:
  * - as the practical-significance floor: a median difference smaller than the
  *   spread observed on identical data is not evidence about the systems;
- * - as a run validity gate: if replicates of one dataset disagree beyond
- *   [VALIDITY_GATE_SPREAD], the run's warm-up was insufficient and the run must
- *   not be used as thesis data.
+ * - as a metric-specific validity gate. Query spread gates Q2; the one-shot,
+ *   polling-quantized import spread gates Q1 and must not invalidate Q2.
  */
 object ReplicateControl {
     /**
@@ -266,7 +258,7 @@ object ReplicateControl {
      */
     fun replicateGroups(datasets: List<PreparedDataset>): List<List<String>> =
         datasets
-            .filter { it.traces > 0 && it.eventsPerTrace > 0 }
+            .filter { it.series != "real-validation" && it.traces > 0 && it.eventsPerTrace > 0 }
             .groupBy { Triple(it.traces, it.eventsPerTrace, it.attributesPerEvent) }
             .values
             .filter { it.size > 1 }
@@ -280,6 +272,7 @@ object ReplicateControl {
     fun measure(
         datasets: List<PreparedDataset>,
         queries: List<QueryBenchmarkResult>,
+        imports: List<ImportBenchmarkResult> = emptyList(),
     ): ReplicateReport? {
         val groups = replicateGroups(datasets)
         if (groups.isEmpty()) return null
@@ -308,10 +301,30 @@ object ReplicateControl {
                 }
             }
         }
+        val importMedians = imports
+            .filter { it.status == "OK" && it.seconds > 0.0 }
+            .groupBy { it.datasetName to it.system }
+            .mapValues { (_, samples) -> ThesisStatistics.quantile(samples.map { it.seconds }, 0.50) }
+        groups.forEach { group ->
+            imports.map { it.system }.distinct().forEach { system ->
+                val values = group.mapNotNull { importMedians[it to system] }.filter { it > 0.0 }
+                if (values.size > 1) {
+                    entries += ReplicateSpread(
+                        datasets = group,
+                        queryLabel = IMPORT_REPLICATE_LABEL,
+                        system = system,
+                        minSeconds = values.min(),
+                        maxSeconds = values.max(),
+                    )
+                }
+            }
+        }
         if (entries.isEmpty()) return null
         return ReplicateReport(groups = groups, spreads = entries.sortedByDescending { it.spread })
     }
 }
+
+const val IMPORT_REPLICATE_LABEL = "IMPORT (Q1)"
 
 data class ReplicateSpread(
     val datasets: List<String>,
@@ -327,7 +340,12 @@ data class ReplicateReport(
     val groups: List<List<String>>,
     val spreads: List<ReplicateSpread>,
 ) {
+    val querySpreads: List<ReplicateSpread> get() = spreads.filter { it.queryLabel != IMPORT_REPLICATE_LABEL }
+    val importSpreads: List<ReplicateSpread> get() = spreads.filter { it.queryLabel == IMPORT_REPLICATE_LABEL }
+
     val worstSpread: Double get() = spreads.maxOfOrNull { it.spread } ?: Double.NaN
+    val worstQuerySpread: Double get() = querySpreads.maxOfOrNull { it.spread } ?: Double.NaN
+    val worstImportSpread: Double get() = importSpreads.maxOfOrNull { it.spread } ?: Double.NaN
 
     val medianSpread: Double
         get() = spreads.map { it.spread }.filter { it.isFinite() }
@@ -339,7 +357,12 @@ data class ReplicateReport(
     fun floorFor(queryLabel: String): Double =
         spreads.filter { it.queryLabel == queryLabel }.maxOfOrNull { it.spread }?.takeIf { it.isFinite() } ?: 1.0
 
-    val runIsValid: Boolean get() = worstSpread.isFinite() && worstSpread <= ReplicateControl.VALIDITY_GATE_SPREAD
+    /** Q2 validity. Q1 has an independent [importIsStable] gate. */
+    val runIsValid: Boolean
+        get() = worstQuerySpread.isFinite() && worstQuerySpread <= ReplicateControl.VALIDITY_GATE_SPREAD
+
+    val importIsStable: Boolean
+        get() = worstImportSpread.isFinite() && worstImportSpread <= ReplicateControl.VALIDITY_GATE_SPREAD
 }
 
 /** Effect size and both significance criteria for one (dataset, query) comparison. */

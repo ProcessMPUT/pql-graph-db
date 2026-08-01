@@ -1,13 +1,15 @@
 package com.processm.processminterpreter.benchmark
 
+import com.fasterxml.jackson.core.type.TypeReference
+import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import java.nio.file.Path
 import java.time.LocalDate
 import java.util.Locale
 import kotlin.io.path.createDirectories
+import kotlin.io.path.isRegularFile
+import kotlin.io.path.readText
 import kotlin.io.path.writeText
 import kotlin.math.abs
-import kotlin.math.exp
-import kotlin.math.ln
 import kotlin.math.floor
 
 /**
@@ -101,11 +103,11 @@ data class InvalidatedPair(
     val queryLabel: String,
     val reason: String,
     /**
-     * True when the pair was invalidated on a hoisted trace-variant query
-     * (`group by ^e:...`). Such rows are NOT evidence of a defect in this
-     * implementation — see [SOURCE_ORDER_FINDING_HEADING] in the report.
+     * True when the pair has the same observable signature as the previously
+     * investigated REFERENCE source-order deviation. This is a candidate
+     * classification, not an automatic diagnosis of a new mismatch.
      */
-    val sourceOrderDeviation: Boolean = false,
+    val sourceOrderCandidate: Boolean = false,
 )
 
 private const val SYSTEM_LOCAL = "local"
@@ -117,11 +119,7 @@ private const val BELOW_GRANULARITY = "poniżej granulacji"
 private const val LOCAL_NOT_REPORTED = "nie raportowane (§Q3)"
 private const val SOURCE_ORDER_FINDING_HEADING =
     "Kolejność zdarzeń w wariantach śladu — zgodność ze specyfikacją PQL"
-private const val SOURCE_ORDER_MARK = "kolejność źródłowa (zob. sekcję o zgodności ze specyfikacją)"
-
-/** Components that make up the LOCAL system when summing Q3 memory. */
-private val LOCAL_MEMORY_COMPONENTS = setOf("processm-interpreter", "processm-neo4j", "local-jvm")
-private val REFERENCE_MEMORY_COMPONENTS = setOf("processm-server")
+private const val SOURCE_ORDER_MARK = "kandydat: znane odstępstwo kolejności źródłowej"
 
 /**
  * The PQL specification fixes the default component order, which is what makes the
@@ -141,6 +139,7 @@ data class ThesisReportModel(
     val profileName: String,
     val generatedOn: String,
     val datasetOrder: String,
+    val protocolVersion: Int,
     val globalWarmupRounds: Int,
     val repetitions: Int,
     val environmentTable: ThesisTable,
@@ -151,18 +150,17 @@ data class ThesisReportModel(
     val floorMedianMs: Map<String, Double>,
     val scalingTable: ThesisTable?,
     val queryTables: List<ThesisTable>,
-    val firstTouchTable: ThesisTable,
     val coldTable: ThesisTable,
-    val storageModelTable: ThesisTable?,
     val storageProtocolTable: ThesisTable,
     val memoryTable: ThesisTable,
     val memoryComparison: MemoryComparison?,
     val roundtripTable: ThesisTable,
+    val roundtripAllMatch: Boolean,
     val parityOkPairs: Int,
     val parityMismatchPairs: Int,
     val invalidatedPairs: List<InvalidatedPair>,
-    /** Subset of [invalidatedPairs] caused by REFERENCE ignoring the spec's source order. */
-    val sourceOrderDeviationPairs: List<InvalidatedPair> = invalidatedPairs.filter { it.sourceOrderDeviation },
+    /** Subset matching the observable signature of the independently investigated finding. */
+    val sourceOrderCandidatePairs: List<InvalidatedPair> = invalidatedPairs.filter { it.sourceOrderCandidate },
     val caveatTable: ThesisTable,
     val verdicts: List<ComparisonVerdict>,
     val conclusions: List<String>,
@@ -175,12 +173,11 @@ data class ThesisReportModel(
             floorTable?.let { add(it) }
             scalingTable?.let { add(it) }
             addAll(queryTables)
-            add(firstTouchTable)
             add(coldTable)
-            storageModelTable?.let { add(it) }
             add(storageProtocolTable)
             add(memoryTable)
             add(roundtripTable)
+            add(caveatTable)
         }
 
     companion object {
@@ -194,6 +191,7 @@ data class ThesisReportModel(
             roundtrips: List<RoundtripBenchmarkResult>,
             memorySummaries: List<MemorySummary>,
             querySpecs: List<BenchmarkQuerySpec>,
+            environment: Map<String, Any?> = emptyMap(),
         ): ThesisReportModel {
             val datasetOrder = orderedDatasetNames(datasets, queries)
             val queryLabelOrder = querySpecs.map { it.label }
@@ -206,6 +204,7 @@ data class ThesisReportModel(
                 .filter { it.query.isHoistedTraceVariantQuery() }
                 .map { it.label }
                 .toSet()
+            val realDatasetNames = datasets.filter { it.series == "real-validation" }.map { it.name }.toSet()
 
             val invalidated = samplesByPair
                 .filterValues { samples -> samples.any { it.status == QUERY_STATUS_MISMATCH || it.status == "ERROR" } }
@@ -215,7 +214,9 @@ data class ThesisReportModel(
                         datasetName = pair.first,
                         queryLabel = pair.second,
                         reason = invalidationReason(samples),
-                        sourceOrderDeviation = mismatchOnly && pair.second in hoistedVariantLabels,
+                        sourceOrderCandidate = mismatchOnly &&
+                            pair.first in realDatasetNames &&
+                            pair.second in hoistedVariantLabels,
                     )
                 }
                 .sortedWith(compareBy({ datasetOrder.indexOf(it.datasetName) }, { queryLabelOrder.indexOf(it.queryLabel) }))
@@ -233,7 +234,7 @@ data class ThesisReportModel(
             // Measurement error demonstrated by this very run (A3): replicate datasets
             // are the same experiment under different names. Their spread is the floor
             // every claimed effect must clear.
-            val replicateReport = ReplicateControl.measure(datasets, queries)
+            val replicateReport = ReplicateControl.measure(datasets, queries, imports)
             val verdicts = buildVerdicts(datasetOrder, queryLabelOrder, warmStats, replicateReport)
             val verdictByPair = verdicts.associateBy { it.datasetName to it.queryLabel }
 
@@ -245,25 +246,37 @@ data class ThesisReportModel(
                 profileName = settings.profile.name.lowercase(),
                 generatedOn = LocalDate.now().toString(),
                 datasetOrder = settings.datasetOrder.name.lowercase(),
+                protocolVersion = settings.protocolVersion,
                 globalWarmupRounds = settings.globalWarmupRounds,
                 repetitions = settings.profile.repetitions,
-                environmentTable = environmentTable(settings),
+                environmentTable = environmentTable(settings, environment),
                 replicateTable = replicateReport?.let(::replicateTable),
                 replicateReport = replicateReport,
                 importTable = importTable(datasets, imports),
                 floorTable = floorTable(datasetOrder, warmStats, floorLabels),
                 floorMedianMs = floorMedianMs,
-                scalingTable = scalingTable(datasets, warmStats, queryLabelOrder, specByLabel),
-                queryTables = queryTables(
-                    datasetOrder, queryLabelOrder, warmStats, verdictByPair, specByLabel, floorMedianMs,
+                scalingTable = scalingTable(
+                    datasets,
+                    warmStats,
+                    queryLabelOrder,
+                    specByLabel,
+                    replicateReport?.runIsValid == true,
                 ),
-                firstTouchTable = firstTouchTable(datasets, imports, queryLabelOrder, validPairs),
-                coldTable = coldTable(datasetOrder, queryLabelOrder, validPairs, firstDatasetName(datasets, imports)),
-                storageModelTable = storageModelTable(datasets, storage),
+                queryTables = queryTables(
+                    datasetOrder,
+                    queryLabelOrder,
+                    warmStats,
+                    verdictByPair,
+                    specByLabel,
+                    floorMedianMs,
+                    replicateReport?.runIsValid == true,
+                ),
+                coldTable = coldTable(datasetOrder, queryLabelOrder, validPairs),
                 storageProtocolTable = storageProtocolTable(datasetOrder, storage),
                 memoryTable = memoryTable(memorySummaries),
                 memoryComparison = MemoryComparison.from(memorySummaries),
                 roundtripTable = roundtripTable(roundtrips),
+                roundtripAllMatch = roundtrips.isNotEmpty() && roundtrips.all { it.status == "MATCH" },
                 parityOkPairs = validPairs.count { (_, samples) -> samples.any { it.phase == QUERY_PHASE_WARM } },
                 parityMismatchPairs = samplesByPair.count { (_, samples) -> samples.any { it.status == QUERY_STATUS_MISMATCH } },
                 invalidatedPairs = invalidated,
@@ -303,7 +316,7 @@ data class ThesisReportModel(
                 )
             if (candidates.isEmpty()) return emptyList()
 
-            val rawP = candidates.map { InferentialStatistics.mannWhitneyU(it.local.raw, it.reference.raw) }
+            val rawP = candidates.map { InferentialStatistics.wilcoxonSignedRank(it.local.raw, it.reference.raw) }
             val adjustedP = InferentialStatistics.holmAdjust(rawP)
 
             return candidates.mapIndexed { index, candidate ->
@@ -311,7 +324,7 @@ data class ThesisReportModel(
                     datasetName = candidate.dataset,
                     queryLabel = candidate.label,
                     ratio = candidate.local.median / candidate.reference.median,
-                    confidenceInterval = InferentialStatistics.medianRatioConfidenceInterval(
+                    confidenceInterval = InferentialStatistics.pairedMedianRatioConfidenceInterval(
                         local = candidate.local.raw,
                         reference = candidate.reference.raw,
                         // Seeded from the pair identity so the published interval is
@@ -343,12 +356,6 @@ data class ThesisReportModel(
             queries: List<QueryBenchmarkResult>,
         ): List<String> = (datasets.map { it.name } + queries.map { it.datasetName }).distinct()
 
-        /** The dataset measured first — the only one that can carry first-touch cost. */
-        private fun firstDatasetName(
-            datasets: List<PreparedDataset>,
-            imports: List<ImportBenchmarkResult>,
-        ): String? = imports.firstOrNull()?.datasetName ?: datasets.firstOrNull()?.name
-
         /**
          * `group by ^e:attr` — the caret hoists an event attribute to trace scope, so
          * traces are grouped by the SEQUENCE of that attribute's values. Detected on the
@@ -373,18 +380,69 @@ data class ThesisReportModel(
                 (if (error.details.isNotBlank()) " — ${error.details}" else "")
         }
 
-        private fun environmentTable(settings: BenchmarkSettings): ThesisTable =
-            ThesisTable(
+        private fun environmentTable(
+            settings: BenchmarkSettings,
+            environment: Map<String, Any?>,
+        ): ThesisTable {
+            fun nested(vararg keys: String): Any? {
+                var current: Any? = environment
+                keys.forEach { key -> current = (current as? Map<*, *>)?.get(key) }
+                return current
+            }
+
+            fun bytes(value: Any?): String =
+                (value as? Number)?.toLong()?.let { "${fmt0(it.toDouble() / MIB)} MiB" }
+                    ?: value?.toString()
+                    ?: MISSING
+
+            val containers = (environment["containers"] as? Map<*, *>)
+                ?.entries
+                ?.sortedBy { it.key.toString() }
+                ?.joinToString("; ") { (name, details) ->
+                    val values = details as? Map<*, *>
+                    "$name=${values?.get("imageId") ?: MISSING}"
+                }
+                ?.ifBlank { MISSING }
+                ?: MISSING
+            val heaps = (environment["containers"] as? Map<*, *>)
+                ?.entries
+                ?.sortedBy { it.key.toString() }
+                ?.mapNotNull { (name, details) ->
+                    (details as? Map<*, *>)?.get("effectiveJvmHeap")
+                        ?.takeUnless { it == "unavailable" }
+                        ?.let { "$name=$it" }
+                }
+                ?.joinToString("; ")
+                ?.ifBlank { MISSING }
+                ?: MISSING
+
+            return ThesisTable(
                 slug = "srodowisko",
                 caption = "Środowisko pomiarowe",
                 headers = listOf("Parametr", "Wartość"),
                 rightAligned = listOf(false, false),
                 rows = listOf(
-                    listOf("System operacyjny", "${System.getProperty("os.name")} ${System.getProperty("os.version")}"),
-                    listOf("Procesory logiczne (JVM)", Runtime.getRuntime().availableProcessors().toString()),
-                    listOf("Pamięć maksymalna JVM [MiB]", fmt0(Runtime.getRuntime().maxMemory() / MIB)),
-                    listOf("Java", System.getProperty("java.version")),
+                    listOf(
+                        "System operacyjny",
+                        listOf(environment["osName"], environment["osVersion"])
+                            .mapNotNull { it?.toString() }
+                            .joinToString(" ")
+                            .ifBlank { "${System.getProperty("os.name")} ${System.getProperty("os.version")}" },
+                    ),
+                    listOf("CPU hosta", nested("host", "cpuModel")?.toString() ?: MISSING),
+                    listOf(
+                        "Procesory logiczne (Docker VM / host JVM)",
+                        "${nested("dockerEngine", "logicalProcessors") ?: MISSING} / " +
+                            "${nested("host", "logicalProcessors") ?: Runtime.getRuntime().availableProcessors()}",
+                    ),
+                    listOf("Pamięć hosta", bytes(nested("host", "totalPhysicalMemoryBytes"))),
+                    listOf("Budżet pamięci Docker VM", bytes(nested("dockerEngine", "totalMemoryBytes"))),
+                    listOf("Java", environment["javaVersion"]?.toString() ?: System.getProperty("java.version")),
+                    listOf("Commit Git / dirty", "${nested("source", "gitCommit") ?: MISSING} / ${nested("source", "gitDirty") ?: MISSING}"),
+                    listOf("Image ID kontenerów", containers),
+                    listOf("Efektywne sterty JVM kontenerów", heaps),
                     listOf("Profil benchmarku", settings.profile.name.lowercase()),
+                    listOf("Wersja protokołu benchmarku", settings.protocolVersion.toString()),
                     listOf("Rundy globalnej rozgrzewki (przed pierwszym pomiarem)", settings.globalWarmupRounds.toString()),
                     listOf("Rozgrzewki na zapytanie", settings.profile.warmups.toString()),
                     listOf("Repetycje mierzone na zapytanie", settings.profile.repetitions.toString()),
@@ -392,15 +450,16 @@ data class ThesisReportModel(
                     listOf("Okno pomiaru pamięci spoczynkowej [s]", settings.profile.idleBaselineSeconds.toString()),
                     listOf("API LOCAL (Kotlin/Neo4j)", settings.localApi),
                     listOf("API REFERENCE (ProcessM/PostgreSQL)", settings.referenceApi),
-                    listOf("Limity kontenerów Docker i konfiguracja pamięci baz", "zob. environment.json tego przebiegu"),
+                    listOf("Pełne limity kontenerów i konfiguracja pamięci baz", "zob. environment.json tego przebiegu"),
                 ),
             )
+        }
 
         private fun replicateTable(report: ReplicateReport): ThesisTable =
             ThesisTable(
                 slug = "replikacja",
-                caption = "Kontrola replikacji: rozrzut median na zbiorach o identycznych parametrach",
-                headers = listOf("Zbiory replikacyjne", "Zapytanie", "System", "min [ms]", "max [ms]", "Rozrzut max/min"),
+                caption = "Kontrola replikacji: rozrzut pomiarów na zbiorach o identycznych parametrach",
+                headers = listOf("Zbiory replikacyjne", "Operacja", "System", "min [ms]", "max [ms]", "Rozrzut max/min"),
                 rightAligned = listOf(false, false, false, true, true, true),
                 rows = report.spreads.take(20).map {
                     listOf(
@@ -415,9 +474,11 @@ data class ThesisReportModel(
                 note = "Grupy replikacyjne: ${report.groups.joinToString("; ") { it.joinToString(" = ") }}. " +
                     "Zbiory w każdej grupie mają identyczne parametry (liczba śladów × zdarzeń × atrybutów), " +
                     "różnią się wyłącznie nazwą logu, więc każda różnica ich pomiarów jest błędem pomiaru, " +
-                    "nie własnością danych. Mediana rozrzutu ×${fmt2(report.medianSpread)}, " +
-                    "maksimum ×${fmt2(report.worstSpread)} " +
-                    "(próg ważności przebiegu: ×${fmt2(ReplicateControl.VALIDITY_GATE_SPREAD)}). " +
+                    "nie własnością danych. Kontrola obejmuje import Q1 oraz zapytania Q2, ale " +
+                    "bramki obu metryk są rozdzielone. " +
+                    "Mediana rozrzutu ×${fmt2(report.medianSpread)}, " +
+                    "maksimum Q2 ×${fmt2(report.worstQuerySpread)}, maksimum Q1 ×${fmt2(report.worstImportSpread)} " +
+                    "(próg każdej metryki: ×${fmt2(ReplicateControl.VALIDITY_GATE_SPREAD)}). " +
                     "Tabela pokazuje 20 najgorszych z ${report.spreads.size} par."
 
             )
@@ -439,7 +500,7 @@ data class ThesisReportModel(
             val sequence = imports.map { it.datasetName }.distinct()
             return ThesisTable(
                 slug = "import",
-                caption = "Import (Q1): czas importu XES (mediana przy co najmniej 2 powtórzeniach)",
+                caption = "Import (Q1): pojedynczy pomiar tego przebiegu [s]",
                 headers = listOf(
                     "Poz.",
                     "Dataset",
@@ -448,9 +509,8 @@ data class ThesisReportModel(
                     "Zdarzenia",
                     "LOCAL [s]",
                     "REFERENCE [s]",
-                    "Przewaga",
                 ),
-                rightAligned = listOf(true, false, true, true, true, true, true, true),
+                rightAligned = listOf(true, false, true, true, true, true, true),
                 rows = datasets.map { dataset ->
                     val local = seconds(dataset.name, SYSTEM_LOCAL)
                     val reference = seconds(dataset.name, SYSTEM_REFERENCE)
@@ -463,22 +523,17 @@ data class ThesisReportModel(
                         dataset.totalEvents.toString(),
                         local?.let(::fmt2) ?: MISSING,
                         reference?.let(::fmt2) ?: MISSING,
-                        advantage(local, reference),
                     )
                 },
-                note = "Czas importu to czas ściany żądania HTTP od wysłania pliku XES do odpowiedzi 2xx. " +
-                    "Kolumna „Poz.” podaje pozycję zbioru w sekwencji pomiarowej: bez globalnej rozgrzewki " +
-                    "pozycja 1 obciążona jest kosztem pierwszego dotknięcia (ładowanie klas, JIT, prealokacja " +
-                    "stron bazy) i nie jest porównywalna z pozostałymi.",
+                note = "Czas importu obejmuje upload HTTP oraz oczekiwanie, aż log stanie się widoczny " +
+                    "na liście datastore'u. Polling co 1 s dodaje nieujemne opóźnienie < 1 s, przede " +
+                    "wszystkim po stronie asynchronicznego REFERENCE. Każdy przebieg dostarcza jedną " +
+                    "próbkę; finalne mediany i zakresy Q1 wylicza `compare-runs.py` z co najmniej trzech " +
+                    "pełnych przebiegów. Kolumna „Poz.” wskazuje pozycję datasetu w bieżącym bloku.",
             )
         }
 
-        /**
-         * The dataset-independent measurement floor: transport, authentication,
-         * parsing and planning. Every other number in Q2 sits on top of it, so a
-         * comparison that does not report it cannot say how much of a difference
-         * belongs to the storage engine.
-         */
+        /** Smallest observed end-to-end query window, used only as descriptive context. */
         private fun floorTable(
             datasetOrder: List<String>,
             warmStats: Map<Pair<String, String>, Map<String, SampleStats>>,
@@ -501,32 +556,24 @@ data class ThesisReportModel(
             if (rows.isEmpty()) return null
             return ThesisTable(
                 slug = "podloga-pomiaru",
-                caption = "Podłoga pomiaru: najmniejsze możliwe okno zapytania [ms]",
+                caption = "Najmniejsze obserwowane okno zapytania [ms]",
                 headers = listOf("Dataset", "LOCAL [ms]", "REFERENCE [ms]"),
                 rightAligned = listOf(false, true, true),
                 rows = rows,
-                note = "Zapytanie `limit l:1, t:1, e:1` zwraca stały, najmniejszy możliwy wynik, " +
-                    "więc jego czas nie zależy od rozmiaru zbioru. Mierzy koszt obecny w **każdej** " +
-                    "innej liczbie w sekcji Q2: transport HTTP, uwierzytelnienie, parsowanie i planowanie. " +
-                    "Różnicę między systemami wolno przypisywać silnikowi składowania dopiero po odjęciu " +
-                    "tej wartości.",
+                note = "Zapytanie `limit l:1, t:1, e:1` ogranicza wynik do najmniejszego okna, ale nadal " +
+                    "odczytuje i serializuje metadane logu. Jest opisowym punktem odniesienia dla kosztu " +
+                    "end-to-end dwóch aplikacji; nie jest stałą niezależną od danych i nie wolno go " +
+                    "odejmować w celu przypisania reszty czasu bazie danych.",
             )
         }
 
-        /**
-         * Fitted scaling exponent per (query, series, system).
-         *
-         * Both REST APIs cap results at 10 logs / 30 traces / 90 events, and that cap
-         * also bounds an explicit `limit`. A query the engine can answer from that
-         * window costs O(window), so plotting it against dataset size produces a flat,
-         * noisy line — `alpha` near 0 with `R²` near 0 is that situation, stated as a
-         * number instead of left for the reader to misread as a trend.
-         */
+        /** Fitted scaling exponent for predeclared, semantically meaningful query-axis pairs. */
         private fun scalingTable(
             datasets: List<PreparedDataset>,
             warmStats: Map<Pair<String, String>, Map<String, SampleStats>>,
             queryLabelOrder: List<String>,
             specByLabel: Map<String, BenchmarkQuerySpec>,
+            runIsValid: Boolean,
         ): ThesisTable? {
             val axes = listOf(
                 Triple("trace-scaling", "liczba śladów") { d: PreparedDataset -> d.traces.toDouble() },
@@ -537,27 +584,32 @@ data class ThesisReportModel(
             axes.forEach { (series, axisLabel, axisValue) ->
                 val seriesDatasets = datasets.filter { it.series == series }
                 if (seriesDatasets.size < 3) return@forEach
-                queryLabelOrder.forEach { label ->
-                    listOf(SYSTEM_LOCAL, SYSTEM_REFERENCE).forEach { system ->
-                        val points = seriesDatasets.mapNotNull { dataset ->
-                            warmStats[dataset.name to label]?.get(system)?.median
-                                ?.let { axisValue(dataset) to it }
+                queryLabelOrder
+                    .filter { label -> series in specByLabel[label]?.scalingSeries.orEmpty() }
+                    .forEach { label ->
+                        listOf(SYSTEM_LOCAL, SYSTEM_REFERENCE).forEach systemLoop@{ system ->
+                            val points = seriesDatasets.mapNotNull { dataset ->
+                                warmStats[dataset.name to label]?.get(system)?.median
+                                    ?.let { axisValue(dataset) to it }
+                            }
+                            if (points.size < 3) return@systemLoop
+                            val fit = InferentialStatistics.fitPowerLaw(points.map { it.first }, points.map { it.second })
+                                ?: return@systemLoop
+                            rows += listOf(
+                                label,
+                                workloadLabel(specByLabel[label]?.workload),
+                                axisLabel,
+                                system,
+                                points.size.toString(),
+                                fmtSigned(fit.slope),
+                                fmt2(fit.r2),
+                                when {
+                                    !runIsValid -> "diagnostyka — przebieg nieważny"
+                                    else -> "blok: ${scalingInterpretation(fit)} — seria wymagana"
+                                },
+                            )
                         }
-                        if (points.size < 3) return@forEach
-                        val fit = InferentialStatistics.fitPowerLaw(points.map { it.first }, points.map { it.second })
-                            ?: return@forEach
-                        rows += listOf(
-                            label,
-                            workloadLabel(specByLabel[label]?.workload),
-                            axisLabel,
-                            system,
-                            points.size.toString(),
-                            fmtSigned(fit.slope),
-                            fmt2(fit.r2),
-                            scalingInterpretation(fit),
-                        )
                     }
-                }
             }
             if (rows.isEmpty()) return null
             return ThesisTable(
@@ -566,20 +618,22 @@ data class ThesisReportModel(
                 headers = listOf("Zapytanie", "Klasa", "Oś", "System", "Punkty", "α", "R²", "Interpretacja"),
                 rightAligned = listOf(false, false, false, false, true, true, true, false),
                 rows = rows,
-                note = "Dopasowanie metodą najmniejszych kwadratów w przestrzeni log10–log10; " +
+                note = (if (runIsValid) "" else "Przebieg nie przeszedł kontroli replikacji; dopasowania są diagnostyczne. ") +
+                    "Dopasowanie metodą najmniejszych kwadratów w przestrzeni log10–log10; " +
                     "α = 1 oznacza koszt liniowy względem osi, α = 0 — brak zależności od rozmiaru danych. " +
-                    "**Interpretacji podlegają wyłącznie wiersze klasy „pełny przebieg”.** Zapytania klasy " +
-                    "„okno” są z definicji ograniczone domyślnymi limitami API (10 logów / 30 śladów / " +
-                    "90 zdarzeń, które ograniczają także jawny `limit`), więc ich α ≈ 0 nie jest wynikiem " +
-                    "pomiaru, tylko konsekwencją planu eksperymentu. Wiersz z R² < 0,3 nie uprawnia do " +
-                    "żadnego wniosku o kształcie zależności.",
+                    "Tabela zawiera tylko pary zapytanie–seria zadeklarowane przed pomiarem w `queries.csv`. " +
+                    "Limit odpowiedzi nie usuwa kosztu sortowania, grupowania lub agregacji wykonywanych " +
+                    "przed limitem niższego zakresu. Wiersz z R² < 0,3 nie uprawnia do wniosku o kształcie " +
+                    "zależności; nawet pozostałe wiersze jednego bloku są opisowe, a finalny wniosek " +
+                    "pochodzi z sekcji skalowania między przebiegami.",
             )
         }
 
         private fun workloadLabel(workload: String?): String =
             when (workload) {
-                WORKLOAD_FLOOR -> "podłoga"
-                WORKLOAD_FULL_PASS -> "pełny przebieg"
+                WORKLOAD_FLOOR -> "najmniejsze okno"
+                WORKLOAD_DATA_DEPENDENT -> "zależne od danych"
+                "fullPass" -> "zależne od danych (stary zapis)"
                 WORKLOAD_WINDOW -> "okno"
                 else -> MISSING
             }
@@ -601,6 +655,7 @@ data class ThesisReportModel(
             verdictByPair: Map<Pair<String, String>, ComparisonVerdict>,
             specByLabel: Map<String, BenchmarkQuerySpec>,
             floorMedianMs: Map<String, Double>,
+            runIsValid: Boolean,
         ): List<ThesisTable> =
             datasetOrder.mapNotNull { dataset ->
                 val labels = queryLabelOrder.filter { label ->
@@ -625,7 +680,7 @@ data class ThesisReportModel(
                         "LOCAL Q1–Q3 [ms]",
                         "REFERENCE mediana [ms]",
                         "REFERENCE Q1–Q3 [ms]",
-                        "Przewaga",
+                        "Efekt w bloku",
                         "95% CI ilorazu",
                         "p (Holm)",
                         "Werdykt",
@@ -646,7 +701,7 @@ data class ThesisReportModel(
                             verdict?.let { advantageOf(it) } ?: MISSING,
                             verdict?.confidenceInterval?.let { "[${fmt2(it.low)}; ${fmt2(it.high)}]" } ?: MISSING,
                             verdict?.let { formatPValue(it.adjustedPValue) } ?: MISSING,
-                            verdict?.verdict?.label ?: MISSING,
+                            if (runIsValid) verdict?.verdict?.label ?: MISSING else "przebieg nieważny — diagnostyka",
                         )
                     },
                     note = buildString {
@@ -654,13 +709,24 @@ data class ThesisReportModel(
                         append(samplesPerCell.sorted().joinToString(", "))
                         append(" próbek warm na komórkę. ")
                         append(
-                            "„Przewaga” podaje iloraz median jako czynnik ≥ 1 wraz z kierunkiem; " +
+                            "„Efekt w bloku” podaje iloraz median jako czynnik ≥ 1 wraz z kierunkiem; " +
                                 "przedział to percentylowy bootstrap (${InferentialStatistics.BOOTSTRAP_RESAMPLES} " +
-                                "losowań) dla ilorazu median; p to test Manna–Whitneya po korekcie Holma " +
-                                "na wszystkie porównania przebiegu. Werdykt „istotna” wymaga jednocześnie " +
-                                "p < ${fmt2(InferentialStatistics.ALPHA)}, przedziału nieobejmującego 1,00 " +
-                                "oraz efektu przekraczającego zmierzony błąd pomiaru (kontrola replikacji). ",
+                                "losowań par repetycji) dla ilorazu median; p to sparowany test rang " +
+                                "Wilcoxona po korekcie Holma na wszystkie porównania przebiegu. ",
                         )
+                        if (runIsValid) {
+                            append(
+                                "Werdykt „istotna” oznacza wyłącznie rozróżnialny efekt wewnątrz tego bloku " +
+                                    "i wymaga jednocześnie p < ${fmt2(InferentialStatistics.ALPHA)}, przedziału " +
+                                    "nieobejmującego 1,00 oraz efektu przekraczającego kontrolę replikacji. " +
+                                    "Wniosek między systemami wymaga serii niezależnych bloków. ",
+                            )
+                        } else {
+                            append(
+                                "Przebieg nie przeszedł kontroli replikacji: efekty, przedziały i p pozostają " +
+                                    "diagnostyką i nie otrzymują werdyktu inferencyjnego. ",
+                            )
+                        }
                         if (!anyP95) {
                             append(
                                 "Kolumny p95 nie podano: przy n < ${ThesisStatistics.P95_MIN_SAMPLES} " +
@@ -668,53 +734,11 @@ data class ThesisReportModel(
                             )
                         }
                         floorMedianMs.forEach { (system, floor) ->
-                            append("Podłoga pomiaru $system: ${fmt2(floor)} ms. ")
+                            append("Najmniejsze obserwowane okno $system: ${fmt2(floor)} ms. ")
                         }
                     },
                 )
             }
-
-        /**
-         * The first dataset in the sequence, separated out. Its "cold" execution is
-         * dominated by class loading and JIT rather than by a cold cache, so mixing it
-         * into the cold table compares JVM start-up on one side with a warm process on
-         * the other and yields a ratio with no content.
-         */
-        private fun firstTouchTable(
-            datasets: List<PreparedDataset>,
-            imports: List<ImportBenchmarkResult>,
-            queryLabelOrder: List<String>,
-            validPairs: Map<Pair<String, String>, List<QueryBenchmarkResult>>,
-        ): ThesisTable {
-            val first = firstDatasetName(datasets, imports)
-            val rows = if (first == null) {
-                emptyList()
-            } else {
-                queryLabelOrder.mapNotNull { label ->
-                    val samples = validPairs[first to label] ?: return@mapNotNull null
-                    val local = coldOf(samples, SYSTEM_LOCAL)
-                    val reference = coldOf(samples, SYSTEM_REFERENCE)
-                    if (local == null && reference == null) return@mapNotNull null
-                    listOf(
-                        label,
-                        local?.let { fmt1(it * MS) } ?: MISSING,
-                        reference?.let { fmt1(it * MS) } ?: MISSING,
-                    )
-                }
-            }
-            return ThesisTable(
-                slug = "zapytania-first-touch",
-                caption = "Zapytania (Q2): pierwsze dotknięcie — zbiór $first [ms]",
-                headers = listOf("Zapytanie", "LOCAL [ms]", "REFERENCE [ms]"),
-                rightAligned = listOf(false, true, true),
-                rows = rows,
-                note = "Pierwszy zbiór w sekwencji pomiarowej. Te liczby zawierają koszt ładowania klas " +
-                    "i kompilacji JIT, a nie tylko zimnego cache'u, dlatego **nie podano dla nich ilorazu " +
-                    "L/R**: porównywałby rozruch JVM z rozgrzanym już procesem. Przy niezerowej globalnej " +
-                    "rozgrzewce (zob. środowisko) koszt ten jest opłacony przed pomiarem i tabela powinna " +
-                    "być zbliżona do tabeli zimnych wykonań.",
-            )
-        }
 
         private fun coldOf(
             samples: List<QueryBenchmarkResult>,
@@ -730,9 +754,8 @@ data class ThesisReportModel(
             datasetOrder: List<String>,
             queryLabelOrder: List<String>,
             validPairs: Map<Pair<String, String>, List<QueryBenchmarkResult>>,
-            firstDataset: String?,
         ): ThesisTable {
-            val rows = datasetOrder.filter { it != firstDataset }.flatMap { dataset ->
+            val rows = datasetOrder.flatMap { dataset ->
                 queryLabelOrder.mapNotNull { label ->
                     val samples = validPairs[dataset to label] ?: return@mapNotNull null
                     val local = coldOf(samples, SYSTEM_LOCAL)
@@ -743,87 +766,19 @@ data class ThesisReportModel(
                         label,
                         local?.let { fmt1(it * MS) } ?: MISSING,
                         reference?.let { fmt1(it * MS) } ?: MISSING,
-                        advantage(local, reference),
                     )
                 }
             }
             return ThesisTable(
                 slug = "zapytania-cold",
                 caption = "Zapytania (Q2): pierwsze (zimne) wykonania po imporcie [ms]",
-                headers = listOf("Dataset", "Zapytanie", "LOCAL cold [ms]", "REFERENCE cold [ms]", "Przewaga"),
-                rightAligned = listOf(false, false, true, true, true),
+                headers = listOf("Dataset", "Zapytanie", "LOCAL cold [ms]", "REFERENCE cold [ms]"),
+                rightAligned = listOf(false, false, true, true),
                 rows = rows,
-                note = "Zbiór mierzony jako pierwszy wyłączono z tej tabeli i podano osobno " +
-                    "(„pierwsze dotknięcie”). Pojedyncza próbka na komórkę — bez przedziału ufności " +
-                    "i bez testu; kolumna „Przewaga” jest tu wskazówką kierunku, nie wynikiem istotnym.",
-            )
-        }
-
-        /**
-         * Marginal disk cost from a regression `delta = a + b * n`.
-         *
-         * The naive per-dataset `delta / xesBytes` is not a property of the storage
-         * format when the engine pre-allocates: REFERENCE adds a near-constant ~13 MB
-         * to the first imports regardless of dataset size, which turns the "expansion
-         * factor" into the hyperbola `a/n + b` — 32,9× at 100 traces falling to 3,8×
-         * at 10 000 for the same format. The slope `b` is what actually characterises
-         * the format; the intercept `a` is what characterises the allocator.
-         */
-        private fun storageModelTable(
-            datasets: List<PreparedDataset>,
-            storage: List<StorageBenchmarkResult>,
-        ): ThesisTable? {
-            val byName = datasets.associateBy { it.name }
-            val series = datasets.map { it.series }.distinct()
-            val rows = mutableListOf<List<String>>()
-            series.forEach { seriesName ->
-                listOf(SYSTEM_LOCAL, SYSTEM_REFERENCE).forEach { system ->
-                    val points = storage
-                        .filter { it.system == system && it.isAttributable }
-                        .mapNotNull { result ->
-                            val dataset = byName[result.datasetName] ?: return@mapNotNull null
-                            if (dataset.series != seriesName) return@mapNotNull null
-                            dataset to result.deltaBytes!!.toDouble()
-                        }
-                    if (points.size < 3) return@forEach
-                    val xs = points.map { it.first.totalEvents.toDouble() }
-                    val ys = points.map { it.second }
-                    val fit = InferentialStatistics.fitLinear(xs, ys) ?: return@forEach
-                    // Marginal expansion: extra database bytes per extra XES byte,
-                    // taken at the slope rather than at any single point.
-                    val xesPerEvent = points.sumOf { it.first.xesBytes.toDouble() } / points.sumOf { it.first.totalEvents.toDouble() }
-                    rows += listOf(
-                        seriesName,
-                        system,
-                        points.size.toString(),
-                        fmt2(fit.intercept / MIB),
-                        fmt0(fit.slope),
-                        if (xesPerEvent > 0) fmt2(fit.slope / xesPerEvent) else MISSING,
-                        fmt2(fit.r2),
-                    )
-                }
-            }
-            if (rows.isEmpty()) return null
-            return ThesisTable(
-                slug = "storage-model",
-                caption = "Zasobożerność (Q3): model przyrostu dysku delta = a + b · (liczba zdarzeń)",
-                headers = listOf(
-                    "Seria",
-                    "System",
-                    "Punkty",
-                    "Stała a [MiB]",
-                    "Koszt krańcowy b [B/zdarzenie]",
-                    "Ekspansja krańcowa [B/B XES]",
-                    "R²",
-                ),
-                rightAligned = listOf(false, false, true, true, true, true, true),
-                rows = rows,
-                note = "To jest wielkość, którą należy cytować w pracy jako „ekspansję” — nie iloraz " +
-                    "delta/XES w pojedynczym punkcie. Stała **a** opisuje prealokację silnika " +
-                    "(pojedynczy narzut niezależny od danych), współczynnik **b** opisuje format " +
-                    "składowania. Ekspansja krańcowa to b podzielone przez średni rozmiar zdarzenia " +
-                    "w pliku XES tej serii. Uwzględniono wyłącznie pomiary o statusie " +
-                    "`$STORAGE_STATUS_OK`; delty zerowe i ujemne nie wchodzą do dopasowania.",
+                note = "Globalna rozgrzewka poprzedza całą fazę pomiarową, dlatego pierwszy dataset " +
+                    "nie jest traktowany jako osobna klasa. Cold oznacza pierwsze wykonanie na nowym " +
+                    "datastore po imporcie. To pojedyncza próbka na komórkę — bez ilorazu, przedziału " +
+                    "ufności i testu; tabela pozostaje wyłącznie diagnostyką.",
             )
         }
 
@@ -881,14 +836,14 @@ data class ThesisReportModel(
                     "liczbowych; REFERENCE jest checkpointowany (`CHECKPOINT;`) przed każdym pomiarem, " +
                     "ale i tam pojedyncze pomiary bywają skażone (delta ujemna po odzysku stron przez " +
                     "autovacuum lub recykling WAL) — takie komórki są oznaczone i **nie są rysowane " +
-                    "na żadnym wykresie**.",
+                    "jako wartości liczbowe**; wykres załącznika pokazuje w ich miejscu pusty znacznik.",
             )
         }
 
         private fun memoryTable(memorySummaries: List<MemorySummary>): ThesisTable =
             ThesisTable(
                 slug = "pamiec",
-                caption = "Zasobożerność (Q3): pamięć operacyjna per składnik i faza (mediana i szczyt próbek co 1 s)",
+                caption = "Zasobożerność (Q3): pamięć operacyjna per składnik i faza (surowe interwały w memory-results.csv)",
                 headers = listOf("Składnik", "Faza", "Mediana [MiB]", "Szczyt [MiB]"),
                 rightAligned = listOf(false, false, true, true),
                 rows = memorySummaries
@@ -1007,9 +962,8 @@ data class ThesisReportModel(
 }
 
 /**
- * Q3 memory, summed the way the systems are actually deployed: LOCAL is an
- * interpreter container plus a Neo4j container, REFERENCE is one container holding
- * both the application and PostgreSQL.
+ * Q3 memory from simultaneous per-timestamp totals. Taking the median after summing
+ * avoids the generally false identity median(A) + median(B) = median(A + B).
  */
 data class MemoryComparison(
     val phase: String,
@@ -1026,14 +980,13 @@ data class MemoryComparison(
             val phase = MEMORY_PHASE_QUERIES
             val inPhase = summaries.filter { it.phase == phase }
             if (inPhase.isEmpty()) return null
-            val local = inPhase.filter { it.component in LOCAL_MEMORY_COMPONENTS }
-            val reference = inPhase.filter { it.component in REFERENCE_MEMORY_COMPONENTS }
-            if (local.isEmpty() || reference.isEmpty()) return null
+            val local = inPhase.singleOrNull { it.component == "local-total" } ?: return null
+            val reference = inPhase.singleOrNull { it.component == "reference-total" } ?: return null
             return MemoryComparison(
                 phase = phase,
-                localMiB = local.sumOf { it.medianBytes.toDouble() } / (1024.0 * 1024.0),
-                referenceMiB = reference.sumOf { it.medianBytes.toDouble() } / (1024.0 * 1024.0),
-                localComponents = local.map { it.component }.sorted(),
+                localMiB = local.medianBytes.toDouble() / (1024.0 * 1024.0),
+                referenceMiB = reference.medianBytes.toDouble() / (1024.0 * 1024.0),
+                localComponents = listOf("processm-interpreter", "processm-neo4j"),
             )
         }
     }
@@ -1049,6 +1002,8 @@ data class MemoryComparison(
 class ThesisReportWriter(
     private val outputDirectory: Path,
 ) {
+    private val mapper = jacksonObjectMapper()
+
     fun write(
         runId: String,
         settings: BenchmarkSettings,
@@ -1062,10 +1017,19 @@ class ThesisReportWriter(
     ) {
         val model = ThesisReportModel.build(
             runId, settings, datasets, imports, queries, storage, roundtrips, memorySummaries, querySpecs,
+            recordedEnvironment(),
         )
         outputDirectory.createDirectories()
         outputDirectory.resolve("thesis-report.md").writeText(renderMarkdown(model))
         outputDirectory.resolve("thesis-tables.tex").writeText(renderLatex(model))
+    }
+
+    private fun recordedEnvironment(): Map<String, Any?> {
+        val path = outputDirectory.resolve("environment.json")
+        if (!path.isRegularFile()) return emptyMap()
+        return runCatching {
+            mapper.readValue(path.readText(), object : TypeReference<Map<String, Any?>>() {})
+        }.getOrDefault(emptyMap())
     }
 
     private fun renderMarkdown(model: ThesisReportModel): String =
@@ -1075,6 +1039,7 @@ class ThesisReportWriter(
             appendLine("- Profil: ${model.profileName}")
             appendLine("- Identyfikator przebiegu (runId): ${model.runId}")
             appendLine("- Data wygenerowania: ${model.generatedOn}")
+            appendLine("- Wersja protokołu benchmarku: ${model.protocolVersion}")
             appendLine("- Kolejność zbiorów: ${model.datasetOrder}; rundy globalnej rozgrzewki: ${model.globalWarmupRounds}")
             appendLine()
             appendValidityBanner(model)
@@ -1107,15 +1072,15 @@ class ThesisReportWriter(
                 "**Ograniczenie wspólne dla obu systemów.** Oba API stosują domyślne limity " +
                     "hierarchiczne (10 logów / 30 śladów / 90 zdarzeń), którymi ograniczany jest także " +
                     "jawny `limit` — po stronie LOCAL odwzorowuje to `LogsService.applyLimits()` " +
-                    "systemu ProcessM, więc porównanie pozostaje symetryczne. Konsekwencja dla planu " +
-                    "eksperymentu jest jednak zasadnicza: rozmiar odpowiedzi **nie zależy od rozmiaru " +
-                    "zbioru**, a zapytanie, które silnik potrafi obsłużyć z ograniczonego okna, kosztuje " +
-                    "O(okno), nie O(n). Dlatego zapytania podzielono na klasy — *okno*, *pełny przebieg* " +
-                    "i *podłoga* — i tylko klasa „pełny przebieg” niesie informację o skalowaniu.",
+                    "systemu ProcessM, więc porównanie pozostaje symetryczne. Rozmiar odpowiedzi **nie " +
+                    "zależy od rozmiaru zbioru**, lecz koszt wykonania może zależeć: sortowanie, grupowanie " +
+                    "lub agregacja niższego zakresu zachodzą przed jego limitem. Dlatego interpretowalność " +
+                    "skalowania jest zadeklarowana osobno dla każdej pary zapytanie–seria w `queries.csv`; " +
+                    "nie wynika automatycznie z ogólnej klasy *okno* / *zależne od danych*.",
             )
             appendLine()
             model.floorTable?.let {
-                appendLine("### Podłoga pomiaru")
+                appendLine("### Najmniejsze obserwowane okno")
                 appendLine()
                 appendMarkdownTable(it)
             }
@@ -1129,9 +1094,6 @@ class ThesisReportWriter(
                 appendLine()
                 appendMarkdownTable(table)
             }
-            appendLine("### Pierwsze dotknięcie")
-            appendLine()
-            appendMarkdownTable(model.firstTouchTable)
             appendLine("### Zimne wykonania (cold)")
             appendLine()
             appendMarkdownTable(model.coldTable)
@@ -1141,15 +1103,15 @@ class ThesisReportWriter(
                 appendLine("Brak — żadna para (dataset, zapytanie) nie została unieważniona.")
             } else {
                 model.invalidatedPairs.forEach {
-                    val mark = if (it.sourceOrderDeviation) " **[$SOURCE_ORDER_MARK]**" else ""
+                    val mark = if (it.sourceOrderCandidate) " **[$SOURCE_ORDER_MARK]**" else ""
                     appendLine("- ${it.datasetName} / ${it.queryLabel}: ${it.reason}$mark")
                 }
-                if (model.sourceOrderDeviationPairs.isNotEmpty()) {
+                if (model.sourceOrderCandidatePairs.isNotEmpty()) {
                     appendLine()
                     appendLine(
-                        "**Uwaga:** pozycje oznaczone jako *$SOURCE_ORDER_MARK* nie świadczą o błędzie " +
-                            "niniejszej implementacji — ich przyczyną jest odstępstwo systemu REFERENCE od " +
-                            "specyfikacji PQL, opisane w sekcji „$SOURCE_ORDER_FINDING_HEADING”.",
+                        "**Uwaga:** pozycje oznaczone jako *$SOURCE_ORDER_MARK* mają tę samą sygnaturę " +
+                            "co wcześniej zbadane odstępstwo REFERENCE. Sam kształt zapytania nie dowodzi " +
+                            "jednak przyczyny nowego mismatchu; rozpoznanie wymaga raportu kompatybilności.",
                     )
                 }
             }
@@ -1158,14 +1120,12 @@ class ThesisReportWriter(
             appendLine()
             appendLine("### Przestrzeń dyskowa")
             appendLine()
-            model.storageModelTable?.let { appendMarkdownTable(it) }
-                ?: appendLine("*(za mało przypisywalnych pomiarów, by dopasować model przyrostu)*\n")
             appendLine(
-                "Miarodajne, przypisywalne per-dataset przyrosty dla **obu** systemów daje dedykowana " +
-                    "sonda sekwencyjna (`scripts/benchmarks/measure-storage-scaling.py`). Wartości " +
-                    "odstające od reszty serii o rząd wielkości wymagają weryfikacji importem " +
-                    "w izolacji — różnica między pomiarem w sekwencji a pomiarem w izolacji jest miarą " +
-                    "prealokacji, a nie kosztu danych (METODOLOGIA §7).",
+                "Wynik Q3-dysk pochodzi wyłącznie z dedykowanej sondy " +
+                    "`scripts/benchmarks/measure-storage-scaling.py`, która importuje każdy dataset " +
+                    "na osobnym świeżym stacku. Skrypt wykresów wstawia w tym miejscu model dopiero " +
+                    "po dołączeniu `storage-scaling.csv`. Pomiary z głównego protokołu pozostają " +
+                    "diagnostycznym załącznikiem i nie są używane do estymacji ekspansji.",
             )
             appendLine()
             appendLine("### Pamięć operacyjna")
@@ -1175,11 +1135,22 @@ class ThesisReportWriter(
             appendLine("## Poprawność (Q4)")
             appendLine()
             appendMarkdownTable(model.roundtripTable)
-            appendLine(
-                "Parytet liczności odpowiedzi (logi/trace'y/zdarzenia) między systemami: " +
-                    "${model.parityOkPairs} par (dataset, zapytanie) zgodnych (OK), " +
-                    "${model.parityMismatchPairs} par unieważnionych rozjazdem liczności (MISMATCH).",
-            )
+            if (model.protocolVersion >= 2) {
+                appendLine(
+                    "Parytet odpowiedzi między systemami (liczności w każdej repetycji warm oraz " +
+                        "ścisłe porównanie semantyczne ostatniej odpowiedzi): " +
+                        "${model.parityOkPairs} par (dataset, zapytanie) zgodnych (OK), " +
+                        "${model.parityMismatchPairs} par unieważnionych (MISMATCH).",
+                )
+            } else {
+                appendLine(
+                    "Parytet odpowiedzi według starszego protokołu (liczności tylko ostatniej " +
+                        "odpowiedzi warm; bez ścisłego porównania pełnej semantyki): " +
+                        "${model.parityOkPairs} par bez wykrytego mismatchu, " +
+                        "${model.parityMismatchPairs} par unieważnionych. Wyniku nie należy " +
+                        "opisywać jako pełnej zgodności semantycznej.",
+                )
+            }
             appendLine()
             appendSourceOrderFinding(model)
             appendLine("## Zastrzeżenia")
@@ -1195,28 +1166,31 @@ class ThesisReportWriter(
             appendMarkdownTable(model.storageProtocolTable)
         }
 
-    /**
-     * Run-level validity, stated before any number is shown. A run whose replicate
-     * datasets disagree measured its own warm-up, not the systems.
-     */
+    /** Metric-specific validity, stated before any number is shown. */
     private fun StringBuilder.appendValidityBanner(model: ThesisReportModel) {
         val report = model.replicateReport ?: return
         if (report.runIsValid) {
             appendLine(
-                "> **Ważność przebiegu: OK.** Kontrola replikacji (zbiory o identycznych parametrach) " +
-                    "daje maksymalny rozrzut ×${format2(report.worstSpread)} przy progu " +
-                    "×${format2(ReplicateControl.VALIDITY_GATE_SPREAD)}.",
+                "> **Ważność Q2: OK.** Maksymalny rozrzut zapytań na zbiorach replikacyjnych wynosi " +
+                    "×${format2(report.worstQuerySpread)} przy progu " +
+                    "×${format2(ReplicateControl.VALIDITY_GATE_SPREAD)}. Q1 ma osobną bramkę: " +
+                    "×${format2(report.worstImportSpread)} — " +
+                    (if (report.importIsStable) "stabilne." else "niestabilne; Q1 pozostaje nierozstrzygnięte."),
             )
         } else {
             appendLine(
-                "> **UWAGA — przebieg nie spełnia warunku ważności.** Zbiory o identycznych parametrach " +
-                    "dają rozrzut median do ×${format2(report.worstSpread)} przy progu " +
-                    "×${format2(ReplicateControl.VALIDITY_GATE_SPREAD)}. Oznacza to, że pomiar w dużej " +
-                    "części opisuje rozgrzewkę procesu, a nie różnicę między systemami. Przed użyciem " +
-                    "wyników w pracy należy zwiększyć liczbę rund globalnej rozgrzewki " +
-                    "(obecnie ${model.globalWarmupRounds}) i powtórzyć przebieg. Wszystkie werdykty " +
+                "> **UWAGA — Q2 nie spełnia warunku ważności.** Zbiory o identycznych parametrach " +
+                    "dają rozrzut zapytań do ×${format2(report.worstQuerySpread)} przy progu " +
+                    "×${format2(ReplicateControl.VALIDITY_GATE_SPREAD)}. Zmienność na identycznych " +
+                    "danych jest zbyt duża, by przypisywać obserwowane efekty systemom; należy " +
+                    "sprawdzić rozgrzewkę i warunki hosta, a następnie powtórzyć przebieg " +
+                    "(rundy globalnej rozgrzewki: ${model.globalWarmupRounds}). Wszystkie werdykty " +
                     "niżej stosują ten zmierzony rozrzut jako próg istotności praktycznej, więc pozostają " +
                     "ostrożne, ale przebiegu nie należy cytować jako dowodu przewagi żadnego z systemów.",
+            )
+            appendLine(
+                "> Q1 ma osobną bramkę: ×${format2(report.worstImportSpread)} — " +
+                    (if (report.importIsStable) "stabilne." else "niestabilne; Q1 pozostaje nierozstrzygnięte."),
             )
         }
         appendLine()
@@ -1234,40 +1208,41 @@ class ThesisReportWriter(
         val belowError = model.verdicts.count { it.verdict == SignificanceVerdict.BELOW_MEASUREMENT_ERROR }
         val notSignificant = model.verdicts.count { it.verdict == SignificanceVerdict.NOT_SIGNIFICANT }
 
+        val runIsValid = model.replicateReport?.runIsValid == true
+        val importIsStable = model.replicateReport?.importIsStable == true
         appendLine(
-            "- **Q2 (zapytania).** Porównano ${model.verdicts.size} par (dataset, zapytanie). " +
-                "Istotnych jednocześnie statystycznie i praktycznie: ${significant.size}; " +
-                "poniżej zmierzonego błędu pomiaru: $belowError; nieistotnych statystycznie: $notSignificant.",
+            "- **Q1 (import, pojedynczy blok): nierozstrzygnięte.** Każda komórka ma jedną próbkę; " +
+                "wniosek końcowy powstaje dopiero z pełnych bloków. Kontrola identycznych datasetów Q1: " +
+                (
+                    model.replicateReport?.let { "rozrzut ×${format2(it.worstImportSpread)} — " } ?: "brak — "
+                ) +
+                (if (importIsStable) "poniżej progu jakości." else "powyżej progu jakości; czasy są diagnostyczne."),
         )
-        if (significant.isNotEmpty()) {
-            val strongest = significant.maxByOrNull { it.magnitude }!!
+        appendLine()
+        if (!runIsValid) {
             appendLine(
-                "  Najsilniejszy wynik: **${strongest.datasetName} / ${strongest.queryLabel}** — " +
-                    "×${format2(strongest.magnitude)} na korzyść ${strongest.fasterSystem}" +
-                    (strongest.confidenceInterval?.let { ", 95% CI ilorazu [${format2(it.low)}; ${format2(it.high)}]" } ?: "") +
-                    ".",
-            )
-            val localWins = significant.count { it.fasterSystem == "LOCAL" }
-            appendLine(
-                "  Kierunek wyników istotnych: $localWins na korzyść LOCAL, " +
-                    "${significant.size - localWins} na korzyść REFERENCE.",
+                "- **Q2 (zapytania): nierozstrzygnięte.** Przebieg nie przeszedł bramki replikatów; " +
+                    "czasy pozostają diagnostyczne, ale generator celowo nie publikuje z nich " +
+                    "rankingu ani wniosku o przewadze systemu.",
             )
         } else {
+            appendLine(
+                "- **Q2 (zapytania, pojedynczy blok).** Porównano ${model.verdicts.size} par. " +
+                    "Wewnątrz bloku rozróżnialnych statystycznie i praktycznie: ${significant.size}; " +
+                    "poniżej błędu pomiaru: $belowError; nierozróżnialnych statystycznie: $notSignificant. " +
+                    "Wniosek końcowy wymaga zgodnego efektu w serii kontrbalansowanych przebiegów.",
+            )
+        }
+        if (runIsValid && significant.isEmpty()) {
             appendLine("  Żadna różnica nie przekroczyła jednocześnie progu statystycznego i progu błędu pomiaru.")
         }
-        appendBalance(model)
         model.floorMedianMs.forEach { (system, floor) ->
-            appendLine("  Podłoga pomiaru ($system): ${format2(floor)} ms — tyle kosztuje każde zapytanie niezależnie od danych.")
+            appendLine("  Najmniejsze okno ($system): mediana ${format2(floor)} ms; opisowy punkt odniesienia, nie koszt stały.")
         }
         appendLine()
         appendLine(
-            "- **Q3 (dysk).** " +
-                (
-                    model.storageModelTable?.let {
-                        "Wynikiem jest koszt krańcowy z regresji (tabela „model przyrostu dysku”), " +
-                            "a nie iloraz delta/XES w pojedynczym punkcie."
-                    } ?: "Za mało przypisywalnych pomiarów, by wyznaczyć koszt krańcowy — nierozstrzygnięte."
-                    ),
+            "- **Q3 (dysk).** Wynik daje osobna sonda izolowanych importów. " +
+                "Bez dołączonego `storage-scaling.csv` pytanie pozostaje nierozstrzygnięte.",
         )
         appendLine(
             "- **Q3 (pamięć).** " +
@@ -1281,57 +1256,18 @@ class ThesisReportWriter(
                     } ?: "Brak kompletu składników — nierozstrzygnięte."
                     ),
         )
+        val parityClaim = if (model.protocolVersion >= 2) {
+            "${model.parityOkPairs} par przeszło kontrolę semantyczną protokołu"
+        } else {
+            "${model.parityOkPairs} par bez mismatchu w ograniczonej kontroli starszego protokołu; " +
+                "pełna zgodność semantyczna nierozstrzygnięta"
+        }
         appendLine(
-            "- **Q4 (poprawność).** ${model.parityOkPairs} par zgodnych, " +
-                "${model.parityMismatchPairs} unieważnionych rozjazdem liczności" +
-                (
-                    if (model.sourceOrderDeviationPairs.isNotEmpty()) {
-                        "; wszystkie rozjazdy wyjaśnione odstępstwem REFERENCE od specyfikacji PQL " +
-                            "(sekcja o kolejności źródłowej)."
-                    } else {
-                        "."
-                    }
-                    ),
+            "- **Q4 (poprawność).** $parityClaim, ${model.parityMismatchPairs} unieważnionych. " +
+                "${model.sourceOrderCandidatePairs.size} mismatchów ma sygnaturę znanego odstępstwa " +
+                "kolejności REFERENCE; raport nie przypisuje im przyczyny bez osobnej weryfikacji.",
         )
         appendLine()
-    }
-
-    /**
-     * Overall balance and, explicitly, the datasets on which LOCAL loses.
-     *
-     * Without it the report is a list of per-dataset tables, and a reader who lands
-     * on the largest one draws a global conclusion from a local result — on this data
-     * `real-hospital` is the single dataset where REFERENCE wins most rows, while
-     * LOCAL is faster on 112 of 132 pairs overall. Both facts belong in the summary;
-     * naming the weak spot is what makes the strong claim credible.
-     */
-    private fun StringBuilder.appendBalance(model: ThesisReportModel) {
-        val verdicts = model.verdicts
-        if (verdicts.isEmpty()) return
-        val localFaster = verdicts.count { it.ratio < 1.0 }
-        val geometricMean = exp(verdicts.sumOf { ln(1.0 / it.ratio) } / verdicts.size)
-        appendLine(
-            "  Bilans wszystkich ${verdicts.size} par (niezależnie od istotności): LOCAL szybszy " +
-                "w $localFaster, REFERENCE w ${verdicts.size - localFaster}; średnia geometryczna " +
-                "ilorazu REFERENCE/LOCAL wynosi ×${format2(geometricMean)} " +
-                "(wartość > 1 oznacza przewagę LOCAL).",
-        )
-
-        val byDataset = verdicts.groupBy { it.datasetName }
-            .mapValues { (_, pairs) ->
-                ThesisStatistics.quantile(pairs.map { 1.0 / it.ratio }, 0.50)
-            }
-        val weakSpots = byDataset.filterValues { it < 1.0 }.toList().sortedBy { it.second }
-        if (weakSpots.isEmpty()) {
-            appendLine("  Na żadnym zbiorze mediana ilorazu nie wypada na korzyść REFERENCE.")
-        } else {
-            appendLine(
-                "  **Zbiory, na których przewagę ma REFERENCE** (mediana ilorazu REFERENCE/LOCAL < 1): " +
-                    weakSpots.joinToString(", ") { "${it.first} ×${format2(it.second)}" } +
-                    ". Wynik ten należy w pracy omówić wprost, a nie pomijać — wskazuje klasę " +
-                    "danych, na której model grafowy traci przewagę.",
-            )
-        }
     }
 
     private fun StringBuilder.appendReplicateSection(model: ThesisReportModel) {
@@ -1361,10 +1297,9 @@ class ThesisReportWriter(
                 "(`processm-neo4j`) — podczas gdy REFERENCE to jeden kontener `processm-server` " +
                 "obejmujący aplikację i PostgreSQL. Porównując systemy, należy zsumować składniki " +
                 "LOCAL w obrębie tej samej fazy. Wszystkie składniki mierzone są tą samą sondą " +
-                "(`docker stats`), więc wartości są porównywalne wprost. Składnik `local-jvm` oznacza " +
-                "przebieg zebrany w konfiguracji deweloperskiej (interpreter na hoście, mierzony RSS " +
-                "procesu) — takiego przebiegu nie należy używać do porównania Q3, bo obie strony " +
-                "mierzono wtedy różnymi sondami.",
+                "(`docker stats`), a sumy `local-total` i `reference-total` są tworzone dla każdego " +
+                "wspólnego znacznika czasu przed obliczeniem mediany. Składnik `local-jvm` oznacza " +
+                "przebieg deweloperski z niesymetryczną sondą i dyskwalifikuje go jako dowód Q3.",
         )
         appendLine()
         val comparison = model.memoryComparison
@@ -1380,13 +1315,10 @@ class ThesisReportWriter(
         )
         appendLine()
         appendLine(
-            "**Warunek rozstrzygnięcia.** Ta różnica jest wynikiem tylko wtedy, gdy przekracza rozrzut " +
-                "tych samych składników między przebiegami. Rozrzut ten pochodzi z " +
-                "`scripts/benchmarks/compare-runs.py` (sekcja powtarzalności) i jest wyliczany na co " +
-                "najmniej trzech przebiegach; pojedynczy przebieg **nie** uprawnia do wniosku o " +
-                "przewadze żadnego z systemów w Q3-pamięć. Jeżeli rozrzut międzyprzebiegowy " +
-                "któregokolwiek składnika przekracza ${format1(abs(comparison.differenceMiB))} MiB, " +
-                "wynik należy zaraportować jako nierozstrzygnięty.",
+            "**Warunek rozstrzygnięcia.** Pojedynczy przebieg nie uprawnia do wniosku o przewadze " +
+                "w Q3-pamięć. `scripts/benchmarks/compare-runs.py` porównuje sumy systemowe w co " +
+                "najmniej trzech pełnych blokach; kierunek jest raportowany dopiero wtedy, gdy znak " +
+                "różnicy LOCAL−REFERENCE jest taki sam w każdym przebiegu.",
         )
         appendLine()
         appendLine(
@@ -1399,21 +1331,22 @@ class ThesisReportWriter(
     }
 
     /**
-     * Documents WHY hoisted trace-variant pairs get invalidated, so the report is never
-     * read as "our interpreter is incompatible". The difference is a REFERENCE deviation
-     * from the PQL specification's source-order rule; emitted only when such pairs occur,
-     * so the claim always rests on evidence from this very run.
+     * Marks hoisted trace-variant mismatches as candidates for a previously verified
+     * source-order deviation. The generator deliberately does not diagnose a fresh
+     * mismatch from query shape alone.
      */
     private fun StringBuilder.appendSourceOrderFinding(model: ThesisReportModel) {
-        val pairs = model.sourceOrderDeviationPairs
+        val pairs = model.sourceOrderCandidatePairs
         if (pairs.isEmpty()) return
 
         appendLine("## $SOURCE_ORDER_FINDING_HEADING")
         appendLine()
         appendLine(
-            "**Wniosek: rozjazdy wykazane niżej wynikają z odstępstwa systemu REFERENCE od " +
-                "specyfikacji PQL, a nie z błędu niniejszej implementacji.** Sekcję generuje się " +
-                "automatycznie, ilekroć w przebiegu wystąpi ta klasa unieważnień.",
+            "**Wcześniej potwierdzone ustalenie.** Dla zapytań `group by ^e:name` na wskazanych " +
+                "logach niezależna analiza pliku XES i powtarzanych odpowiedzi wykazała, że LOCAL " +
+                "zachowuje kolejność źródłową, a REFERENCE porządkuje po `time:timestamp`. Pary z " +
+                "bieżącego przebiegu są niżej oznaczone wyłącznie jako **kandydaci o tej samej " +
+                "sygnaturze**; generator nie diagnozuje przyczyny tylko na podstawie tekstu PQL.",
         )
         appendLine()
         appendLine("**Czego dotyczy.** Zapytania grupujące ślady po *hoistowanym* atrybucie zdarzenia")
@@ -1449,14 +1382,19 @@ class ThesisReportWriter(
         )
         appendLine()
         appendLine(
-            "**Zakres.** Zjawisko dotyczy wyłącznie logów rzeczywistych, zawierających zdarzenia " +
+            "**Zakres ustalenia historycznego.** Zjawisko dotyczyło logów rzeczywistych, zawierających zdarzenia " +
                 "o równych znacznikach czasu; na zbiorach syntetycznych (o ściśle rosnących " +
                 "znacznikach) obie implementacje zwracają identyczne wyniki. Poprawność samego " +
                 "przechowywania danych potwierdza niezależnie test roundtrip XES (sekcja " +
-                "„Poprawność (Q4)”), który dla wszystkich zbiorów raportuje `MATCH` bez różnic.",
+                "„Poprawność (Q4)”). " +
+                if (model.roundtripAllMatch) {
+                    "W tym przebiegu wszystkie wykonane testy roundtrip raportują `MATCH` bez różnic."
+                } else {
+                    "W tym przebiegu nie wszystkie testy roundtrip mają status `MATCH`, więc nie stanowią pełnego potwierdzenia."
+                },
         )
         appendLine()
-        appendLine("Pary unieważnione z tego powodu w niniejszym przebiegu:")
+        appendLine("Pary-kandydaci unieważnione w niniejszym przebiegu:")
         appendLine()
         pairs.forEach { appendLine("- ${it.datasetName} / ${it.queryLabel}: ${it.reason}") }
         appendLine()

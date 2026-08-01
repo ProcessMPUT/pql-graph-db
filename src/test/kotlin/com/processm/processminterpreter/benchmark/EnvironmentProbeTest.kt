@@ -22,7 +22,8 @@ class EnvironmentProbeTest {
                 "HostConfig": {
                   "Memory": 8589934592,
                   "NanoCpus": 4000000000
-                }
+                },
+                "Image": "sha256:abc123"
               }
             ]
         """.trimIndent()
@@ -31,6 +32,7 @@ class EnvironmentProbeTest {
 
         assertEquals("ok", info["status"])
         assertEquals("neo4j:5.26-community", info["image"])
+        assertEquals("sha256:abc123", info["imageId"])
         assertEquals(8589934592L, info["memoryLimitBytes"])
         assertEquals(4000000000L, info["nanoCpus"])
         assertEquals(
@@ -56,5 +58,17 @@ class EnvironmentProbeTest {
     @Test
     fun `malformed inspect output degrades to unavailable`() {
         assertEquals(mapOf<String, Any?>("status" to "unavailable"), EnvironmentProbe.parseContainerInfo("not json"))
+    }
+
+    @Test
+    fun `docker info captures the VM resource budget rather than only host RAM`() {
+        val info = EnvironmentProbe.parseDockerInfo(
+            """{"ServerVersion":"28.3.2","OperatingSystem":"Docker Desktop","OSType":"linux","Architecture":"aarch64","NCPU":10,"MemTotal":8321499136}""",
+        )
+
+        assertEquals("ok", info["status"])
+        assertEquals("Docker Desktop", info["operatingSystem"])
+        assertEquals(8321499136L, info["totalMemoryBytes"])
+        assertEquals(10L, info["logicalProcessors"])
     }
 }
