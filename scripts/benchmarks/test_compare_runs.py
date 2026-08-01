@@ -195,7 +195,9 @@ def make_run(root: Path, name: str, order: str, seed: int = RANDOM_SEED) -> Path
         "imageIds": {component: data["imageId"] for component, data in containers.items()},
     }), encoding="utf-8")
     (run / "thesis-report.md").write_text(
-        "# Raport bloku\n\n- **Q3 (dysk).** Kompletna izolowana sonda storage została dołączona.\n",
+        "# Raport bloku\n\n"
+        "Niniejszy raport zawiera wyłącznie wyniki jednego przebiegu benchmarku.\n\n"
+        "- **Q3 (dysk).** Kompletna izolowana sonda storage została dołączona.\n",
         encoding="utf-8",
     )
     for filename in ("summary.md", "environment.md", "thesis-tables.tex"):
@@ -219,6 +221,8 @@ class CompareRunsEndToEndTest(unittest.TestCase):
             self.assertIn("powtarzalny ponad błędem", report)
             self.assertIn("stabilny wzrost ponad błędem", report)
             self.assertIn("# Szczegóły diagnostyczne bloku kotwiczącego", report)
+            self.assertIn("Poniższa część zawiera wyłącznie wyniki przebiegu kotwiczącego.", report)
+            self.assertNotIn("Niniejszy raport zawiera wyłącznie wyniki jednego przebiegu benchmarku.", report)
             self.assertTrue((output / "series-scaling.csv").is_file())
             self.assertTrue((output / "thesis-tables-series.tex").is_file())
 

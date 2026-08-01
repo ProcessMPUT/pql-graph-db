@@ -1079,6 +1079,11 @@ def main() -> int:
     repeatability_path = out_dir / "repeatability.md"
     repeatability_path.write_text("\n".join(md), encoding="utf-8")
     base_details = base_report_text.split("\n", 1)[1].lstrip() if base_report_text.startswith("# ") else base_report_text
+    base_details = base_details.replace(
+        "Niniejszy raport zawiera wyłącznie wyniki jednego przebiegu benchmarku.",
+        "Poniższa część zawiera wyłącznie wyniki przebiegu kotwiczącego.",
+        1,
+    )
     combined = (
         "\n".join(md)
         + "\n\n# Szczegóły diagnostyczne bloku kotwiczącego\n\n"
