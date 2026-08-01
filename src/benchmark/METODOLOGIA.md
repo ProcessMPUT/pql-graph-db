@@ -136,7 +136,7 @@ przebiegi danych i dodatkowe konstrukcje PQL):
 | hierarchyWindow | `limit l:1, t:10, e:20` | okno hierarchii | okno | — |
 | eventNameFilter | `where e:name is not null limit ...` | filtr po atrybucie standardowym | okno | — |
 | customAttrFilter | `where [e:attr_1] is not null limit ...` | filtr po atrybucie niestandardowym | okno | — |
-| timestampNameOrder | `order by e:timestamp, e:name limit ...` | sortowanie wieloatrybutowe | okno | event, shape |
+| standardAttributesOrder | `order by e:timestamp, e:name, e:org:group, e:org:resource limit ...` | sortowanie po standardowych atrybutach XES | okno | event, shape |
 | eventNameGroup | `group by e:name order by e:name limit ...` | grupowanie w obrębie trace'a | okno | event, shape |
 | hoistedWhere | `where ^e:name is not null limit ...` | filtr hoistowany (EXISTS/JOIN) | okno | — |
 | timestampAggregates | `select min(e:timestamp), max(e:timestamp), count(e:name)` | agregacje w obrębie śladu | okno | event, shape |
@@ -146,6 +146,15 @@ przebiegi danych i dodatkowe konstrukcje PQL):
 | variantGroupCount | `select count(t:name), count(^e:name) group by ^e:name ...` | warianty z licznościami | **zależne od danych** | trace, event, shape |
 | absentAttrScan | `where [e:attr_absent_benchmark_probe] is not null limit ...` | filtr bez dopasowań po atrybucie niestandardowym | **zależne od danych** | trace, event, attribute, shape |
 | likeScan | `where e:name like '%zzq%' order by ... limit ...` | filtr `like` bez dopasowań | **zależne od danych** | trace, event, shape |
+
+Zapytanie `standardAttributesOrder` używa czterech ogólnych kluczy zamiast tylko
+timestampu i nazwy. W logach rzeczywistych para `(timestamp, name)` nie zawsze
+jest unikatowa; pozostawienie takiego remisu powodowałoby, że ścisłe porównanie
+tablic odpowiedzi sprawdza techniczny tie-break planu bazy, a nie semantykę ani
+koszt zadeklarowanego sortowania. Dodatkowe klucze są standardowymi atrybutami
+XES, a nie polem dobranym do jednego fixture'u. Jeżeli również wszystkie cztery
+wartości będą równe i systemy zwrócą inny porządek, bramka Q4 nadal jawnie
+unieważni tę parę — harness nie normalizuje kolejności po pomiarze.
 
 Rejestrowane: czas ściany każdej próbki, rozmiar odpowiedzi (bajty), liczności
 (logi/trace'y/zdarzenia).
@@ -331,7 +340,13 @@ specyfikacją PQL”.
    Datastore rozgrzewkowy pozostaje obecny do końcowego sprzątania w obu systemach;
    dzięki temu baseline i pomiary nie obejmują asymetrycznego kosztu kasowania ani
    ponownego wychłodzenia, ale Q3-pamięć dotyczy jawnie tego rozgrzanego stanu.
-4. Po rozgrzewce zbierany jest 60-sekundowy baseline pamięci. Następnie każdy
+4. Po rozgrzewce zbierany jest 60-sekundowy baseline pamięci. Okno bezczynności
+   celowo wychładza procesy, dlatego bezpośrednio po nim wykonywanych jest 10
+   nierejestrowanych rund aktywacyjnych na tym samym datastore rozgrzewkowym,
+   z naprzemienną kolejnością systemów. Sonda pamięci nie ma wtedy aktywnej fazy:
+   rundy nie zanieczyszczają ani baseline'u `idle`, ani serii `queries`. Ten krok
+   usuwa asymetrię, w której wyłącznie pierwszy mierzony dataset ponosi koszt
+   powrotu z 60-sekundowej bezczynności. Następnie każdy
    dataset trafia do osobnego datastore'u w obu systemach. Dla jednego datasetu
    wykonywany jest cały blok: import obu stron → zapytania → roundtrip LOCAL →
    usunięcie obu datastore'ów; dopiero potem dopuszczany jest następny dataset.
@@ -367,10 +382,11 @@ specyfikacją PQL”.
    `cleanup-results.csv`. Po każdym pełnym bloku stack i tak jest odtwarzany od
    zera, aby drugi blok nie dziedziczył stron, WAL ani cache danych z pierwszego.
 8. **Finalny eksperyment zawiera co najmniej trzy ważne bloki FULL** na tej samej
-   wersji. Bieżący kontrakt zapisu ma `benchmarkProtocolVersion=3`; wersje poniżej
+   wersji. Bieżący kontrakt zapisu ma `benchmarkProtocolVersion=4`; wersje poniżej
    2 nie mają pełnej kontroli semantycznej, a wersja 2 kumuluje wszystkie datasety
    w pamięci baz i może mierzyć presję wspólnej VM zamiast bieżącego workloadu.
-   Żadna z nich nie jest finalnym dowodem. `compare-runs.py` waliduje kompletność macierzy, 30 repetycji,
+   Wersja 3 izoluje datasety, lecz nie kompensuje wychłodzenia przez pomiar `idle`.
+   Żadna z wcześniejszych wersji nie jest finalnym dowodem. `compare-runs.py` waliduje kompletność macierzy, 30 repetycji,
    roundtrip, sprzątanie, pamięć, środowisko, fingerprint i trzy wymagane kolejności. Skrypt
    nie wybiera „reprezentatywnego wyniku”: wszystkie bloki są jednostkami dowodu.
    Jeden środkowy blok jest wskazywany jedynie jako kotwica dla szczegółowych

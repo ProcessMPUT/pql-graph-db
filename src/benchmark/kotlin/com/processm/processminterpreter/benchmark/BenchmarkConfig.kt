@@ -23,16 +23,41 @@ enum class BenchmarkProfile(
      * This phase pays that cost before any number is recorded.
      */
     val globalWarmupRounds: Int,
+    /**
+     * Executions on the already-warmed throw-away dataset immediately after the
+     * idle-memory baseline. The baseline intentionally leaves both systems idle;
+     * these unrecorded rounds restore an active state before the first dataset is
+     * measured, without contaminating the idle samples.
+     */
+    val postIdleWarmupRounds: Int,
 ) {
-    SMOKE(warmups = 1, repetitions = 3, idleBaselineSeconds = 5, globalWarmupRounds = 2),
-    FULL(warmups = 3, repetitions = 30, idleBaselineSeconds = 60, globalWarmupRounds = 40),
+    SMOKE(
+        warmups = 1,
+        repetitions = 3,
+        idleBaselineSeconds = 5,
+        globalWarmupRounds = 2,
+        postIdleWarmupRounds = 2,
+    ),
+    FULL(
+        warmups = 3,
+        repetitions = 30,
+        idleBaselineSeconds = 60,
+        globalWarmupRounds = 40,
+        postIdleWarmupRounds = 10,
+    ),
 
     /**
      * Common-domain size ladder for Q2 diagnostics (10^4 … 2×10^5 events).
      * Run separately from FULL: the thesis workload does not need to pay for it, and
      * the ladder needs the headroom to leave the fixed transport floor behind.
      */
-    SCALING(warmups = 3, repetitions = 30, idleBaselineSeconds = 60, globalWarmupRounds = 40),
+    SCALING(
+        warmups = 3,
+        repetitions = 30,
+        idleBaselineSeconds = 60,
+        globalWarmupRounds = 40,
+        postIdleWarmupRounds = 10,
+    ),
 }
 
 enum class DatasetType {
@@ -102,7 +127,7 @@ const val WORKLOAD_FLOOR = "floor"
 const val WORKLOAD_WINDOW = "window"
 const val WORKLOAD_DATA_DEPENDENT = "dataDependent"
 const val BENCHMARK_SERIES_RANDOM_SEED = 20260728L
-const val CURRENT_BENCHMARK_PROTOCOL_VERSION = 3
+const val CURRENT_BENCHMARK_PROTOCOL_VERSION = 4
 
 @JsonIgnoreProperties(ignoreUnknown = true)
 data class BenchmarkQuerySpec(
@@ -150,7 +175,9 @@ data class BenchmarkSettings(
      *
      * Version 1 (or an absent field) checked only response counts from the last
      * warm repetition. Version 2 checks counts in every measured repetition and
-     * strict XES-JSON semantics of the last response.
+     * strict XES-JSON semantics of the last response. Version 3 isolates one live
+     * measured dataset at a time. Version 4 restores an active state after the
+     * intentionally idle memory-baseline window.
      */
     val protocolVersion: Int = CURRENT_BENCHMARK_PROTOCOL_VERSION,
     /**
@@ -159,6 +186,8 @@ data class BenchmarkSettings(
      * rather than what the current profile would do.
      */
     val globalWarmupRounds: Int = profile.globalWarmupRounds,
+    /** See [BenchmarkProfile.postIdleWarmupRounds]. */
+    val postIdleWarmupRounds: Int = profile.postIdleWarmupRounds,
 ) {
     companion object {
         fun fromEnvironment(profile: BenchmarkProfile): BenchmarkSettings =

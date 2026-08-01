@@ -1,10 +1,22 @@
 package com.processm.processminterpreter.benchmark
 
+import com.processm.processminterpreter.pql.ast.PqlQuery
+import com.processm.processminterpreter.pql.parser.AntlrPqlParser
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 class QueryExecutionPlanTest {
+    @Test
+    fun `standard attribute ordering query has four explicit tie breakers`() {
+        val spec = BenchmarkConfig.load(BenchmarkProfile.FULL).queries.single {
+            it.label == "standardAttributesOrder"
+        }
+        val parsed = AntlrPqlParser().parse(spec.query) as PqlQuery.Select
+
+        assertEquals(4, parsed.orderBy.size)
+    }
+
     @Test
     fun `query scaling eligibility is declared per varied dataset series`() {
         val specs = BenchmarkConfig.load(BenchmarkProfile.FULL).queries.associateBy { it.label }

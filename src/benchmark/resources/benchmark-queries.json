@@ -24,10 +24,10 @@
     "clause": "klauzula `where` po atrybucie niestandardowym"
   },
   {
-    "label": "timestampNameOrder",
-    "query": "order by e:timestamp, e:name limit l:1, t:10, e:20",
+    "label": "standardAttributesOrder",
+    "query": "order by e:timestamp, e:name, e:org:group, e:org:resource limit l:1, t:10, e:20",
     "workload": "window",
-    "clause": "klauzula `order by`",
+    "clause": "klauzula `order by` po standardowych atrybutach XES",
     "scalingSeries": ["event-scaling", "shape-scaling"]
   },
   {

@@ -141,6 +141,7 @@ data class ThesisReportModel(
     val datasetOrder: String,
     val protocolVersion: Int,
     val globalWarmupRounds: Int,
+    val postIdleWarmupRounds: Int,
     val repetitions: Int,
     val environmentTable: ThesisTable,
     val replicateTable: ThesisTable?,
@@ -248,6 +249,7 @@ data class ThesisReportModel(
                 datasetOrder = settings.datasetOrder.name.lowercase(),
                 protocolVersion = settings.protocolVersion,
                 globalWarmupRounds = settings.globalWarmupRounds,
+                postIdleWarmupRounds = settings.postIdleWarmupRounds,
                 repetitions = settings.profile.repetitions,
                 environmentTable = environmentTable(settings, environment),
                 replicateTable = replicateReport?.let(::replicateTable),
@@ -444,6 +446,7 @@ data class ThesisReportModel(
                     listOf("Profil benchmarku", settings.profile.name.lowercase()),
                     listOf("Wersja protokołu benchmarku", settings.protocolVersion.toString()),
                     listOf("Rundy globalnej rozgrzewki (przed pierwszym pomiarem)", settings.globalWarmupRounds.toString()),
+                    listOf("Rundy aktywacyjne po pomiarze bezczynności", settings.postIdleWarmupRounds.toString()),
                     listOf("Rozgrzewki na zapytanie", settings.profile.warmups.toString()),
                     listOf("Repetycje mierzone na zapytanie", settings.profile.repetitions.toString()),
                     listOf("Kolejność zbiorów", "${settings.datasetOrder.name.lowercase()} (ziarno ${settings.datasetOrderSeed})"),
@@ -1040,7 +1043,10 @@ class ThesisReportWriter(
             appendLine("- Identyfikator przebiegu (runId): ${model.runId}")
             appendLine("- Data wygenerowania: ${model.generatedOn}")
             appendLine("- Wersja protokołu benchmarku: ${model.protocolVersion}")
-            appendLine("- Kolejność zbiorów: ${model.datasetOrder}; rundy globalnej rozgrzewki: ${model.globalWarmupRounds}")
+            appendLine(
+                "- Kolejność zbiorów: ${model.datasetOrder}; rundy globalnej rozgrzewki: " +
+                    "${model.globalWarmupRounds}; rundy aktywacyjne po idle: ${model.postIdleWarmupRounds}",
+            )
             appendLine()
             appendValidityBanner(model)
             appendLine(
@@ -1184,7 +1190,8 @@ class ThesisReportWriter(
                     "×${format2(ReplicateControl.VALIDITY_GATE_SPREAD)}. Zmienność na identycznych " +
                     "danych jest zbyt duża, by przypisywać obserwowane efekty systemom; należy " +
                     "sprawdzić rozgrzewkę i warunki hosta, a następnie powtórzyć przebieg " +
-                    "(rundy globalnej rozgrzewki: ${model.globalWarmupRounds}). Wszystkie werdykty " +
+                    "(rundy globalnej rozgrzewki: ${model.globalWarmupRounds}; po idle: " +
+                    "${model.postIdleWarmupRounds}). Wszystkie werdykty " +
                     "niżej stosują ten zmierzony rozrzut jako próg istotności praktycznej, więc pozostają " +
                     "ostrożne, ale przebiegu nie należy cytować jako dowodu przewagi żadnego z systemów.",
             )

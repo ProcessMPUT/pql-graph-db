@@ -149,6 +149,7 @@ object RunReplay {
             // Absent in runs collected before the global warm-up phase existed: those
             // runs performed zero rounds, and saying so is the point of the banner.
             globalWarmupRounds = (environment["globalWarmupRounds"] as? Number)?.toInt() ?: 0,
+            postIdleWarmupRounds = (environment["postIdleWarmupRounds"] as? Number)?.toInt() ?: 0,
         )
     }
 

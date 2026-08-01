@@ -29,7 +29,7 @@ MS = 1000.0
 MIB = 1024.0 * 1024.0
 VALIDITY_GATE_DEFAULT = 1.25
 SERIES_RANDOM_SEED = 20260728
-BENCHMARK_PROTOCOL_VERSION = 3
+BENCHMARK_PROTOCOL_VERSION = 4
 IMPORT_REPLICATE_LABEL = "IMPORT (Q1)"
 REQUIRED_MEMORY_COMPONENTS = {"processm-interpreter", "processm-neo4j", "processm-server"}
 REQUIRED_FILES = {
@@ -303,6 +303,7 @@ class RunData:
             "warmups": self.environment.get("warmups"),
             "repetitions": self.environment.get("repetitions"),
             "globalWarmupRounds": self.environment.get("globalWarmupRounds"),
+            "postIdleWarmupRounds": self.environment.get("postIdleWarmupRounds"),
             "replicateValidityGate": nested(self.environment, "experiment", "replicateValidityGate"),
             "fingerprint": nested(self.environment, "experiment", "fingerprintSha256"),
             "gitCommit": nested(self.environment, "source", "gitCommit"),
@@ -342,6 +343,8 @@ def load_run(path: Path) -> RunData:
         )
     if int(environment.get("globalWarmupRounds") or 0) <= 0:
         issues.append("brak globalnej rozgrzewki")
+    if int(environment.get("postIdleWarmupRounds") or 0) <= 0:
+        issues.append("brak rozgrzewki aktywacyjnej po pomiarze bezczynności")
     if environment.get("datasetFilter") not in ([], None):
         issues.append("aktywny filtr datasetów")
     if environment.get("systemFilter") not in ([], None):

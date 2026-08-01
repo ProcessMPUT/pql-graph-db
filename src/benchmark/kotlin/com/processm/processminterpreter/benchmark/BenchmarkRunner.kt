@@ -95,13 +95,27 @@ fun main(args: Array<String>) {
         // that the replicate datasets proved the per-query warm-ups cannot cover, and
         // absorbs the databases' first-import page pre-allocation so it is not billed
         // to whichever dataset happens to come first.
-        runGlobalWarmup(settings, config, clients, generator, generatedDatasetsDirectory, createdDataStores, runId)
+        val warmupHandles =
+            runGlobalWarmup(settings, config, clients, generator, generatedDatasetsDirectory, createdDataStores, runId)
 
         memorySampler.start()
         println("Sampling idle memory baseline for ${settings.profile.idleBaselineSeconds}s")
         memorySampler.sampleBlocking(MEMORY_PHASE_IDLE, settings.profile.idleBaselineSeconds)
 
-        // Protocol v3 isolates the live datastore working set per dataset. Keeping all
+        // The idle baseline deliberately cools the processes for up to 60 seconds.
+        // Reactivate the same throw-away workload before measuring the first dataset;
+        // otherwise the first member of the replicate control pays a cost that the
+        // later two do not. MemorySampler has already cleared its phase, so these
+        // unrecorded probes cannot pollute either the idle or query-memory series.
+        runWarmupQueries(
+            label = "Post-idle activation warm-up",
+            rounds = settings.postIdleWarmupRounds,
+            config = config,
+            clients = clients,
+            handles = warmupHandles,
+        )
+
+        // Protocol v3+ isolates the live datastore working set per dataset. Keeping all
         // 25 pairs resident made the two applications compete for the Docker VM budget
         // and killed REFERENCE although the failing query itself used a small result
         // window. Import, query, round-trip and cleanup therefore form one complete
@@ -345,9 +359,9 @@ private fun runGlobalWarmup(
     generatedDatasetsDirectory: Path,
     createdDataStores: MutableList<CreatedDataStoreHandle>,
     runId: String,
-) {
+): List<ImportedDatasetHandle> {
     val rounds = settings.globalWarmupRounds
-    if (rounds <= 0 || clients.isEmpty()) return
+    if (rounds <= 0 || clients.isEmpty()) return emptyList()
 
     val spec = BenchmarkDatasetSpec(
         type = DatasetType.SYNTHETIC,
@@ -358,8 +372,6 @@ private fun runGlobalWarmup(
         attributesPerEvent = 5,
     )
     val dataset = generator.prepare(spec, generatedDatasetsDirectory)
-    println("Global warm-up: $rounds round(s) of ${config.queries.size} queries on ${spec.name} (not recorded)")
-
     val handles = mutableListOf<ImportedDatasetHandle>()
     clients.forEach { (system, client) ->
         val storeName = "bench-$runId-${system.name}-warmup"
@@ -373,6 +385,25 @@ private fun runGlobalWarmup(
     require(handles.size == clients.size) {
         "Global warm-up imported ${handles.size}/${clients.size} system datasets"
     }
+    runWarmupQueries(
+        label = "Global warm-up",
+        rounds = rounds,
+        config = config,
+        clients = clients,
+        handles = handles,
+    )
+    return handles
+}
+
+private fun runWarmupQueries(
+    label: String,
+    rounds: Int,
+    config: BenchmarkConfig,
+    clients: Map<BenchmarkSystem, BenchmarkHttpClient>,
+    handles: List<ImportedDatasetHandle>,
+) {
+    if (rounds <= 0 || handles.isEmpty()) return
+    println("$label: $rounds round(s) of ${config.queries.size} queries (not recorded)")
     repeat(rounds) { round ->
         config.queries.forEachIndexed { queryIndex, query ->
             val results = mutableMapOf<String, TimedQueryResult>()
@@ -380,23 +411,23 @@ private fun runGlobalWarmup(
                 results[handle.system.name] = runCatching {
                     clients.getValue(handle.system).executeQuery(handle.dataStoreId, query.query)
                 }.getOrElse {
-                    error("Global warm-up query ${query.label} failed on ${handle.system.name}: ${it.message}")
+                    error("$label query ${query.label} failed on ${handle.system.name}: ${it.message}")
                 }
             }
             val local = results["local"]
             val reference = results["reference"]
             if (local != null && reference != null) {
                 require(local.counts == reference.counts) {
-                    "Global warm-up query ${query.label} count mismatch: local=${local.counts}, reference=${reference.counts}"
+                    "$label query ${query.label} count mismatch: local=${local.counts}, reference=${reference.counts}"
                 }
                 val semantic = XesJsonSemanticParity.compare(local.body, reference.body)
                 require(semantic.matches) {
-                    "Global warm-up query ${query.label} semantic mismatch: ${semantic.details}"
+                    "$label query ${query.label} semantic mismatch: ${semantic.details}"
                 }
             }
         }
     }
-    println("Global warm-up complete")
+    println("$label complete")
 }
 
 private fun recordedQuerySample(
