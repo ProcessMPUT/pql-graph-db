@@ -144,6 +144,10 @@ def make_run(root: Path, name: str, order: str, seed: int = RANDOM_SEED) -> Path
         {"system": system, "dataStoreName": f"bench-warmup-{system}",
          "dataStoreId": f"warmup-{system}", "status": "DELETED", "details": ""}
         for system in ("local", "reference")
+    ] + [
+        {"system": system, "dataStoreName": f"bench-post-idle-{system}",
+         "dataStoreId": f"post-idle-{system}", "status": "DELETED", "details": ""}
+        for system in ("local", "reference")
     ]
     write_csv(
         run / "cleanup-results.csv",
@@ -162,9 +166,10 @@ def make_run(root: Path, name: str, order: str, seed: int = RANDOM_SEED) -> Path
         )
     }
     environment = {
-        "benchmarkProtocolVersion": 4,
+        "benchmarkProtocolVersion": 5,
         "profile": "full", "warmups": 3, "repetitions": 30, "globalWarmupRounds": 40,
         "postIdleWarmupRounds": 10,
+        "postIdleWarmupMode": "fresh-import-query-delete",
         "datasetOrder": order, "datasetOrderSeed": seed,
         "datasetFilter": [], "systemFilter": [], "keepBenchmarkDataStores": False,
         "localApi": "http://localhost:8080/api", "referenceApi": "http://localhost:80/api",

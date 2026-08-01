@@ -103,16 +103,18 @@ fun main(args: Array<String>) {
         memorySampler.sampleBlocking(MEMORY_PHASE_IDLE, settings.profile.idleBaselineSeconds)
 
         // The idle baseline deliberately cools the processes for up to 60 seconds.
-        // Reactivate the same throw-away workload before measuring the first dataset;
+        // Reactivate a freshly imported throw-away workload before measuring the first dataset;
         // otherwise the first member of the replicate control pays a cost that the
         // later two do not. MemorySampler has already cleared its phase, so these
         // unrecorded probes cannot pollute either the idle or query-memory series.
-        runWarmupQueries(
-            label = "Post-idle activation warm-up",
-            rounds = settings.postIdleWarmupRounds,
+        runPostIdleActivationWarmup(
+            settings = settings,
             config = config,
             clients = clients,
-            handles = warmupHandles,
+            globalWarmupHandles = warmupHandles,
+            createdDataStores = createdDataStores,
+            cleanup = cleanup,
+            runId = runId,
         )
 
         // Protocol v3+ isolates the live datastore working set per dataset. Keeping all
@@ -428,6 +430,63 @@ private fun runWarmupQueries(
         }
     }
     println("$label complete")
+}
+
+/**
+ * Pays the first post-idle import/query/delete lifecycle before measured data.
+ *
+ * Querying only the datastore created before the idle baseline leaves the first
+ * fresh measured import in a unique position. A temporary second pair makes the
+ * transition into `trace-100` identical to the transitions between measured
+ * dataset blocks. The persistent global-warm-up pair is not touched, so the idle
+ * and query memory phases contain the same background datastore shape.
+ */
+private fun runPostIdleActivationWarmup(
+    settings: BenchmarkSettings,
+    config: BenchmarkConfig,
+    clients: Map<BenchmarkSystem, BenchmarkHttpClient>,
+    globalWarmupHandles: List<ImportedDatasetHandle>,
+    createdDataStores: MutableList<CreatedDataStoreHandle>,
+    cleanup: MutableList<DataStoreCleanupResult>,
+    runId: String,
+) {
+    val rounds = settings.postIdleWarmupRounds
+    if (rounds <= 0 || clients.isEmpty()) return
+    require(globalWarmupHandles.size == clients.size) {
+        "Post-idle activation requires one prepared warm-up dataset per system"
+    }
+
+    val dataset = globalWarmupHandles.first().dataset
+    val activationStores = mutableListOf<CreatedDataStoreHandle>()
+    val activationHandles = mutableListOf<ImportedDatasetHandle>()
+    try {
+        clients.forEach { (system, client) ->
+            val storeName = "bench-$runId-${system.name}-post-idle"
+            val storeId = runCatching { client.createDataStore(storeName) }
+                .getOrElse { error("Post-idle datastore creation failed on ${system.name}: ${it.message}") }
+            val created = CreatedDataStoreHandle(system, storeName, storeId)
+            activationStores += created
+            createdDataStores += created
+            runCatching { client.uploadLogAndWait(storeId, dataset.file) }
+                .getOrElse { error("Post-idle import failed on ${system.name}: ${it.message}") }
+            activationHandles += ImportedDatasetHandle(system, dataset, storeId)
+        }
+        require(activationHandles.size == clients.size) {
+            "Post-idle activation imported ${activationHandles.size}/${clients.size} system datasets"
+        }
+        runWarmupQueries(
+            label = "Post-idle activation warm-up",
+            rounds = rounds,
+            config = config,
+            clients = clients,
+            handles = activationHandles,
+        )
+    } finally {
+        if (!settings.keepBenchmarkDataStores) {
+            cleanup += cleanupCreatedDataStores(settings, activationStores, clients)
+            createdDataStores.removeAll(activationStores.toSet())
+        }
+    }
 }
 
 private fun recordedQuerySample(

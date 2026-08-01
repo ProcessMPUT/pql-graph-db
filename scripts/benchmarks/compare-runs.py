@@ -29,7 +29,8 @@ MS = 1000.0
 MIB = 1024.0 * 1024.0
 VALIDITY_GATE_DEFAULT = 1.25
 SERIES_RANDOM_SEED = 20260728
-BENCHMARK_PROTOCOL_VERSION = 4
+BENCHMARK_PROTOCOL_VERSION = 5
+POST_IDLE_WARMUP_MODE = "fresh-import-query-delete"
 IMPORT_REPLICATE_LABEL = "IMPORT (Q1)"
 REQUIRED_MEMORY_COMPONENTS = {"processm-interpreter", "processm-neo4j", "processm-server"}
 REQUIRED_FILES = {
@@ -304,6 +305,7 @@ class RunData:
             "repetitions": self.environment.get("repetitions"),
             "globalWarmupRounds": self.environment.get("globalWarmupRounds"),
             "postIdleWarmupRounds": self.environment.get("postIdleWarmupRounds"),
+            "postIdleWarmupMode": self.environment.get("postIdleWarmupMode"),
             "replicateValidityGate": nested(self.environment, "experiment", "replicateValidityGate"),
             "fingerprint": nested(self.environment, "experiment", "fingerprintSha256"),
             "gitCommit": nested(self.environment, "source", "gitCommit"),
@@ -345,6 +347,8 @@ def load_run(path: Path) -> RunData:
         issues.append("brak globalnej rozgrzewki")
     if int(environment.get("postIdleWarmupRounds") or 0) <= 0:
         issues.append("brak rozgrzewki aktywacyjnej po pomiarze bezczynności")
+    if environment.get("postIdleWarmupMode") != POST_IDLE_WARMUP_MODE:
+        issues.append(f"tryb rozgrzewki po bezczynności inny niż {POST_IDLE_WARMUP_MODE}")
     if environment.get("datasetFilter") not in ([], None):
         issues.append("aktywny filtr datasetów")
     if environment.get("systemFilter") not in ([], None):
@@ -511,7 +515,11 @@ def load_run(path: Path) -> RunData:
     if set(roundtrip_counts) != dataset_names or any(count != 1 for count in roundtrip_counts.values()):
         issues.append("roundtrip-results.csv nie zawiera dokładnie jednego wiersza na dataset")
     cleanup = read_csv(path / "cleanup-results.csv")
-    expected_cleanup = 2 * len(dataset_names) + (2 if int(environment.get("globalWarmupRounds") or 0) > 0 else 0)
+    expected_cleanup = (
+        2 * len(dataset_names)
+        + (2 if int(environment.get("globalWarmupRounds") or 0) > 0 else 0)
+        + (2 if int(environment.get("postIdleWarmupRounds") or 0) > 0 else 0)
+    )
     if len(cleanup) != expected_cleanup or any(row.get("status") != "DELETED" for row in cleanup):
         issues.append(f"sprzątanie datastore'ów niepotwierdzone: {len(cleanup)}/{expected_cleanup} wpisów DELETED")
 

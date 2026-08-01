@@ -447,6 +447,10 @@ data class ThesisReportModel(
                     listOf("Wersja protokołu benchmarku", settings.protocolVersion.toString()),
                     listOf("Rundy globalnej rozgrzewki (przed pierwszym pomiarem)", settings.globalWarmupRounds.toString()),
                     listOf("Rundy aktywacyjne po pomiarze bezczynności", settings.postIdleWarmupRounds.toString()),
+                    listOf(
+                        "Tryb aktywacji po pomiarze bezczynności",
+                        environment["postIdleWarmupMode"]?.toString() ?: MISSING,
+                    ),
                     listOf("Rozgrzewki na zapytanie", settings.profile.warmups.toString()),
                     listOf("Repetycje mierzone na zapytanie", settings.profile.repetitions.toString()),
                     listOf("Kolejność zbiorów", "${settings.datasetOrder.name.lowercase()} (ziarno ${settings.datasetOrderSeed})"),

@@ -257,6 +257,7 @@ class BenchmarkResultsWriter(
             "repetitions" to settings.profile.repetitions,
             "globalWarmupRounds" to settings.globalWarmupRounds,
             "postIdleWarmupRounds" to settings.postIdleWarmupRounds,
+            "postIdleWarmupMode" to POST_IDLE_WARMUP_MODE,
             // Position in the dataset sequence is a confounder the alternating
             // protocol cannot remove; the order actually used must be recoverable
             // from the artifacts, and a RANDOM order must be reproducible.
@@ -290,6 +291,7 @@ class BenchmarkResultsWriter(
                 appendLine("- Warmups per query: ${settings.profile.warmups}")
                 appendLine("- Global warm-up rounds before the first measured dataset: ${settings.globalWarmupRounds}")
                 appendLine("- Activation warm-up rounds after the idle baseline: ${settings.postIdleWarmupRounds}")
+                appendLine("- Activation warm-up mode: $POST_IDLE_WARMUP_MODE")
                 appendLine("- Measured repetitions per query: ${settings.profile.repetitions}")
                 appendLine("- Dataset order: ${settings.datasetOrder.name.lowercase()} (seed ${settings.datasetOrderSeed})")
                 appendLine("- Java: ${System.getProperty("java.version")}")
@@ -316,7 +318,7 @@ class BenchmarkResultsWriter(
                 appendLine("- The runner refuses to start unless both APIs expose zero pre-existing datastores; every dataset/system pair then gets a fresh datastore for this run.")
                 appendLine("- Benchmark datastores use the `bench-` prefix and are deleted after the run unless `BENCHMARK_KEEP_DATASTORES=true`.")
                 appendLine("- Storage is measured as stabilized directory size before and after importing a dataset.")
-                appendLine("- Memory sampling targets a 1 s pause between probes; the raw timestamps in `memory-results.csv` are authoritative because `docker stats --no-stream` adds probe latency. Both applications and databases use the same Docker probe in thesis-grade runs; phases: `idle` (${settings.profile.idleBaselineSeconds} s baseline before imports) and `queries`. After the idle phase, ${settings.postIdleWarmupRounds} unrecorded activation round(s) restore an active state before the first measured dataset.")
+                appendLine("- Memory sampling targets a 1 s pause between probes; the raw timestamps in `memory-results.csv` are authoritative because `docker stats --no-stream` adds probe latency. Both applications and databases use the same Docker probe in thesis-grade runs; phases: `idle` (${settings.profile.idleBaselineSeconds} s baseline before imports) and `queries`. After the idle phase, a fresh throw-away import, ${settings.postIdleWarmupRounds} unrecorded activation round(s), and deletion restore the same datastore lifecycle that precedes later measured datasets.")
                 appendLine("- Each (dataset, query) pair runs one recorded `cold` execution per system before warmups; measured repetitions alternate between systems (local, reference, local, reference, ...).")
                 appendLine("- Log/trace/event counts are compared in every measured warm repetition. The last warm responses are also checked with the strict XES-JSON semantic comparator; on divergence all samples of the pair are marked `MISMATCH` (Q4 parity).")
                 appendLine("- Per-dataset rows in `storage-results.csv` are protocol diagnostics. Thesis-grade Q3 disk evidence comes only from `measure-storage-scaling.py`, one fresh stack per dataset.")

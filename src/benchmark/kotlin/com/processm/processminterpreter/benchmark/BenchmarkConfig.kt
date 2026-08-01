@@ -24,10 +24,10 @@ enum class BenchmarkProfile(
      */
     val globalWarmupRounds: Int,
     /**
-     * Executions on the already-warmed throw-away dataset immediately after the
-     * idle-memory baseline. The baseline intentionally leaves both systems idle;
-     * these unrecorded rounds restore an active state before the first dataset is
-     * measured, without contaminating the idle samples.
+     * Executions on a freshly imported throw-away dataset immediately after the
+     * idle-memory baseline. The complete unrecorded import/query/delete cycle
+     * restores an active lifecycle state before the first measured dataset,
+     * without contaminating the idle samples.
      */
     val postIdleWarmupRounds: Int,
 ) {
@@ -127,7 +127,8 @@ const val WORKLOAD_FLOOR = "floor"
 const val WORKLOAD_WINDOW = "window"
 const val WORKLOAD_DATA_DEPENDENT = "dataDependent"
 const val BENCHMARK_SERIES_RANDOM_SEED = 20260728L
-const val CURRENT_BENCHMARK_PROTOCOL_VERSION = 4
+const val CURRENT_BENCHMARK_PROTOCOL_VERSION = 5
+const val POST_IDLE_WARMUP_MODE = "fresh-import-query-delete"
 
 @JsonIgnoreProperties(ignoreUnknown = true)
 data class BenchmarkQuerySpec(
@@ -177,7 +178,9 @@ data class BenchmarkSettings(
      * warm repetition. Version 2 checks counts in every measured repetition and
      * strict XES-JSON semantics of the last response. Version 3 isolates one live
      * measured dataset at a time. Version 4 restores an active state after the
-     * intentionally idle memory-baseline window.
+     * intentionally idle memory-baseline window. Version 5 performs that
+     * activation on a freshly imported throw-away datastore and deletes it,
+     * matching the lifecycle that precedes later measured datasets.
      */
     val protocolVersion: Int = CURRENT_BENCHMARK_PROTOCOL_VERSION,
     /**

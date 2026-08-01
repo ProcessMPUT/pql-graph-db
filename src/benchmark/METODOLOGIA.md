@@ -341,12 +341,16 @@ specyfikacją PQL”.
    dzięki temu baseline i pomiary nie obejmują asymetrycznego kosztu kasowania ani
    ponownego wychłodzenia, ale Q3-pamięć dotyczy jawnie tego rozgrzanego stanu.
 4. Po rozgrzewce zbierany jest 60-sekundowy baseline pamięci. Okno bezczynności
-   celowo wychładza procesy, dlatego bezpośrednio po nim wykonywanych jest 10
-   nierejestrowanych rund aktywacyjnych na tym samym datastore rozgrzewkowym,
-   z naprzemienną kolejnością systemów. Sonda pamięci nie ma wtedy aktywnej fazy:
-   rundy nie zanieczyszczają ani baseline'u `idle`, ani serii `queries`. Ten krok
-   usuwa asymetrię, w której wyłącznie pierwszy mierzony dataset ponosi koszt
-   powrotu z 60-sekundowej bezczynności. Następnie każdy
+   celowo wychładza procesy, dlatego bezpośrednio po nim oba systemy przechodzą
+   nierejestrowany cykl: utworzenie świeżego datastore'u → import wyrzucanego
+   zbioru 100×10×5 → 10 rund aktywacyjnych → usunięcie datastore'u. Kolejność
+   systemów w zapytaniach jest naprzemienna. Sonda pamięci nie ma wtedy aktywnej
+   fazy: cykl nie zanieczyszcza ani baseline'u `idle`, ani serii `queries`.
+   Datastore globalnej rozgrzewki pozostaje obecny, więc stan tła pamięci przed
+   i po cyklu ma tę samą strukturę. Cykl płaci nie tylko powrót procesów z
+   60-sekundowej bezczynności, ale też pierwszą ścieżkę importu i kasowania;
+   pierwszy mierzony dataset wchodzi dzięki temu w taki sam stan lifecycle'u jak
+   kolejne. Następnie każdy
    dataset trafia do osobnego datastore'u w obu systemach. Dla jednego datasetu
    wykonywany jest cały blok: import obu stron → zapytania → roundtrip LOCAL →
    usunięcie obu datastore'ów; dopiero potem dopuszczany jest następny dataset.
@@ -382,10 +386,12 @@ specyfikacją PQL”.
    `cleanup-results.csv`. Po każdym pełnym bloku stack i tak jest odtwarzany od
    zera, aby drugi blok nie dziedziczył stron, WAL ani cache danych z pierwszego.
 8. **Finalny eksperyment zawiera co najmniej trzy ważne bloki FULL** na tej samej
-   wersji. Bieżący kontrakt zapisu ma `benchmarkProtocolVersion=4`; wersje poniżej
+   wersji. Bieżący kontrakt zapisu ma `benchmarkProtocolVersion=5`; wersje poniżej
    2 nie mają pełnej kontroli semantycznej, a wersja 2 kumuluje wszystkie datasety
    w pamięci baz i może mierzyć presję wspólnej VM zamiast bieżącego workloadu.
-   Wersja 3 izoluje datasety, lecz nie kompensuje wychłodzenia przez pomiar `idle`.
+   Wersja 3 izoluje datasety, lecz nie kompensuje wychłodzenia przez pomiar `idle`;
+   wersja 4 aktywuje tylko zapytania na datastore utworzonym przed baseline'em,
+   pozostawiając pierwszy świeży import w pozycji wyjątkowej.
    Żadna z wcześniejszych wersji nie jest finalnym dowodem. `compare-runs.py` waliduje kompletność macierzy, 30 repetycji,
    roundtrip, sprzątanie, pamięć, środowisko, fingerprint i trzy wymagane kolejności. Skrypt
    nie wybiera „reprezentatywnego wyniku”: wszystkie bloki są jednostkami dowodu.
