@@ -166,7 +166,7 @@ def make_run(root: Path, name: str, order: str, seed: int = RANDOM_SEED) -> Path
         )
     }
     environment = {
-        "benchmarkProtocolVersion": 5,
+        "benchmarkProtocolVersion": 6,
         "profile": "full", "warmups": 3, "repetitions": 30, "globalWarmupRounds": 40,
         "postIdleWarmupRounds": 10,
         "postIdleWarmupMode": "fresh-import-query-delete",
@@ -176,6 +176,7 @@ def make_run(root: Path, name: str, order: str, seed: int = RANDOM_SEED) -> Path
         "experiment": {
             "fingerprintSha256": "f" * 64, "datasetCount": len(datasets),
             "queryCount": 1, "replicateValidityGate": 1.25,
+            "replicateValidityStatistic": "query-spread-q3",
         },
         "source": {"gitCommit": commit, "gitDirty": False},
         "host": {"processors": 8, "memoryBytes": 16_000_000_000},

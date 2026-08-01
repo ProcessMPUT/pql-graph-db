@@ -483,9 +483,10 @@ data class ThesisReportModel(
                     "różnią się wyłącznie nazwą logu, więc każda różnica ich pomiarów jest błędem pomiaru, " +
                     "nie własnością danych. Kontrola obejmuje import Q1 oraz zapytania Q2, ale " +
                     "bramki obu metryk są rozdzielone. " +
-                    "Mediana rozrzutu ×${fmt2(report.medianSpread)}, " +
-                    "maksimum Q2 ×${fmt2(report.worstQuerySpread)}, maksimum Q1 ×${fmt2(report.worstImportSpread)} " +
-                    "(próg każdej metryki: ×${fmt2(ReplicateControl.VALIDITY_GATE_SPREAD)}). " +
+                    "Q2: mediana ×${fmt2(report.medianQuerySpread)}, górny kwartyl " +
+                    "×${fmt2(report.upperQuartileQuerySpread)}, maksimum ×${fmt2(report.worstQuerySpread)}; " +
+                    "maksimum Q1 ×${fmt2(report.worstImportSpread)}. Bramka Q2 stosuje górny kwartyl, " +
+                    "bramka Q1 maksimum (próg: ×${fmt2(ReplicateControl.VALIDITY_GATE_SPREAD)}). " +
                     "Tabela pokazuje 20 najgorszych z ${report.spreads.size} par."
 
             )
@@ -1181,16 +1182,19 @@ class ThesisReportWriter(
         val report = model.replicateReport ?: return
         if (report.runIsValid) {
             appendLine(
-                "> **Ważność Q2: OK.** Maksymalny rozrzut zapytań na zbiorach replikacyjnych wynosi " +
-                    "×${format2(report.worstQuerySpread)} przy progu " +
-                    "×${format2(ReplicateControl.VALIDITY_GATE_SPREAD)}. Q1 ma osobną bramkę: " +
+                "> **Ważność Q2: OK.** Górny kwartyl rozrzutów zapytanie/system na zbiorach " +
+                    "replikacyjnych wynosi ×${format2(report.upperQuartileQuerySpread)} przy progu " +
+                    "×${format2(ReplicateControl.VALIDITY_GATE_SPREAD)}; maksimum ×" +
+                    "${format2(report.worstQuerySpread)} pozostaje per-zapytaniowym progiem efektu. " +
+                    "Q1 ma osobną bramkę maksimum: " +
                     "×${format2(report.worstImportSpread)} — " +
                     (if (report.importIsStable) "stabilne." else "niestabilne; Q1 pozostaje nierozstrzygnięte."),
             )
         } else {
             appendLine(
-                "> **UWAGA — Q2 nie spełnia warunku ważności.** Zbiory o identycznych parametrach " +
-                    "dają rozrzut zapytań do ×${format2(report.worstQuerySpread)} przy progu " +
+                "> **UWAGA — Q2 nie spełnia warunku ważności.** Górny kwartyl rozrzutów " +
+                    "zapytanie/system na identycznych danych wynosi " +
+                    "×${format2(report.upperQuartileQuerySpread)} przy progu " +
                     "×${format2(ReplicateControl.VALIDITY_GATE_SPREAD)}. Zmienność na identycznych " +
                     "danych jest zbyt duża, by przypisywać obserwowane efekty systemom; należy " +
                     "sprawdzić rozgrzewkę i warunki hosta, a następnie powtórzyć przebieg " +
@@ -1200,7 +1204,9 @@ class ThesisReportWriter(
                     "ostrożne, ale przebiegu nie należy cytować jako dowodu przewagi żadnego z systemów.",
             )
             appendLine(
-                "> Q1 ma osobną bramkę: ×${format2(report.worstImportSpread)} — " +
+                "> Maksimum Q2 wynosi ×${format2(report.worstQuerySpread)} i pozostaje " +
+                    "per-zapytaniowym progiem efektu. Q1 ma osobną bramkę maksimum: " +
+                    "×${format2(report.worstImportSpread)} — " +
                     (if (report.importIsStable) "stabilne." else "niestabilne; Q1 pozostaje nierozstrzygnięte."),
             )
         }

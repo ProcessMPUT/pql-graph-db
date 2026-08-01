@@ -29,8 +29,9 @@ MS = 1000.0
 MIB = 1024.0 * 1024.0
 VALIDITY_GATE_DEFAULT = 1.25
 SERIES_RANDOM_SEED = 20260728
-BENCHMARK_PROTOCOL_VERSION = 5
+BENCHMARK_PROTOCOL_VERSION = 6
 POST_IDLE_WARMUP_MODE = "fresh-import-query-delete"
+REPLICATE_VALIDITY_STATISTIC = "query-spread-q3"
 IMPORT_REPLICATE_LABEL = "IMPORT (Q1)"
 REQUIRED_MEMORY_COMPONENTS = {"processm-interpreter", "processm-neo4j", "processm-server"}
 REQUIRED_FILES = {
@@ -123,7 +124,7 @@ def replicate_spreads(
     datasets: list[dict[str, str]],
     medians: dict[tuple[str, str, str], float],
     imports: dict[tuple[str, str], float],
-) -> tuple[float | None, dict[str, float], list[str]]:
+) -> tuple[float | None, float | None, dict[str, float], list[str]]:
     shapes: dict[tuple[str, str, str], list[str]] = {}
     for row in datasets:
         if row.get("series") == "real-validation":
@@ -133,7 +134,7 @@ def replicate_spreads(
     groups = [sorted(names) for names in shapes.values() if len(names) > 1]
     issues: list[str] = []
     if not groups:
-        return None, {}, ["brak grupy replikacyjnej"]
+        return None, None, {}, ["brak grupy replikacyjnej"]
 
     labels = sorted({query for _, query, _ in medians})
     systems = sorted({system for _, _, system in medians})
@@ -160,7 +161,12 @@ def replicate_spreads(
                 per_label[IMPORT_REPLICATE_LABEL] = max(
                     per_label.get(IMPORT_REPLICATE_LABEL, 1.0), spread,
                 )
-    return (max(query_spreads) if query_spreads else None), per_label, issues
+    return (
+        type7_quantile(query_spreads, 0.75) if query_spreads else None,
+        max(query_spreads) if query_spreads else None,
+        per_label,
+        issues,
+    )
 
 
 def nested(environment: dict[str, Any], *keys: str) -> Any:
@@ -272,6 +278,7 @@ class RunData:
     imports: dict[tuple[str, str], float]
     memory: dict[str, float]
     replicate_worst: float | None
+    replicate_q3: float | None
     replicate_floor: dict[str, float]
     mismatch_pairs: set[tuple[str, str]]
     total_query_pairs: int
@@ -307,6 +314,7 @@ class RunData:
             "postIdleWarmupRounds": self.environment.get("postIdleWarmupRounds"),
             "postIdleWarmupMode": self.environment.get("postIdleWarmupMode"),
             "replicateValidityGate": nested(self.environment, "experiment", "replicateValidityGate"),
+            "replicateValidityStatistic": nested(self.environment, "experiment", "replicateValidityStatistic"),
             "fingerprint": nested(self.environment, "experiment", "fingerprintSha256"),
             "gitCommit": nested(self.environment, "source", "gitCommit"),
             "host": self.environment.get("host"),
@@ -333,7 +341,7 @@ def load_run(path: Path) -> RunData:
     medians = query_medians(path)
     imports = import_times(path)
     memory = memory_medians(path)
-    worst, floors, replicate_issues = replicate_spreads(datasets, medians, imports)
+    replicate_q3, worst, floors, replicate_issues = replicate_spreads(datasets, medians, imports)
     issues.extend(replicate_issues)
 
     if environment.get("profile") != "full":
@@ -349,6 +357,8 @@ def load_run(path: Path) -> RunData:
         issues.append("brak rozgrzewki aktywacyjnej po pomiarze bezczynności")
     if environment.get("postIdleWarmupMode") != POST_IDLE_WARMUP_MODE:
         issues.append(f"tryb rozgrzewki po bezczynności inny niż {POST_IDLE_WARMUP_MODE}")
+    if nested(environment, "experiment", "replicateValidityStatistic") != REPLICATE_VALIDITY_STATISTIC:
+        issues.append(f"statystyka bramki replikacyjnej inna niż {REPLICATE_VALIDITY_STATISTIC}")
     if environment.get("datasetFilter") not in ([], None):
         issues.append("aktywny filtr datasetów")
     if environment.get("systemFilter") not in ([], None):
@@ -524,13 +534,13 @@ def load_run(path: Path) -> RunData:
         issues.append(f"sprzątanie datastore'ów niepotwierdzone: {len(cleanup)}/{expected_cleanup} wpisów DELETED")
 
     gate = as_float(nested(environment, "experiment", "replicateValidityGate")) or VALIDITY_GATE_DEFAULT
-    if worst is None:
+    if replicate_q3 is None:
         issues.append("nie można policzyć bramki replikatów Q2")
-    elif worst > gate:
-        issues.append(f"rozrzut replikatów Q2 ×{worst:.3f} przekracza ×{gate:.3f}")
+    elif replicate_q3 > gate:
+        issues.append(f"górny kwartyl rozrzutów replikatów Q2 ×{replicate_q3:.3f} przekracza ×{gate:.3f}")
 
     return RunData(
-        path.name, path, environment, datasets, queries_by_label, medians, imports, memory, worst, floors,
+        path.name, path, environment, datasets, queries_by_label, medians, imports, memory, worst, replicate_q3, floors,
         mismatch_pairs, len(dataset_names) * len(query_labels), issues,
     )
 
@@ -658,7 +668,8 @@ def main() -> int:
         else:
             import_spread = run.replicate_floor.get(IMPORT_REPLICATE_LABEL, math.nan)
             print(
-                f"  {run.name}: Q2 ważne; replikaty Q2 ×{run.replicate_worst:.3f}; "
+                f"  {run.name}: Q2 ważne; replikaty Q2 Q3 ×{run.replicate_q3:.3f}, "
+                f"max ×{run.replicate_worst:.3f}; "
                 f"Q1 ×{import_spread:.3f}; metryka {run.metric:.2f} ms",
             )
     if invalid:

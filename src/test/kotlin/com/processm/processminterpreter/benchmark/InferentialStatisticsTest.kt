@@ -163,6 +163,27 @@ class InferentialStatisticsTest {
     }
 
     @Test
+    fun `one noisy query keeps its own floor without declaring broad run instability`() {
+        val datasets = listOf(
+            dataset("trace-100", traces = 100, eventsPerTrace = 10, attributesPerEvent = 5),
+            dataset("event-10", traces = 100, eventsPerTrace = 10, attributesPerEvent = 5),
+        )
+        val queries = (1..5).flatMap { index ->
+            val label = "q$index"
+            warmSamples("trace-100", label, "local", 0.010) +
+                warmSamples("event-10", label, "local", if (index == 5) 0.020 else 0.010)
+        }
+
+        val report = ReplicateControl.measure(datasets, queries)
+
+        assertNotNull(report)
+        assertEquals(1.0, report.upperQuartileQuerySpread, 1e-9)
+        assertEquals(2.0, report.worstQuerySpread, 1e-9)
+        assertEquals(2.0, report.floorFor("q5"), 1e-9)
+        assertTrue(report.runIsValid)
+    }
+
+    @Test
     fun `one-shot import stability does not invalidate stable query measurements`() {
         val datasets = listOf(
             dataset("trace-100", traces = 100, eventsPerTrace = 10, attributesPerEvent = 5),

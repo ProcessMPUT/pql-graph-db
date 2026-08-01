@@ -127,8 +127,9 @@ const val WORKLOAD_FLOOR = "floor"
 const val WORKLOAD_WINDOW = "window"
 const val WORKLOAD_DATA_DEPENDENT = "dataDependent"
 const val BENCHMARK_SERIES_RANDOM_SEED = 20260728L
-const val CURRENT_BENCHMARK_PROTOCOL_VERSION = 5
+const val CURRENT_BENCHMARK_PROTOCOL_VERSION = 6
 const val POST_IDLE_WARMUP_MODE = "fresh-import-query-delete"
+const val REPLICATE_VALIDITY_STATISTIC = "query-spread-q3"
 
 @JsonIgnoreProperties(ignoreUnknown = true)
 data class BenchmarkQuerySpec(
@@ -180,7 +181,9 @@ data class BenchmarkSettings(
      * measured dataset at a time. Version 4 restores an active state after the
      * intentionally idle memory-baseline window. Version 5 performs that
      * activation on a freshly imported throw-away datastore and deletes it,
-     * matching the lifecycle that precedes later measured datasets.
+     * matching the lifecycle that precedes later measured datasets. Version 6
+     * gates broad run instability with the upper quartile of query/system
+     * replicate spreads; each query's maximum spread remains its own effect floor.
      */
     val protocolVersion: Int = CURRENT_BENCHMARK_PROTOCOL_VERSION,
     /**

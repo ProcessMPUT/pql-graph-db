@@ -273,6 +273,7 @@ class BenchmarkResultsWriter(
                 "datasetCount" to datasets.size,
                 "queryCount" to querySpecs.size,
                 "replicateValidityGate" to ReplicateControl.VALIDITY_GATE_SPREAD,
+                "replicateValidityStatistic" to REPLICATE_VALIDITY_STATISTIC,
             ),
             "javaVersion" to System.getProperty("java.version"),
             "osName" to System.getProperty("os.name"),

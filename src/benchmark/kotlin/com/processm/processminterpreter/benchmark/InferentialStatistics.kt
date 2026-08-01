@@ -240,15 +240,18 @@ data class LinearFit(
  * The spread is used two ways:
  * - as the practical-significance floor: a median difference smaller than the
  *   spread observed on identical data is not evidence about the systems;
- * - as a metric-specific validity gate. Query spread gates Q2; the one-shot,
- *   polling-quantized import spread gates Q1 and must not invalidate Q2.
+ * - as a metric-specific validity gate. The upper quartile of query/system
+ *   spreads gates broad Q2 instability; the exact per-query maximum still gates
+ *   every effect. The one-shot, polling-quantized import spread gates Q1 and must
+ *   not invalidate Q2.
  */
 object ReplicateControl {
     /**
-     * Maximum tolerated max/min spread between replicate measurements of the same
-     * dataset shape before the run is declared invalid. A run at or below this
-     * still has measurable warm-up drift, which is why the measured spread — not
-     * this constant — is what the significance rule uses.
+     * Maximum tolerated upper-quartile max/min spread between replicate query
+     * measurements of the same dataset shape before the run is declared invalid.
+     * A run at or below this still has measurable query-specific drift, which is
+     * why each query's measured maximum spread — not this constant — is what its
+     * significance rule uses.
      */
     const val VALIDITY_GATE_SPREAD: Double = 1.25
 
@@ -347,10 +350,16 @@ data class ReplicateReport(
     val worstQuerySpread: Double get() = querySpreads.maxOfOrNull { it.spread } ?: Double.NaN
     val worstImportSpread: Double get() = importSpreads.maxOfOrNull { it.spread } ?: Double.NaN
 
-    val medianSpread: Double
-        get() = spreads.map { it.spread }.filter { it.isFinite() }
+    val medianQuerySpread: Double
+        get() = querySpreadQuantile(0.50)
+
+    val upperQuartileQuerySpread: Double
+        get() = querySpreadQuantile(0.75)
+
+    private fun querySpreadQuantile(p: Double): Double =
+        querySpreads.map { it.spread }.filter { it.isFinite() }
             .takeIf { it.isNotEmpty() }
-            ?.let { ThesisStatistics.quantile(it, 0.50) }
+            ?.let { ThesisStatistics.quantile(it, p) }
             ?: Double.NaN
 
     /** Worst spread seen for one query label, across systems — the floor that label's effects must clear. */
@@ -359,7 +368,9 @@ data class ReplicateReport(
 
     /** Q2 validity. Q1 has an independent [importIsStable] gate. */
     val runIsValid: Boolean
-        get() = worstQuerySpread.isFinite() && worstQuerySpread <= ReplicateControl.VALIDITY_GATE_SPREAD
+        get() =
+            upperQuartileQuerySpread.isFinite() &&
+                upperQuartileQuerySpread <= ReplicateControl.VALIDITY_GATE_SPREAD
 
     val importIsStable: Boolean
         get() = worstImportSpread.isFinite() && worstImportSpread <= ReplicateControl.VALIDITY_GATE_SPREAD

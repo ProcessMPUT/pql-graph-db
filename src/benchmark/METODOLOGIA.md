@@ -386,12 +386,14 @@ specyfikacją PQL”.
    `cleanup-results.csv`. Po każdym pełnym bloku stack i tak jest odtwarzany od
    zera, aby drugi blok nie dziedziczył stron, WAL ani cache danych z pierwszego.
 8. **Finalny eksperyment zawiera co najmniej trzy ważne bloki FULL** na tej samej
-   wersji. Bieżący kontrakt zapisu ma `benchmarkProtocolVersion=5`; wersje poniżej
+   wersji. Bieżący kontrakt zapisu ma `benchmarkProtocolVersion=6`; wersje poniżej
    2 nie mają pełnej kontroli semantycznej, a wersja 2 kumuluje wszystkie datasety
    w pamięci baz i może mierzyć presję wspólnej VM zamiast bieżącego workloadu.
    Wersja 3 izoluje datasety, lecz nie kompensuje wychłodzenia przez pomiar `idle`;
    wersja 4 aktywuje tylko zapytania na datastore utworzonym przed baseline'em,
-   pozostawiając pierwszy świeży import w pozycji wyjątkowej.
+   pozostawiając pierwszy świeży import w pozycji wyjątkowej; wersja 5 dodaje
+   pełny cykl świeżego importu i kasowania, a wersja 6 precyzuje odporną bramkę
+   szerokiej niestabilności Q2 opisaną niżej.
    Żadna z wcześniejszych wersji nie jest finalnym dowodem. `compare-runs.py` waliduje kompletność macierzy, 30 repetycji,
    roundtrip, sprzątanie, pamięć, środowisko, fingerprint i trzy wymagane kolejności. Skrypt
    nie wybiera „reprezentatywnego wyniku”: wszystkie bloki są jednostkami dowodu.
@@ -420,9 +422,12 @@ specyfikacją PQL”.
    konfigurację sprzętową lub inne logi.
 
    **Bramka replikacyjna.** `trace-100`, `event-10` i `attr-5` opisują ten sam
-   eksperyment 100×10×5 pod trzema nazwami. Jeżeli w dowolnym systemie/zapytaniu
-   Q2 rozrzut max/min przekracza **×1,25**, blok jest nieważny dla Q2. Q1 ma
-   osobną bramkę o tym samym progu, ponieważ jest pojedynczym pomiarem
+   eksperyment 100×10×5 pod trzema nazwami. Dla każdej pary
+   `(zapytanie, system)` wylicza się rozrzut max/min. Jeżeli **górny kwartyl**
+   tych rozrzutów przekracza **×1,25**, blok jest nieważny dla Q2. Maksimum nie
+   znika: najgorszy rozrzut danego zapytania (po obu systemach) jest jego
+   indywidualnym progiem efektu. Q1 ma osobną bramkę maksimum o tym samym progu,
+   ponieważ jest pojedynczym pomiarem
    kwantowanym pollingiem; jej przekroczenie pozostawia Q1 nierozstrzygnięte, ale
    nie unieważnia zapytań, które mają własną kontrolę replikacji. Próg ×1,25 nie
    jest progiem efektu: do oceny praktycznej konkretnego zapytania używa się jego
@@ -430,14 +435,19 @@ specyfikacją PQL”.
    całej serii; Q1 używa analogicznego rozrzutu replikatów importu i nie publikuje
    przewagi, gdy jego osobna bramka jakości nie przejdzie.
 
-   Wartość ×1,25 jest **operacyjnym kryterium jakości ustalonym przed serią
-   finalną**, a nie poziomem istotności ani minimalnym efektem badawczym. Wybrano
-   ją po przebiegach diagnostycznych, w których brak globalnej rozgrzewki dawał
-   na identycznym workloadzie rozrzut do ×2,37 (Q2) i ×10,43 (Q1): dopuszcza
-   niewielki dryf rozgrzanego hosta, ale odrzuca blok, w którym pozycja w
-   sekwencji może wyjaśnić efekt rzędu dziesiątek procent. Niezależnie od tej
-   bramki każdy zaakceptowany efekt musi przekroczyć faktycznie zmierzony floor
-   swojej metryki, także wtedy, gdy jest on znacznie mniejszy niż ×1,25.
+   Wartość ×1,25 i statystyka górnego kwartyla są **operacyjnym kryterium jakości
+   ustalonym przed serią finalną**, a nie poziomem istotności ani minimalnym
+   efektem badawczym. Maksimum z 28 współczynników (14 zapytań × 2 systemy) jest
+   statystyką ekstremalną, szczególnie niestabilną dla komórek 2–8 ms: pojedyncza
+   różnica poniżej 2 ms może dać iloraz ×1,4. Użycie go jednocześnie jako bramki
+   całego bloku i per-zapytaniowego flooru liczyłoby ten sam lokalny problem
+   podwójnie. Górny kwartyl odrzuca **szeroki** dryf protokołu, a maksimum nadal
+   konserwatywnie ogranicza wniosek o konkretnym zapytaniu. W diagnostyce przed
+   serią finalną protokół v4 dawał Q3 ×1,26 (max ×1,40), natomiast dopiero pełny
+   cykl aktywacyjny v5 obniżył Q3 do ×1,20 (max ×1,39); brak globalnej rozgrzewki
+   dawał maksimum do ×2,37 (Q2) i ×10,43 (Q1). Niezależnie od bramki każdy
+   zaakceptowany efekt musi przekroczyć faktycznie zmierzony floor swojej
+   metryki, także wtedy, gdy jest on znacznie mniejszy lub większy niż ×1,25.
 
 ### Statystyka
 

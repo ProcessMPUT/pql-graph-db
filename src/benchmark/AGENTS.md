@@ -76,13 +76,16 @@ Before collecting thesis results:
 METODOLOGIA §5 requires **at least three** valid FULL runs on one clean Git
 commit, with declared/reversed/random dataset order; the random block uses the
 preregistered seed `20260728`. Final evidence uses
-`benchmarkProtocolVersion=5`; versions before 2 have a weaker collection-time
+`benchmarkProtocolVersion=6`; versions before 2 have a weaker collection-time
 parity check, while version 2 also accumulated every dataset in both databases
 and can exhaust a shared Docker VM. Version 3 keeps only one measured dataset
 pair live at a time. Version 4 additionally performs an unrecorded activation
 warm-up after the intentional idle-memory baseline. Version 5 performs a fresh
 throw-away import, the activation queries, and datastore deletion, so the first
 measured dataset does not uniquely pay any part of the post-idle lifecycle.
+Version 6 gates broad Q2 instability on the upper quartile of query/system
+replicate spreads; the maximum for each query remains that query's practical
+effect floor.
 Rebuilding a report never upgrades a run's protocol.
 A thesis-grade memory run
 must contain `processm-interpreter`, `processm-neo4j`, and `processm-server`
