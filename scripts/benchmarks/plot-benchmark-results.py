@@ -1076,8 +1076,27 @@ def update_storage_summary(result_dir: Path, rows: list[dict[str, str]]) -> None
                 if values:
                     ranges.append(f"{system.upper()} {min(values):.2f}–{max(values):.2f} B/B XES")
             range_text = "; ".join(ranges) if ranges else "brak wiarygodnego dodatniego nachylenia"
+            # State the probe's coverage, not just its internal completeness. "Complete"
+            # refers to the synthetic matrix; the real logs have no disk measurement at
+            # all, and every point is a single isolated import with no replication
+            # across blocks. Both facts bound what the Q3-disk answer may claim.
+            measured = sorted({row.get("datasetName", "") for row in rows})
+            all_datasets = sorted(
+                {row.get("datasetName", "") for row in read_csv(result_dir / "datasets.csv")}
+            )
+            unmeasured = [name for name in all_datasets if name not in measured]
+            coverage = (
+                f"Pomiar obejmuje {len(measured)} z {len(all_datasets)} zbiorów"
+                + (
+                    f" — bez {', '.join(f'`{name}`' for name in unmeasured)}"
+                    if unmeasured
+                    else ""
+                )
+                + "; każdy punkt to pojedynczy izolowany import, bez replikacji między blokami."
+            )
             replacement = (
                 "- **Q3 (dysk).** Kompletna izolowana sonda storage została dołączona. "
+                f"{coverage} "
                 f"Interpretowalne modele (b > 0 i R² ≥ 0.30): "
                 f"{len(interpretable_slopes['local']) + len(interpretable_slopes['reference'])}/6; "
                 f"zakresy b: {range_text}. Ze względu na zależność od serii raport nie redukuje "

@@ -1289,8 +1289,9 @@ class ThesisReportWriter(
             "- **Q3 (pamięć).** " +
                 (
                     model.memoryComparison?.let {
-                        "LOCAL ${format1(it.localMiB)} MiB (suma: ${it.localComponents.joinToString(" + ")}) " +
-                            "wobec REFERENCE ${format1(it.referenceMiB)} MiB, różnica " +
+                        "Obserwowana pamięć rezydentna: LOCAL ${format1(it.localMiB)} MiB " +
+                            "(suma: ${it.localComponents.joinToString(" + ")}) wobec REFERENCE " +
+                            "${format1(it.referenceMiB)} MiB, różnica " +
                             "${format1(it.differenceMiB)} MiB (×${format2(it.ratio)}). " +
                             "Rozstrzygnięcie wymaga zestawienia z rozrzutem między przebiegami — " +
                             "zob. sekcję powtarzalności."
@@ -1358,15 +1359,17 @@ class ThesisReportWriter(
         appendLine(
             "**Warunek rozstrzygnięcia.** Pojedynczy przebieg nie uprawnia do wniosku o przewadze " +
                 "w Q3-pamięć. `scripts/benchmarks/compare-runs.py` porównuje sumy systemowe w co " +
-                "najmniej trzech pełnych blokach; kierunek jest raportowany dopiero wtedy, gdy znak " +
-                "różnicy LOCAL−REFERENCE jest taki sam w każdym przebiegu.",
+                "najmniej trzech pełnych blokach. Zgodny znak różnicy LOCAL−REFERENCE jest warunkiem " +
+                "koniecznym, ale nie wystarcza: najmniejszy efekt kierunku musi również przekroczyć " +
+                "większy z międzyblokowych rozrzutów max/min obu systemów.",
         )
         appendLine()
         appendLine(
-            "**Asymetria budżetu.** Konfiguracja pamięci warstwy bazodanowej obu systemów nie jest " +
-                "symetryczna (Neo4j ma jawnie ustawiony heap i page cache, PostgreSQL działa na " +
-                "wartościach domyślnych) — dokładne wartości zapisuje `environment.json` tego " +
-                "przebiegu. Kierunek tego obciążenia należy podać w zagrożeniach trafności.",
+            "**Równe budżety, różne polityki.** Limity cgroup całych aplikacji są równe, lecz " +
+                "konfiguracja warstwy bazodanowej nie jest symetryczna: Neo4j ma jawnie ustawiony " +
+                "heap i page cache, a PostgreSQL działa z konfiguracją dostarczoną przez REFERENCE. " +
+                "Dokładne wartości zapisuje `environment.json`. Wynik opisuje obserwowany RSS w tej " +
+                "konfiguracji, nie minimalną pamięć wymaganą przez system.",
         )
         appendLine()
     }

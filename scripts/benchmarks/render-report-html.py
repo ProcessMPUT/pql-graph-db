@@ -20,6 +20,8 @@ from __future__ import annotations
 from html import escape
 from pathlib import Path
 import argparse
+import csv
+import json
 import re
 import sys
 
@@ -32,6 +34,7 @@ STYLE = """
   h2 { font-size: 23px; margin-top: 44px; border-bottom: 1px solid #e5e7eb; padding-bottom: 6px; }
   h3 { font-size: 18px; margin-top: 32px; color: #334155; }
   table { border-collapse: collapse; width: 100%; margin: 16px 0; font-size: 13.5px; }
+  .table-wrap { width: 100%; overflow-x: auto; }
   th, td { border: 1px solid #d1d5db; padding: 6px 10px; text-align: right; }
   th { background: #f1f5f9; text-align: center; font-weight: 600; }
   td:first-child, th:first-child { text-align: left; }
@@ -119,7 +122,7 @@ class Renderer:
             align = aligns[index] if index < len(aligns) else ""
             return f' style="text-align:{align}"' if align else ""
 
-        self.out.append("<table>")
+        self.out.append('<div class="table-wrap"><table>')
         self.out.append("<thead><tr>")
         for i, cell in enumerate(split_row(header)):
             self.out.append(f"<th{style(i)}>{inline(cell)}</th>")
@@ -130,7 +133,7 @@ class Renderer:
             for i, cell in enumerate(split_row(row)):
                 self.out.append(f"<td{style(i)}>{inline(cell)}</td>")
             self.out.append("</tr>")
-        self.out.append("</tbody></table>")
+        self.out.append("</tbody></table></div>")
 
     def render(self, md: str) -> str:
         lines = md.splitlines()
@@ -217,9 +220,13 @@ def build(run_dir: Path, out_path: Path) -> None:
         required_series_files = (
             "repeatability.csv",
             "series-comparison.csv",
+            "series-cell-stability.csv",
             "series-import.csv",
             "series-import-comparison.csv",
             "series-scaling.csv",
+            "series-scaling-exploratory.csv",
+            "report-provenance.json",
+            "storage-scaling.csv",
             "thesis-tables-series.tex",
         )
         missing_series_files = [name for name in required_series_files if not (run_dir / name).is_file()]
@@ -227,11 +234,46 @@ def build(run_dir: Path, out_path: Path) -> None:
             raise SystemExit(
                 "error: final report is missing cross-run artifacts: " + ", ".join(missing_series_files),
             )
+        storage_rows = read_csv_rows(run_dir / "storage-scaling.csv")
+        if not storage_rows or any(
+            row.get("measurementMode") != "isolated-fresh-stack" for row in storage_rows
+        ):
+            raise SystemExit(
+                "error: storage-scaling.csv is not an isolated-fresh-stack final Q3 probe",
+            )
+        provenance = read_json_object(run_dir / "report-provenance.json")
+        required_provenance = (
+            "measurementGitCommit", "generatorGitCommit", "generatorGitDirty", "compareRunsSha256",
+        )
+        missing_provenance = [key for key in required_provenance if key not in provenance]
+        if missing_provenance:
+            raise SystemExit(
+                "error: report-provenance.json is incomplete: " + ", ".join(missing_provenance),
+            )
+        invalid_provenance = [
+            key for key in ("measurementGitCommit", "generatorGitCommit")
+            if not isinstance(provenance[key], str)
+            or re.fullmatch(r"[0-9a-f]{40}", provenance[key]) is None
+        ]
+        if (
+            not isinstance(provenance["compareRunsSha256"], str)
+            or re.fullmatch(r"[0-9a-f]{64}", provenance["compareRunsSha256"]) is None
+        ):
+            invalid_provenance.append("compareRunsSha256")
+        if not isinstance(provenance["generatorGitDirty"], bool):
+            invalid_provenance.append("generatorGitDirty")
+        if invalid_provenance:
+            raise SystemExit(
+                "error: report-provenance.json has invalid values: "
+                + ", ".join(invalid_provenance),
+            )
         required_final_sections = (
             "## Werdykt serii — Q2",
             "## Q2 — skalowanie między przebiegami",
+            "## Q2 — eksploracyjne skalowanie poza predeklarowanym kontraktem",
             "## Q4 — zgodność odpowiedzi między przebiegami",
             "Kompletna izolowana sonda storage została dołączona",
+            "Generator raportu:",
         )
         missing = [section for section in required_final_sections if section not in md_text]
         if missing:
@@ -264,6 +306,21 @@ def build(run_dir: Path, out_path: Path) -> None:
         encoding="utf-8",
     )
     print(f"Wrote {out_path} ({out_path.stat().st_size // 1024} KiB)")
+
+
+def read_csv_rows(path: Path) -> list[dict[str, str]]:
+    with path.open(newline="", encoding="utf-8-sig") as handle:
+        return list(csv.DictReader(handle))
+
+
+def read_json_object(path: Path) -> dict[str, object]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise SystemExit(f"error: cannot read {path.name}: {error}") from error
+    if not isinstance(value, dict):
+        raise SystemExit(f"error: {path.name} must contain a JSON object")
+    return value
 
 
 def main() -> int:

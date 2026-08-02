@@ -17,10 +17,10 @@ magisterskiej (artefakt `thesis-report.md` + tabele `thesis-tables.tex`).
 2. **Q2 (zapytania):** Jak różnią się opóźnienia zapytań PQL w podziale na
    klasy operacji (okno hierarchii, filtrowanie, sortowanie, grupowanie,
    agregacje, hoisting, atrybuty niestandardowe)?
-3. **Q3 (zasobożerność):** Ile zasobów (miejsce na dysku zajmowane przez bazę,
-   pamięć operacyjna) potrzebuje każdy z systemów do obsłużenia tych samych
-   danych i obciążenia? Szybszy system, który potrzebuje wielokrotnie więcej
-   zasobów, nie jest jednoznacznie lepszy — Q3 jest równorzędne z Q1/Q2.
+3. **Q3 (zasobożerność):** Jaki przyrost trwałego miejsca na dysku oraz jaką
+   pamięć rezydentną obserwuje się dla każdego systemu przy tych samych danych,
+   obciążeniu i równym stałym budżecie całej aplikacji? Pomiar RSS opisuje stan
+   tej konfiguracji, nie minimalną pamięć potrzebną do uruchomienia systemu.
 4. **Q4 (poprawność):** Czy mierzone odpowiedzi obu systemów są semantycznie
    równoważne? Pomiar szybkości błędnych odpowiedzi jest bezwartościowy.
 
@@ -74,6 +74,17 @@ dyskwalifikuje przebieg:
    komparatorem co raport kompatybilności. Dowolny rozjazd unieważnia wszystkie
    próbki czasowe tej pary (status `MISMATCH`). Raport kompatybilności pozostaje
    niezależnym, szerszym warunkiem publikacji (wymóg: zero problemów ścisłych).
+
+   **Obie bramki nie są jednak równie surowe i trzeba to podać przy cytowaniu.**
+   Benchmark traktuje rozjazd jako twardy `MISMATCH`. Raport kompatybilności
+   dopuszcza dodatkowo klasę `NONDETERMINISTIC_MATCH`: dla wąsko zdefiniowanych
+   zapytań grupujących po hoistowanym atrybucie zdarzenia LOCAL jest wykonywany
+   ponownie z rozszerzonymi limitami, po czym akceptowane jest **zawieranie** wyniku
+   REFERENCE w rozszerzonym wyniku LOCAL. Reguła ta jest z konstrukcji
+   **jednostronna** — może wybaczyć wyłącznie stronie LOCAL. W pracy należy więc
+   raportować nie samo „zero problemów ścisłych”, lecz rozbicie: liczbę `MATCH`
+   oraz liczbę dopasowań zaakceptowanych przez zawieranie, wraz z informacją
+   o jednostronności tej reguły.
 
 ## 3. Zbiory danych
 
@@ -279,9 +290,14 @@ Rejestrowane: czas ściany każdej próbki, rozmiar odpowiedzi (bajty), licznoś
   oblicza medianę i peak. Suma median składników byłaby inną wielkością i mogłaby
   zaniżać lub zawyżać typową pamięć całego systemu. Obecność starego składnika
   `local-jvm`, brak któregoś kontenera albo brak `local-total`/`reference-total`
-  dyskwalifikuje przebieg jako dowód Q3. Pojedynczy blok pozostaje opisowy;
-  kierunek różnicy pamięci musi być taki sam we wszystkich co najmniej trzech
-  pełnych przebiegach.
+  dyskwalifikuje przebieg jako dowód Q3. Pojedynczy blok pozostaje opisowy.
+  W serii co najmniej trzech pełnych przebiegów zgodny znak różnicy jest
+  warunkiem koniecznym, lecz niewystarczającym: najmniejszy efekt kierunku
+  niższego RSS musi przekroczyć większy z międzyblokowych rozrzutów max/min
+  obu systemów. Peak i jego udział w budżecie służą do sprawdzenia, czy limit
+  został faktycznie osiągnięty; sam równy limit nie unieważnia obserwacji RSS.
+  Ta konserwatywna reguła interpretacji została dodana po przeglądzie raportu;
+  nie zmienia interwału pomiarowego, protokołu 10 ani zebranych próbek.
 
 ### Q4 — poprawność
 - roundtrip XES (import → eksport → porównanie kanoniczne z oryginałem),
@@ -428,10 +444,14 @@ specyfikacją PQL”.
    Dla każdej pary skrypt podaje iloraz REFERENCE/LOCAL w każdym bloku, jego zakres
    i medianę. Kierunek przewagi jest wspierany tylko wtedy, gdy jest jednakowy we
    wszystkich blokach, a **najmniejszy** efekt przekracza największy błąd
-   replikacyjny danego zapytania. Wyniki trafiają do `series-comparison.csv`,
-   `series-import.csv`, `repeatability.csv`, `series-scaling.csv`,
-   `thesis-report-series.md` oraz `thesis-tables-series.tex` (tabele
-   międzyblokowe; pakiety `booktabs` i `longtable`):
+   replikacyjny danego zapytania. W tabelach główną wielkością jest ten efekt
+   konserwatywny jako czynnik ≥ 1 wraz z kierunkiem; surowa mediana i zakres R/L
+   pozostają jawnie oznaczoną diagnostyką pomocniczą. Wyniki trafiają do
+   `series-comparison.csv`, `series-cell-stability.csv`, `series-import.csv`,
+   `repeatability.csv`, `series-scaling.csv`, `series-scaling-exploratory.csv`,
+   `report-provenance.json`, `thesis-report-series.md` oraz
+   `thesis-tables-series.tex` (tabele międzyblokowe; pakiety `booktabs` i
+   `longtable`):
 
    ```bash
    python3 scripts/benchmarks/compare-runs.py \
@@ -445,6 +465,22 @@ specyfikacją PQL”.
    Wnioski są warunkowe względem zapisanych wersji aplikacji, obrazów, limitów
    Docker VM, hosta i workloadu; nie są automatycznie uogólniane na inną
    konfigurację sprzętową lub inne logi.
+
+   **Stabilność wielkości efektu.** Niezależnie od werdyktu kierunku raport
+   zachowuje dwa ciągłe wskaźniki opisowe: rozrzut max/min ilorazu R/L między
+   blokami oraz Q3/Q1 każdej 30-próbkowej komórki. Alarm `UNSTABLE_MAGNITUDE`
+   pojawia się przy co najmniej trzykrotnej zmianie któregokolwiek wskaźnika.
+   Jest to celowo zgrubna diagnostyka dodana po krytycznym przeglądzie raportu,
+   a nie próg istotności ani nowa bramka ważności pomiaru. Nie zmienia werdyktu
+   kierunku, lecz zabrania traktowania mediany R/L jako reprezentatywnej skali
+   przewagi. Sama zmiana reżimu opóźnienia bez planów wykonania/`EXPLAIN` nie
+   pozwala przypisać przyczyny np. przełączeniu planu PostgreSQL.
+
+   **Skalowanie eksploracyjne.** `series-scaling-exploratory.csv` obejmuje
+   wszystkie zapytania niepredeklarowane dla osi `trace-scaling`, a nie wybrane
+   przykłady o korzystnym wyniku. Podaje punkty końcowe i dopasowania każdego
+   systemu, ale nie zmienia `scalingSeries`, fingerprintu ani werdyktów
+   konfirmacyjnych i nie służy do testowania różnicy wykładników.
 
    **Bramka replikacyjna.** `trace-100`, `event-10` i `attr-5` opisują ten sam
    eksperyment 100×10×5 pod trzema nazwami. Dla każdej pary
@@ -554,7 +590,10 @@ Każdy przebieg zapisuje do `tmp/benchmark-results/<timestamp>/`:
   `tab:bench-*`, polskie nagłówki), do bezpośredniego `\input{}` w pracy.
 
 Po walidacji serii `compare-runs.py` tworzy w katalogu bloku kotwiczącego
-`thesis-report-series.md` oraz CSV wnioskowania międzyblokowego. To jest finalny
+`thesis-report-series.md`, CSV wnioskowania międzyblokowego i
+`report-provenance.json`. Ten ostatni rozdziela commit kodu mierzonego od commita
+generatora raportu, zapisuje stan dirty oraz SHA-256 `compare-runs.py`, dzięki
+czemu sam `HEAD` nie jest mylony z dokładną wersją generatora. To jest finalny
 raport Markdown: zaczyna się werdyktami całej serii, a tabele pojedynczego bloku
 umieszcza w jawnie diagnostycznej części szczegółowej. `render-report-html.py`
 wybiera go automatycznie i tworzy
@@ -566,7 +605,7 @@ wykresów. Wykresy generuje
 z median pełnych bloków; przy każdym uruchomieniu usuwa stare SVG, aby zmiana
 workloadu nie pozostawiała nieaktualnych figur.
 
-Finalny Q3-dysk wymaga dodatkowego `storage-scaling.csv` z izolowanej sondy.
+Finalny Q3-dysk i finalny render wymagają dodatkowego `storage-scaling.csv` z izolowanej sondy.
 Starszy plik bez `measurementMode=isolated-fresh-stack` jest jawnie oznaczany
 jako nienadający się do wniosku, a nie reinterpretowany przez nowy generator.
 

@@ -8,21 +8,24 @@ REFERENCE median ratio in every run.  A system advantage is supported only when 
 direction is identical in all runs and its smallest magnitude clears the replicate
 error measured inside those runs.
 
-Writes repeatability.csv/md, series-comparison.csv, series-import*.csv, series-scaling.csv,
-thesis-tables-series.tex and a combined thesis-report-series.md into the
-median-metric anchor run (or --out-dir).
+Writes repeatability.csv/md, the confirmatory and descriptive series CSVs,
+report-provenance.json, thesis-tables-series.tex and a combined
+thesis-report-series.md into the median-metric anchor run (or --out-dir).
 """
 
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from statistics import median
 from typing import Any
 import argparse
 import csv
+import hashlib
 import json
 import math
+import subprocess
 import sys
 
 MS = 1000.0
@@ -35,6 +38,7 @@ MIN_POST_IDLE_WARMUP_ROUNDS = 200
 POST_IDLE_WARMUP_MODE = "fresh-import-query-delete"
 REPLICATE_VALIDITY_STATISTIC = "query-spread-q3"
 IMPORT_REPLICATE_LABEL = "IMPORT (Q1)"
+MAGNITUDE_ALERT_FACTOR = 3.0
 REQUIRED_MEMORY_COMPONENTS = {"processm-interpreter", "processm-neo4j", "processm-server"}
 REQUIRED_FILES = {
     "summary.md", "datasets.csv", "queries.csv", "import-results.csv",
@@ -104,6 +108,26 @@ def query_medians(run: Path) -> dict[tuple[str, str, str], float]:
     return {key: type7_quantile(values, 0.50) for key, values in grouped.items()}
 
 
+def query_iqr_metrics(run: Path) -> dict[tuple[str, str, str], tuple[float, float, float]]:
+    """Warm-sample Q1, Q3 and Q3/Q1 for a descriptive regime-shift diagnostic."""
+    grouped: dict[tuple[str, str, str], list[float]] = {}
+    for row in read_csv(run / "query-results.csv"):
+        if row.get("phase") != "warm" or row.get("status") != "OK":
+            continue
+        value = as_float(row.get("seconds"))
+        if value is None or value <= 0:
+            continue
+        key = (row.get("datasetName", ""), row.get("queryLabel", ""), row.get("system", ""))
+        grouped.setdefault(key, []).append(value * MS)
+    out: dict[tuple[str, str, str], tuple[float, float, float]] = {}
+    for key, values in grouped.items():
+        q1 = type7_quantile(values, 0.25)
+        q3 = type7_quantile(values, 0.75)
+        if q1 > 0:
+            out[key] = (q1, q3, q3 / q1)
+    return out
+
+
 def import_times(run: Path) -> dict[tuple[str, str], float]:
     out: dict[tuple[str, str], float] = {}
     for row in read_csv(run / "import-results.csv"):
@@ -113,13 +137,20 @@ def import_times(run: Path) -> dict[tuple[str, str], float]:
     return out
 
 
-def memory_medians(run: Path) -> dict[str, float]:
-    out: dict[str, float] = {}
+def memory_metrics(run: Path) -> tuple[dict[str, float], dict[str, float]]:
+    medians: dict[str, float] = {}
+    peaks: dict[str, float] = {}
     for row in read_csv(run / "memory-summary.csv"):
-        value = as_float(row.get("medianBytes"))
-        if row.get("phase") == "queries" and value is not None:
-            out[row.get("component", "")] = value / MIB
-    return out
+        if row.get("phase") != "queries":
+            continue
+        component = row.get("component", "")
+        median_value = as_float(row.get("medianBytes"))
+        peak_value = as_float(row.get("peakBytes"))
+        if median_value is not None:
+            medians[component] = median_value / MIB
+        if peak_value is not None:
+            peaks[component] = peak_value / MIB
+    return medians, peaks
 
 
 def replicate_spreads(
@@ -199,6 +230,88 @@ def classify_ratios(ratios: list[float], floor: float) -> tuple[str, float, str]
     return direction, conservative_magnitude, verdict
 
 
+def magnitude_diagnostic(
+    ratios: list[float],
+    within_cell_iqr_factors: list[float],
+) -> tuple[float, float, str]:
+    """Describe effect-size instability without changing the paired direction verdict.
+
+    A threefold alert is intentionally coarse and descriptive. It exposes large
+    regime changes, but is neither a preregistered significance threshold nor a
+    diagnosis of their implementation-level cause.
+    """
+    ratio_spread = max(ratios) / min(ratios)
+    max_cell_iqr = max(within_cell_iqr_factors, default=1.0)
+    if min(ratios) <= 1.0 <= max(ratios):
+        stability = "NOT_APPLICABLE_DIRECTION_CHANGES"
+    elif max(ratio_spread, max_cell_iqr) >= MAGNITUDE_ALERT_FACTOR:
+        stability = "UNSTABLE_MAGNITUDE"
+    else:
+        stability = "NO_LARGE_VARIATION"
+    return ratio_spread, max_cell_iqr, stability
+
+
+def replicate_group_names(datasets: list[dict[str, str]]) -> list[list[str]]:
+    """Synthetic datasets that describe an identical experiment under several names."""
+    shapes: dict[tuple[str, str, str], list[str]] = {}
+    for row in datasets:
+        if row.get("series") == "real-validation":
+            continue
+        key = (
+            row.get("traces", ""),
+            row.get("eventsPerTrace", ""),
+            row.get("attributesPerEvent", ""),
+        )
+        shapes.setdefault(key, []).append(row.get("datasetName", ""))
+    return [sorted(names) for names in shapes.values() if len(names) > 1]
+
+
+def distinct_experiment_count(
+    datasets: list[dict[str, str]],
+    comparison_rows: list[dict[str, Any]],
+) -> tuple[int, list[list[str]]]:
+    """Pair count after collapsing each replicate group to one representative.
+
+    `trace-100`, `event-10` and `attr-5` are the same 100x10x5 experiment under three
+    names — the point where the scaling series intersect. Counting all three inflates
+    the headline pair count, because the extra rows are re-measurements of one
+    condition rather than additional conditions. The full count stays the basis of the
+    verdicts (the replicates are legitimate repeated measurements); this number says
+    how many *distinct* experiments they cover.
+    """
+    groups = replicate_group_names(datasets)
+    duplicates = {name for group in groups for name in group[1:]}
+    distinct = sum(1 for row in comparison_rows if row.get("datasetName") not in duplicates)
+    return distinct, groups
+
+
+def degenerate_response_queries(anchor_path: Path) -> dict[str, tuple[str, int]]:
+    """Queries whose warm response counts never vary, with how many pairs they cover.
+
+    A per-repetition count check compares two constants for these, and an all-empty
+    response makes the strict XES-JSON comparison compare `[]` with `[]`. Both are
+    legitimate latency workloads — a predicate that matches nothing still costs a full
+    scan — but the Q4 parity claim must not present them as if they exercised the
+    semantic check.
+    """
+    counts: dict[str, set[tuple[str, str, str]]] = defaultdict(set)
+    datasets_per_query: dict[str, set[str]] = defaultdict(set)
+    for row in read_csv(anchor_path / "query-results.csv"):
+        if row.get("phase") != "warm" or row.get("status") != "OK":
+            continue
+        label = row.get("queryLabel", "")
+        counts[label].add((row.get("logCount", ""), row.get("traceCount", ""), row.get("eventCount", "")))
+        datasets_per_query[label].add(row.get("datasetName", ""))
+    degenerate: dict[str, tuple[str, int]] = {}
+    for label, observed in counts.items():
+        if len(observed) != 1:
+            continue
+        only = next(iter(observed))
+        kind = "pusta odpowiedź po obu stronach" if only == ("0", "0", "0") else f"stała liczność {'/'.join(only)}"
+        degenerate[label] = (kind, len(datasets_per_query[label]))
+    return degenerate
+
+
 def scaling_series(query: dict[str, str]) -> set[str]:
     return {value.strip() for value in query.get("scalingSeries", "").split(";") if value.strip()}
 
@@ -259,6 +372,12 @@ VERDICT_PL = {
     "UNSTABLE": "niestabilny między blokami",
 }
 
+MAGNITUDE_STABILITY_PL = {
+    "UNSTABLE_MAGNITUDE": "niestabilna — duża zmiana reżimu",
+    "NO_LARGE_VARIATION": "bez alarmu ×3",
+    "NOT_APPLICABLE_DIRECTION_CHANGES": "nie dotyczy — zmienny kierunek",
+}
+
 
 def verdict_pl(code: str) -> str:
     """Human-facing Polish label; CSVs keep stable machine-readable codes."""
@@ -269,6 +388,47 @@ def direction_pl(code: str) -> str:
     return "nierozstrzygnięty" if code == "UNRESOLVED" else code
 
 
+def magnitude_stability_pl(code: str) -> str:
+    return MAGNITUDE_STABILITY_PL.get(code, code)
+
+
+def conservative_effect_text(row: dict[str, Any], prefix: str = "×", unresolved: str = "—") -> str:
+    if row.get("direction") == "UNRESOLVED":
+        return unresolved
+    return f"{prefix}{float(row['conservativeMagnitude']):.2f}"
+
+
+def generator_provenance() -> dict[str, Any]:
+    """Identify the report generator independently from the measured-code commit."""
+    script = Path(__file__).resolve()
+    repo = script.parents[2]
+    digest = hashlib.sha256(script.read_bytes()).hexdigest()
+    commit: str | None = None
+    dirty: bool | None = None
+    try:
+        commit_result = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            text=True, capture_output=True, check=False,
+        )
+        if commit_result.returncode == 0:
+            commit = commit_result.stdout.strip() or None
+        status_result = subprocess.run(
+            ["git", "-C", str(repo), "status", "--porcelain", "--untracked-files=no"],
+            text=True, capture_output=True, check=False,
+        )
+        if status_result.returncode == 0:
+            dirty = bool(status_result.stdout.strip())
+    except OSError:
+        pass
+    return {
+        "schemaVersion": 1,
+        "generatorGitCommit": commit,
+        "generatorGitDirty": dirty,
+        "compareRunsPath": "scripts/benchmarks/compare-runs.py",
+        "compareRunsSha256": digest,
+    }
+
+
 @dataclass
 class RunData:
     name: str
@@ -277,8 +437,10 @@ class RunData:
     datasets: list[dict[str, str]]
     queries: dict[str, dict[str, str]]
     medians: dict[tuple[str, str, str], float]
+    query_iqr: dict[tuple[str, str, str], tuple[float, float, float]]
     imports: dict[tuple[str, str], float]
     memory: dict[str, float]
+    memory_peaks: dict[str, float]
     replicate_worst: float | None
     replicate_q3: float | None
     replicate_floor: dict[str, float]
@@ -345,7 +507,8 @@ def load_run(path: Path) -> RunData:
     queries_by_label = {row.get("queryLabel", ""): row for row in queries if row.get("queryLabel")}
     medians = query_medians(path)
     imports = import_times(path)
-    memory = memory_medians(path)
+    query_iqr = query_iqr_metrics(path)
+    memory, memory_peaks = memory_metrics(path)
     replicate_q3, worst, floors, replicate_issues = replicate_spreads(datasets, medians, imports)
     issues.extend(replicate_issues)
 
@@ -577,16 +740,21 @@ def load_run(path: Path) -> RunData:
         issues.append(f"górny kwartyl rozrzutów replikatów Q2 ×{replicate_q3:.3f} przekracza ×{gate:.3f}")
 
     return RunData(
-        path.name, path, environment, datasets, queries_by_label, medians, imports, memory, worst, replicate_q3, floors,
-        mismatch_pairs, len(dataset_names) * len(query_labels), issues,
+        path.name, path, environment, datasets, queries_by_label, medians, query_iqr, imports,
+        memory, memory_peaks, worst, replicate_q3, floors, mismatch_pairs,
+        len(dataset_names) * len(query_labels), issues,
     )
 
 
-def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
-    if not rows:
+def write_csv(
+    path: Path,
+    rows: list[dict[str, Any]],
+    fieldnames: list[str] | None = None,
+) -> None:
+    if not rows and fieldnames is None:
         return
     with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+        writer = csv.DictWriter(handle, fieldnames=fieldnames or list(rows[0]))
         writer.writeheader()
         writer.writerows(rows)
 
@@ -601,6 +769,43 @@ def latex_escape(value: Any) -> str:
     return "".join(replacements.get(char, char) for char in text)
 
 
+def system_memory_budget_mib(run: RunData, system: str) -> float | None:
+    containers = run.environment.get("containers", {})
+    if not isinstance(containers, dict):
+        return None
+    names = (
+        ("processm-interpreter", "processm-neo4j")
+        if system == "local"
+        else ("processm-server",)
+    )
+    values = [nested(containers, name, "memoryLimitBytes") for name in names]
+    if not all(isinstance(value, int) and value > 0 for value in values):
+        return None
+    return sum(values) / MIB
+
+
+def memory_series_analysis(runs: list[RunData]) -> dict[str, Any]:
+    """Conservative Q3-memory verdict from complete-block system totals."""
+    local = [run.memory["local-total"] for run in runs]
+    reference = [run.memory["reference-total"] for run in runs]
+    local_spread = max(local) / min(local)
+    reference_spread = max(reference) / min(reference)
+    floor = max(local_spread, reference_spread)
+    ratios_reference_to_local = [ref / loc for loc, ref in zip(local, reference)]
+    direction, magnitude, verdict = classify_ratios(ratios_reference_to_local, floor)
+    return {
+        "local": local,
+        "reference": reference,
+        "differences": [loc - ref for loc, ref in zip(local, reference)],
+        "localSpread": local_spread,
+        "referenceSpread": reference_spread,
+        "practicalFloor": floor,
+        "direction": direction,
+        "conservativeMagnitude": magnitude,
+        "verdict": verdict,
+    }
+
+
 def write_series_latex(
     path: Path,
     runs: list[RunData],
@@ -608,30 +813,40 @@ def write_series_latex(
     import_rows: list[dict[str, Any]],
     import_comparison_rows: list[dict[str, Any]],
     scaling_rows: list[dict[str, Any]],
+    exploratory_scaling_rows: list[dict[str, Any]],
+    memory_analysis: dict[str, Any],
+    provenance: dict[str, Any],
 ) -> None:
     """Write the cross-run tables that do not exist in a single-run .tex file."""
     lines = [
         "% generated by scripts/benchmarks/compare-runs.py",
+        f"% generator git commit: {provenance.get('generatorGitCommit')}",
+        f"% generator git dirty: {provenance.get('generatorGitDirty')}",
+        f"% compare-runs.py SHA-256: {provenance.get('compareRunsSha256')}",
         "% requires booktabs and longtable",
-        r"\begin{longtable}{llrrrrl}",
+        r"\begingroup\small\setlength{\tabcolsep}{3pt}",
+        r"\begin{longtable}{p{1.5cm}p{2.2cm}rlrlrp{1.6cm}p{2.2cm}}",
         r"\caption{Q2: efekty w serii pełnych przebiegów}\label{tab:bench-series-q2}\\",
         r"\toprule",
-        r"Dataset & Zapytanie & Mediana R/L & Min R/L & Max R/L & Próg & Werdykt \\",
+        r"Dataset & Zapytanie & Efekt kons. & Kierunek & Próg & Werdykt & Med. R/L & Zakres R/L & Stabilność wielkości \\",
         r"\midrule",
         r"\endfirsthead",
         r"\toprule",
-        r"Dataset & Zapytanie & Mediana R/L & Min R/L & Max R/L & Próg & Werdykt \\",
+        r"Dataset & Zapytanie & Efekt kons. & Kierunek & Próg & Werdykt & Med. R/L & Zakres R/L & Stabilność wielkości \\",
         r"\midrule",
         r"\endhead",
     ]
     for row in comparison_rows:
         lines.append(
             f"{latex_escape(row['datasetName'])} & {latex_escape(row['queryLabel'])} & "
-            f"{float(row['medianRatioReferenceToLocal']):.2f} & {float(row['minRatio']):.2f} & "
-            f"{float(row['maxRatio']):.2f} & {float(row['practicalFloor']):.2f} & "
-            f"{latex_escape(verdict_pl(str(row['verdict'])))} \\\\"
+            f"{conservative_effect_text(row, prefix='', unresolved='--')} & "
+            f"{latex_escape(direction_pl(str(row['direction'])))} & "
+            f"{float(row['practicalFloor']):.2f} & {latex_escape(verdict_pl(str(row['verdict'])))} & "
+            f"{float(row['medianRatioReferenceToLocal']):.2f} & "
+            f"[{float(row['minRatio']):.2f}; {float(row['maxRatio']):.2f}] & "
+            f"{latex_escape(magnitude_stability_pl(str(row['magnitudeStability'])))} \\\\"
         )
-    lines += [r"\bottomrule", r"\end{longtable}", ""]
+    lines += [r"\bottomrule", r"\end{longtable}", r"\endgroup", ""]
     if scaling_rows:
         lines += [
             r"\begin{longtable}{lllrrrrrrl}",
@@ -652,26 +867,49 @@ def write_series_latex(
                 f"{latex_escape(verdict_pl(str(row['verdict'])))} \\\\"
             )
         lines += [r"\bottomrule", r"\end{longtable}", ""]
-    lines += [r"\begin{longtable}{lrrrrrrl}",
+    if exploratory_scaling_rows:
+        lines += [
+            r"\begingroup\small\setlength{\tabcolsep}{3pt}",
+            r"\begin{longtable}{p{2.5cm}lrrrrrrl}",
+            r"\caption{Q2: eksploracyjne skalowanie po liczbie śladów poza kontraktem predeklarowanym}\label{tab:bench-series-scaling-exploratory}\\",
+            r"\toprule",
+            r"Zapytanie & System & Start [ms] & Koniec [ms] & K/S med. & $\alpha$ min & $\alpha$ med. & $\alpha$ max & Dodatnie bloki \\",
+            r"\midrule", r"\endfirsthead", r"\toprule",
+            r"Zapytanie & System & Start [ms] & Koniec [ms] & K/S med. & $\alpha$ min & $\alpha$ med. & $\alpha$ max & Dodatnie bloki \\",
+            r"\midrule", r"\endhead",
+        ]
+        for row in exploratory_scaling_rows:
+            lines.append(
+                f"{latex_escape(row['queryLabel'])} & {latex_escape(row['system'])} & "
+                f"{float(row['medianStartMs']):.2f} & {float(row['medianEndMs']):.2f} & "
+                f"{float(row['medianEndToStartRatio']):.2f} & {float(row['minAlpha']):+.2f} & "
+                f"{float(row['medianAlpha']):+.2f} & {float(row['maxAlpha']):+.2f} & "
+                f"{row['positiveSlopeRuns']}/{row['runs']} \\\\"
+            )
+        lines += [r"\bottomrule", r"\end{longtable}", r"\endgroup", ""]
+    lines += [r"\begingroup\small\setlength{\tabcolsep}{3pt}",
+              r"\begin{longtable}{p{1.8cm}rlrlrrrp{1.6cm}}",
               r"\caption{Q1: czasy importu i efekty między przebiegami}\label{tab:bench-series-q1}\\",
               r"\toprule",
-              r"Dataset & L med. [s] & R med. [s] & R/L med. & R/L min & R/L max & Próg & Werdykt \\",
+              r"Dataset & Efekt kons. & Kierunek & Próg & Werdykt & L med. [s] & R med. [s] & R/L med. & Zakres R/L \\",
               r"\midrule", r"\endfirsthead", r"\toprule",
-              r"Dataset & L med. [s] & R med. [s] & R/L med. & R/L min & R/L max & Próg & Werdykt \\",
+              r"Dataset & Efekt kons. & Kierunek & Próg & Werdykt & L med. [s] & R med. [s] & R/L med. & Zakres R/L \\",
               r"\midrule", r"\endhead"]
     imports_by_key = {(row["datasetName"], row["system"]): row for row in import_rows}
     for comparison in import_comparison_rows:
         local = imports_by_key[(comparison["datasetName"], "local")]
         reference = imports_by_key[(comparison["datasetName"], "reference")]
         lines.append(
-            f"{latex_escape(comparison['datasetName'])} & {float(local['medianSeconds']):.2f} & "
-            f"{float(reference['medianSeconds']):.2f} & "
-            f"{float(comparison['medianRatioReferenceToLocal']):.2f} & "
-            f"{float(comparison['minRatio']):.2f} & {float(comparison['maxRatio']):.2f} & "
+            f"{latex_escape(comparison['datasetName'])} & "
+            f"{conservative_effect_text(comparison, prefix='', unresolved='--')} & "
+            f"{latex_escape(direction_pl(str(comparison['direction'])))} & "
             f"{float(comparison['practicalFloor']):.2f} & "
-            f"{latex_escape(verdict_pl(str(comparison['verdict'])))} \\\\"
+            f"{latex_escape(verdict_pl(str(comparison['verdict'])))} & "
+            f"{float(local['medianSeconds']):.2f} & {float(reference['medianSeconds']):.2f} & "
+            f"{float(comparison['medianRatioReferenceToLocal']):.2f} & "
+            f"[{float(comparison['minRatio']):.2f}; {float(comparison['maxRatio']):.2f}] \\\\"
         )
-    lines += [r"\bottomrule", r"\end{longtable}", "",
+    lines += [r"\bottomrule", r"\end{longtable}", r"\endgroup", "",
               r"\begin{table}[htbp]", r"\centering",
               r"\caption{Q3: sumy pamięci w fazie zapytań}", r"\label{tab:bench-series-memory}",
               r"\begin{tabular}{lrrr}", r"\toprule",
@@ -681,7 +919,14 @@ def write_series_latex(
         reference = run.memory["reference-total"]
         lines.append(f"{latex_escape(run.name)} & {local:.0f} & {reference:.0f} & {local - reference:+.0f} \\\\"
         )
-    lines += [r"\bottomrule", r"\end{tabular}", r"\end{table}", ""]
+    lines += [
+        r"\bottomrule", r"\end{tabular}", r"\par\smallskip",
+        "Werdykt Q3-pamięć: "
+        + latex_escape(verdict_pl(str(memory_analysis["verdict"])))
+        + f"; efekt konserwatywny {float(memory_analysis['conservativeMagnitude']):.2f}, "
+        + f"próg międzyblokowy {float(memory_analysis['practicalFloor']):.2f}.",
+        r"\end{table}", "",
+    ]
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
@@ -770,6 +1015,20 @@ def main() -> int:
             "practicalFloor": f"{floor_by_label.get(key[1], 1.0):.3f}",
         })
 
+    cell_stability_rows: list[dict[str, Any]] = []
+    for run in runs:
+        for (dataset, query, system), (q1, q3, factor) in sorted(run.query_iqr.items()):
+            cell_stability_rows.append({
+                "run": run.name,
+                "datasetName": dataset,
+                "queryLabel": query,
+                "system": system,
+                "q1Ms": f"{q1:.6f}",
+                "q3Ms": f"{q3:.6f}",
+                "iqrFactor": f"{factor:.6f}",
+                "largeRegimeAlert": str(factor >= MAGNITUDE_ALERT_FACTOR).lower(),
+            })
+
     pair_keys = sorted({(dataset, query) for dataset, query, _ in runs[0].medians})
     comparison_rows: list[dict[str, Any]] = []
     for dataset, query in pair_keys:
@@ -779,6 +1038,14 @@ def main() -> int:
         ]
         floor = floor_by_label.get(query, 1.0)
         direction, conservative_magnitude, verdict = classify_ratios(ratios, floor)
+        within_cell_iqr_factors = [
+            run.query_iqr[(dataset, query, system)][2]
+            for run in runs
+            for system in ("local", "reference")
+        ]
+        ratio_magnitude_spread, max_cell_iqr, magnitude_stability = magnitude_diagnostic(
+            ratios, within_cell_iqr_factors,
+        )
         row: dict[str, Any] = {
             "datasetName": dataset,
             "queryLabel": query,
@@ -793,6 +1060,9 @@ def main() -> int:
             "conservativeMagnitude": f"{conservative_magnitude:.6f}",
             "practicalFloor": f"{floor:.6f}",
             "verdict": verdict,
+            "ratioMagnitudeSpread": f"{ratio_magnitude_spread:.6f}",
+            "maxWithinCellIqrFactor": f"{max_cell_iqr:.6f}",
+            "magnitudeStability": magnitude_stability,
         })
         comparison_rows.append(row)
 
@@ -873,21 +1143,94 @@ def main() -> int:
                     "verdict": scaling_verdict(fits, endpoint_factors, practical_floor),
                 })
 
+    exploratory_scaling_rows: list[dict[str, Any]] = []
+    exploratory_series = "trace-scaling"
+    exploratory_axis_label, exploratory_axis_field = SCALING_AXES[exploratory_series]
+    for query_label, query_spec in sorted(runs[0].queries.items()):
+        if exploratory_series in scaling_series(query_spec):
+            continue
+        for system in ("local", "reference"):
+            fits: list[tuple[float, float]] = []
+            starts: list[float] = []
+            ends: list[float] = []
+            endpoint_ratios: list[float] = []
+            for run in runs:
+                points = sorted(
+                    (
+                        axis_value,
+                        run.medians[(dataset.get("datasetName", ""), query_label, system)],
+                    )
+                    for dataset in run.datasets
+                    if dataset.get("series") == exploratory_series
+                    for axis_value in [as_float(dataset.get(exploratory_axis_field))]
+                    if axis_value is not None
+                    and (dataset.get("datasetName", ""), query_label, system) in run.medians
+                )
+                fit = power_law_fit(points)
+                if fit is None or len(points) < 2:
+                    sys.exit(
+                        f"error: cannot fit exploratory scaling for "
+                        f"{query_label}/{exploratory_series}/{system} in every run"
+                    )
+                fits.append(fit)
+                starts.append(points[0][1])
+                ends.append(points[-1][1])
+                endpoint_ratios.append(points[-1][1] / points[0][1])
+            slopes = [fit[0] for fit in fits]
+            r2_values = [fit[1] for fit in fits]
+            exploratory_scaling_rows.append({
+                "queryLabel": query_label,
+                "series": exploratory_series,
+                "axis": exploratory_axis_label,
+                "system": system,
+                "runs": len(runs),
+                "medianStartMs": f"{median(starts):.6f}",
+                "medianEndMs": f"{median(ends):.6f}",
+                "medianEndToStartRatio": f"{median(endpoint_ratios):.6f}",
+                "minAlpha": f"{min(slopes):.6f}",
+                "medianAlpha": f"{median(slopes):.6f}",
+                "maxAlpha": f"{max(slopes):.6f}",
+                "minR2": f"{min(r2_values):.6f}",
+                "maxR2": f"{max(r2_values):.6f}",
+                "positiveSlopeRuns": sum(slope > 0 for slope in slopes),
+                "status": "EXPLORATORY_NOT_PREREGISTERED",
+            })
+
+    provenance = generator_provenance()
+    provenance["measurementGitCommit"] = reference_signature["gitCommit"]
+    memory_analysis = memory_series_analysis(runs)
+
     for artifact in (
         "repeatability.csv", "repeatability.md", "series-comparison.csv",
-        "series-import.csv", "series-import-comparison.csv", "series-scaling.csv",
+        "series-cell-stability.csv", "series-import.csv", "series-import-comparison.csv",
+        "series-scaling.csv", "series-scaling-exploratory.csv", "report-provenance.json",
         "thesis-tables-series.tex", "thesis-report-series.md",
     ):
         (out_dir / artifact).unlink(missing_ok=True)
 
     write_csv(out_dir / "repeatability.csv", repeatability_rows)
     write_csv(out_dir / "series-comparison.csv", comparison_rows)
+    write_csv(out_dir / "series-cell-stability.csv", cell_stability_rows)
     write_csv(out_dir / "series-import.csv", import_rows)
     write_csv(out_dir / "series-import-comparison.csv", import_comparison_rows)
     write_csv(out_dir / "series-scaling.csv", scaling_rows)
+    write_csv(
+        out_dir / "series-scaling-exploratory.csv",
+        exploratory_scaling_rows,
+        fieldnames=[
+            "queryLabel", "series", "axis", "system", "runs", "medianStartMs",
+            "medianEndMs", "medianEndToStartRatio", "minAlpha", "medianAlpha",
+            "maxAlpha", "minR2", "maxR2", "positiveSlopeRuns", "status",
+        ],
+    )
+    (out_dir / "report-provenance.json").write_text(
+        json.dumps(provenance, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
     write_series_latex(
         out_dir / "thesis-tables-series.tex", runs, comparison_rows, import_rows,
-        import_comparison_rows, scaling_rows,
+        import_comparison_rows, scaling_rows, exploratory_scaling_rows,
+        memory_analysis, provenance,
     )
 
     spread_ratios = [float(row["spreadRatio"]) for row in repeatability_rows]
@@ -895,11 +1238,43 @@ def main() -> int:
     supported = [row for row in comparison_rows if row["verdict"] == "SUPPORTED"]
     supported_local = [row for row in supported if row["direction"] == "LOCAL"]
     supported_reference = [row for row in supported if row["direction"] == "REFERENCE"]
+    magnitude_alerts = [
+        row for row in supported
+        if row["magnitudeStability"] == "UNSTABLE_MAGNITUDE"
+    ]
     below = [row for row in comparison_rows if row["verdict"] == "BELOW_MEASUREMENT_ERROR"]
     changing = [row for row in comparison_rows if row["verdict"] == "DIRECTION_CHANGES"]
     supported_imports = [row for row in import_comparison_rows if row["verdict"] == "SUPPORTED"]
     supported_imports_local = [row for row in supported_imports if row["direction"] == "LOCAL"]
     supported_imports_reference = [row for row in supported_imports if row["direction"] == "REFERENCE"]
+    distinct_pairs, replicate_groups = distinct_experiment_count(anchor.datasets, comparison_rows)
+    distinct_pairs_note = (
+        f"Te {len(comparison_rows)} par pokrywa **{distinct_pairs} odrębnych warunków**: "
+        + "; ".join(" = ".join(group) for group in replicate_groups)
+        + " to ten sam zbiór pod kilkoma nazwami (punkt przecięcia serii skalowania), "
+        "więc jego pary są powtórzonym pomiarem jednego warunku, a nie osobnymi warunkami. "
+        "Werdykty liczone są ze wszystkich par — powtórzenia są prawomocnymi pomiarami; "
+        "liczba warunków mówi natomiast, ilu **różnych** sytuacji dotyczą wnioski."
+        if replicate_groups
+        else f"Wszystkie {len(comparison_rows)} par dotyczy odrębnych warunków."
+    )
+
+    degenerate = degenerate_response_queries(anchor.path)
+    empty_pairs = sum(count for kind, count in degenerate.values() if kind.startswith("pusta"))
+    degenerate_note = (
+        "Kontrola liczności per repetycja nie różnicuje zapytań o stałej odpowiedzi: "
+        + "; ".join(
+            f"`{label}` ({kind}, {count} par)"
+            for label, (kind, count) in sorted(degenerate.items())
+        )
+        + f". Dla {empty_pairs} par o pustej odpowiedzi ścisłe porównanie XES-JSON zestawia "
+        "puste wyniki po obu stronach. Jako obciążenie wydajnościowe pozostają one ważne "
+        "(predykat bez dopasowań nadal kosztuje pełny skan), ale nie stanowią dowodu "
+        "równoważności semantycznej."
+        if degenerate
+        else ""
+    )
+
     base_report = anchor.path / "thesis-report.md"
     base_report_text = base_report.read_text(encoding="utf-8")
     disk_verdict = next(
@@ -919,6 +1294,9 @@ def main() -> int:
         f"- Commit: `{reference_signature['gitCommit']}`",
         f"- Wersja protokołu benchmarku: {reference_signature['benchmarkProtocolVersion']}",
         f"- Fingerprint workloadu: `{reference_signature['fingerprint']}`",
+        f"- Generator raportu: commit `{provenance.get('generatorGitCommit') or 'unavailable'}`, "
+        f"dirty=`{str(provenance.get('generatorGitDirty')).lower()}`",
+        f"- SHA-256 `scripts/benchmarks/compare-runs.py`: `{provenance['compareRunsSha256']}`",
         f"- Przebieg kotwiczący szczegółowe tabele/wykresy: **{anchor.name}** "
         "(środkowa mediana LOCAL; wybór służy wyłącznie prezentacji, nie estymacji efektu)",
         "",
@@ -931,6 +1309,8 @@ def main() -> int:
         f"Dla {len(below)} kierunek był stały, ale efekt nie przekroczył błędu pomiaru; "
         f"dla {len(changing)} kierunek zmieniał się między przebiegami.",
         "",
+        distinct_pairs_note,
+        "",
         "Werdykt „powtarzalny ponad błędem” (`SUPPORTED` w CSV) jest liczony z pełnych "
         "przebiegów jako bloków: najmniejszy efekt "
         "w serii musi mieć ten sam kierunek i przekraczać największy rozrzut replikatów dla "
@@ -940,16 +1320,40 @@ def main() -> int:
         "środowisku, nie test istotności dla populacji maszyn ani podstaw do uniwersalizacji "
         "wyniku poza wersje, limity zasobów i workload zapisane w artefaktach.",
         "",
-        "| Dataset | Zapytanie | Mediana R/L | Zakres R/L | Kierunek | Najmniejszy efekt | Próg | Werdykt |",
-        "| :--- | :--- | ---: | :--- | :--- | ---: | ---: | :--- |",
+        f"Osobny alarm opisowy wykrył dużą niestabilność **wielkości** efektu dla "
+        f"{len(magnitude_alerts)} par z werdyktem `SUPPORTED`. Alarm nie zmienia sparowanego "
+        "werdyktu kierunku: pojawia się, gdy zakres ilorazów między blokami albo Q3/Q1 "
+        f"którejkolwiek 30-próbkowej komórki osiąga co najmniej ×{MAGNITUDE_ALERT_FACTOR:.0f}. "
+        "W takich wierszach główną liczbą pozostaje najmniejszy efekt, a mediana R/L nie jest "
+        "reprezentatywnym oszacowaniem skali przewagi.",
+        "",
+        *(
+            [
+                f"- {row['datasetName']} / {row['queryLabel']}: efekt konserwatywny "
+                f"×{float(row['conservativeMagnitude']):.2f} ({direction_pl(str(row['direction']))}), "
+                f"zakres R/L [{float(row['minRatio']):.2f}; {float(row['maxRatio']):.2f}], "
+                f"maks. Q3/Q1 komórki ×{float(row['maxWithinCellIqrFactor']):.2f}."
+                for row in magnitude_alerts
+            ]
+            if magnitude_alerts
+            else ["- Brak par objętych alarmem dużej niestabilności wielkości."]
+        ),
+        "",
+        "Dane pozwalają stwierdzić obecność różnych reżimów opóźnienia, lecz nie wskazują "
+        "ich przyczyny. Bez planów wykonania lub logów `EXPLAIN` raport nie przypisuje ich "
+        "przełączeniu planu PostgreSQL ani żadnemu innemu mechanizmowi.",
+        "",
+        "| Dataset | Zapytanie | Efekt konserwatywny | Kierunek | Próg | Werdykt | Mediana R/L (diag.) | Zakres R/L (diag.) | Stabilność wielkości |",
+        "| :--- | :--- | ---: | :--- | ---: | :--- | ---: | :--- | :--- |",
     ]
     for row in comparison_rows:
         md.append(
-            f"| {row['datasetName']} | {row['queryLabel']} | ×{float(row['medianRatioReferenceToLocal']):.2f} "
+            f"| {row['datasetName']} | {row['queryLabel']} "
+            f"| {conservative_effect_text(row)} | {direction_pl(str(row['direction']))} "
+            f"| ×{float(row['practicalFloor']):.2f} | {verdict_pl(str(row['verdict']))} "
+            f"| ×{float(row['medianRatioReferenceToLocal']):.2f} "
             f"| [{float(row['minRatio']):.2f}; {float(row['maxRatio']):.2f}] "
-            f"| {direction_pl(str(row['direction']))} "
-            f"| ×{float(row['conservativeMagnitude']):.2f} | ×{float(row['practicalFloor']):.2f} "
-            f"| {verdict_pl(str(row['verdict']))} |"
+            f"| {magnitude_stability_pl(str(row['magnitudeStability']))} |"
         )
 
     md += [
@@ -976,6 +1380,39 @@ def main() -> int:
             f"| [{float(row['minR2']):.2f}; {float(row['maxR2']):.2f}] "
             f"| ×{float(row['minEndpointFactor']):.2f} | ×{float(row['practicalFloor']):.2f} "
             f"| {verdict_pl(str(row['verdict']))} |"
+        )
+
+    exploratory_queries = sorted({str(row["queryLabel"]) for row in exploratory_scaling_rows})
+    local_positive_all = sum(
+        row["system"] == "local" and int(row["positiveSlopeRuns"]) == int(row["runs"])
+        for row in exploratory_scaling_rows
+    )
+    md += [
+        "",
+        "## Q2 — eksploracyjne skalowanie poza predeklarowanym kontraktem",
+        "",
+        "Poniższa analiza obejmuje **wszystkie**, a nie wybrane po wyniku, zapytania bez "
+        "predeklarowanego `trace-scaling`: "
+        + ", ".join(f"`{query}`" for query in exploratory_queries)
+        + ". Nie zmienia pola `scalingSeries`, fingerprintu ani werdyktów konfirmacyjnych. "
+        "Pokazuje wyłącznie wzorce warte dalszej hipotezy.",
+        "",
+        f"Dodatnie nachylenie LOCAL wystąpiło we wszystkich blokach dla "
+        f"{local_positive_all}/{len(exploratory_queries)} takich par zapytanie–oś. "
+        "REFERENCE również rośnie dla części zapytań; nie jest opisywany jako system "
+        "zawsze płaski. Trzy bloki i brak predeklaracji nie pozwalają testować różnicy "
+        "wykładników ani nadawać tym wierszom werdyktu przewagi.",
+        "",
+        "| Zapytanie | System | Mediana początku [ms] | Mediana końca [ms] | Mediana koniec/początek | Zakres α | Zakres R² | Dodatnie bloki | Status |",
+        "| :--- | :--- | ---: | ---: | ---: | :--- | :--- | ---: | :--- |",
+    ]
+    for row in exploratory_scaling_rows:
+        md.append(
+            f"| {row['queryLabel']} | {row['system']} | {float(row['medianStartMs']):.2f} "
+            f"| {float(row['medianEndMs']):.2f} | ×{float(row['medianEndToStartRatio']):.2f} "
+            f"| [{float(row['minAlpha']):+.2f}; {float(row['maxAlpha']):+.2f}] "
+            f"| [{float(row['minR2']):.2f}; {float(row['maxR2']):.2f}] "
+            f"| {row['positiveSlopeRuns']}/{row['runs']} | eksploracyjne — niepredeklarowane |"
         )
 
     md += [
@@ -1005,8 +1442,8 @@ def main() -> int:
             else "Żaden dataset nie otrzymuje werdyktu o przewadze przy niestabilnym pomiarze importu."
         ),
         "",
-        "| Dataset | LOCAL med. [s] | REFERENCE med. [s] | Mediana R/L | Zakres R/L | Kierunek | Najmniejszy efekt | Werdykt |",
-        "| :--- | ---: | ---: | ---: | :--- | :--- | ---: | :--- |",
+        "| Dataset | Efekt konserwatywny | Kierunek | Próg | Werdykt | LOCAL med. [s] (diag.) | REFERENCE med. [s] (diag.) | Mediana R/L (diag.) | Zakres R/L (diag.) |",
+        "| :--- | ---: | :--- | ---: | :--- | ---: | ---: | ---: | :--- |",
     ]
     by_import = {(row["datasetName"], row["system"]): row for row in import_rows}
     for comparison in import_comparison_rows:
@@ -1014,13 +1451,13 @@ def main() -> int:
         local = by_import[(dataset, "local")]
         reference = by_import[(dataset, "reference")]
         md.append(
-            f"| {dataset} | {float(local['medianSeconds']):.2f} "
-            f"| {float(reference['medianSeconds']):.2f} "
-            f"| ×{float(comparison['medianRatioReferenceToLocal']):.2f} "
-            f"| [{float(comparison['minRatio']):.2f}; {float(comparison['maxRatio']):.2f}] "
+            f"| {dataset} | {conservative_effect_text(comparison)} "
             f"| {direction_pl(str(comparison['direction']))} "
-            f"| ×{float(comparison['conservativeMagnitude']):.2f} "
-            f"| {verdict_pl(str(comparison['verdict']))} |"
+            f"| ×{float(comparison['practicalFloor']):.2f} "
+            f"| {verdict_pl(str(comparison['verdict']))} "
+            f"| {float(local['medianSeconds']):.2f} | {float(reference['medianSeconds']):.2f} "
+            f"| ×{float(comparison['medianRatioReferenceToLocal']):.2f} "
+            f"| [{float(comparison['minRatio']):.2f}; {float(comparison['maxRatio']):.2f}] |"
         )
 
     components = sorted(REQUIRED_MEMORY_COMPONENTS)
@@ -1041,16 +1478,55 @@ def main() -> int:
             f"| {component} | " + " | ".join(f"{value:.0f}" for value in values) +
             f" | ×{max(values) / min(values):.2f} |"
         )
-    local_totals = [run.memory["local-total"] for run in runs]
-    reference_totals = [run.memory["reference-total"] for run in runs]
-    differences = [local - reference for local, reference in zip(local_totals, reference_totals)]
     md += [
+        "",
+        "| Przebieg | LOCAL med. [MiB] | REFERENCE med. [MiB] | L/R | LOCAL peak / budżet | REFERENCE peak / budżet |",
+        "| :--- | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for run in runs:
+        local_budget = system_memory_budget_mib(run, "local")
+        reference_budget = system_memory_budget_mib(run, "reference")
+        local_peak = run.memory_peaks["local-total"]
+        reference_peak = run.memory_peaks["reference-total"]
+        md.append(
+            f"| {run.name} | {run.memory['local-total']:.0f} | {run.memory['reference-total']:.0f} "
+            f"| ×{run.memory['local-total'] / run.memory['reference-total']:.3f} "
+            f"| {local_peak:.0f} / {local_budget:.0f} MiB ({100.0 * local_peak / local_budget:.1f}%) "
+            f"| {reference_peak:.0f} / {reference_budget:.0f} MiB "
+            f"({100.0 * reference_peak / reference_budget:.1f}%) |"
+        )
+    local_totals = memory_analysis["local"]
+    reference_totals = memory_analysis["reference"]
+    differences = memory_analysis["differences"]
+    memory_verdict = str(memory_analysis["verdict"])
+    if memory_verdict == "SUPPORTED":
+        memory_conclusion = (
+            f"wsparty kierunek niższej obserwowanej pamięci: "
+            f"{direction_pl(str(memory_analysis['direction']))}"
+        )
+    elif memory_verdict == "BELOW_MEASUREMENT_ERROR":
+        memory_conclusion = "nierozstrzygnięte — kierunek poniżej błędu pomiaru"
+    else:
+        memory_conclusion = "nierozstrzygnięte — kierunek zmienia się między blokami"
+    md += [
+        "",
+        f"**Q3-pamięć: {memory_conclusion}.** Konserwatywny efekt kierunku niższego RSS "
+        f"wynosi ×{float(memory_analysis['conservativeMagnitude']):.3f}, a próg wynikający "
+        f"z większego rozrzutu międzyblokowego obu systemów wynosi "
+        f"×{float(memory_analysis['practicalFloor']):.3f} "
+        f"(LOCAL ×{float(memory_analysis['localSpread']):.3f}, "
+        f"REFERENCE ×{float(memory_analysis['referenceSpread']):.3f}).",
         "",
         f"Mediana sumy LOCAL wynosi {median(local_totals):.0f} MiB, REFERENCE "
         f"{median(reference_totals):.0f} MiB. Różnica LOCAL−REFERENCE w {len(runs)} blokach: "
-        f"{', '.join(f'{value:+.0f} MiB' for value in differences)}. "
-        + ("Kierunek jest zgodny we wszystkich przebiegach." if all(value > 0 for value in differences) or all(value < 0 for value in differences)
-           else "Kierunek zmienia się między przebiegami — wynik nierozstrzygnięty."),
+        f"{', '.join(f'{value:+.0f} MiB' for value in differences)}. Zgodny znak różnicy "
+        "jest warunkiem koniecznym, lecz w tej serii nie wystarcza do wniosku o przewadze.",
+        "",
+        "Są to wartości **obserwowanej pamięci rezydentnej** w rozgrzanej fazie zapytań "
+        "przy równych, stałych budżetach całych aplikacji. Nie są estymacją minimalnej "
+        "wymaganej pamięci. Piki pozostały poniżej limitów, a walidacja serii potwierdziła "
+        "zakończenie obu aplikacji bez OOM i restartów; limity nie zostały więc potraktowane "
+        "jako wyjaśnienie samego kierunku RSS.",
         "",
     ]
 
@@ -1063,6 +1539,8 @@ def main() -> int:
         f"kontrolę semantyczną protokołu i {len(mismatches)} par miało status MISMATCH "
         f"na {runs[0].total_query_pairs}.",
     ]
+    if degenerate_note:
+        md += ["", degenerate_note]
     if mismatches:
         md += [
             "Wszystkie MISMATCH mają sygnaturę wcześniej niezależnie zweryfikowanej klasy "
@@ -1076,8 +1554,29 @@ def main() -> int:
         md.append("Nie wystąpił żaden MISMATCH Q4.")
     md.append("")
 
+    # Only the repeatability narrative, not the whole series report. Writing the full
+    # `md` here made this file a byte-exact prefix of `thesis-report-series.md` — 60 kB
+    # of duplicate under a name that promises one section, which is both misleading and
+    # a place for the two copies to drift apart.
     repeatability_path = out_dir / "repeatability.md"
-    repeatability_path.write_text("\n".join(md), encoding="utf-8")
+    repeatability_start = md.index("## Powtarzalność median Q2")
+    repeatability_end = md.index("## Q1 — import między przebiegami")
+    repeatability_path.write_text(
+        "\n".join(
+            [
+                "# Powtarzalność median Q2 między przebiegami",
+                "",
+                f"- Przebiegi: {', '.join(run.name for run in runs)}",
+                f"- Commit mierzony: `{reference_signature['gitCommit']}`",
+                "",
+                "Pełny raport serii wraz z werdyktami: `thesis-report-series.md`.",
+                "",
+                *md[repeatability_start:repeatability_end],
+            ],
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     base_details = base_report_text.split("\n", 1)[1].lstrip() if base_report_text.startswith("# ") else base_report_text
     base_details = base_details.replace(
         "Niniejszy raport zawiera wyłącznie wyniki jednego przebiegu benchmarku.",

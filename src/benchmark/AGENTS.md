@@ -76,7 +76,7 @@ Before collecting thesis results:
 METODOLOGIA §5 requires **at least three** valid FULL runs on one clean Git
 commit, with declared/reversed/random dataset order; the random block uses the
 preregistered seed `20260728`. Final evidence uses
-`benchmarkProtocolVersion=9`; versions before 2 have a weaker collection-time
+`benchmarkProtocolVersion=10`; versions before 2 have a weaker collection-time
 parity check, while version 2 also accumulated every dataset in both databases
 and can exhaust a shared Docker VM. Version 3 keeps only one measured dataset
 pair live at a time. Version 4 additionally performs an unrecorded activation
@@ -95,6 +95,8 @@ budget, after the former ceiling rejected the Hospital round-trip export.
 Version 9 extends the post-idle activation from 10 to 200 complete query rounds:
 the first complete v8 block had broad LOCAL drift (Q3 ×1.36) because the first
 replicate dataset remained slower after the 60-second idle window.
+Version 10 builds LOCAL once for a final series and requires every later
+fresh-volume block and isolated storage point to reuse that exact image ID.
 Rebuilding a report never upgrades a run's protocol.
 A thesis-grade memory run
 must contain `processm-interpreter`, `processm-neo4j`, and `processm-server`
@@ -238,6 +240,25 @@ Each run must create an immutable directory under
 Generated datasets and detailed mismatch files may also be retained when useful.
 Do not commit generated benchmark results unless the task explicitly requests a
 reviewable thesis result snapshot.
+
+The per-run contract above intentionally does **not** include
+`storage-scaling.csv`: only the median-metric anchor receives the isolated Q3
+probe, and the series must be comparable before that anchor can be selected.
+A final series directory at the anchor additionally preserves:
+
+- `repeatability.csv` / `repeatability.md`
+- `series-comparison.csv` / `series-cell-stability.csv`
+- `series-import.csv` / `series-import-comparison.csv`
+- `series-scaling.csv` / `series-scaling-exploratory.csv`
+- `report-provenance.json`
+- `storage-scaling.csv`
+- `thesis-report-series.md` / `thesis-tables-series.tex`
+- `thesis-report.html` after the final renderer step
+
+`render-report-html.py` must reject a purported final series if any of these
+analysis/provenance artifacts or the isolated storage probe is absent. Do not
+add `storage-scaling.csv` to `compare-runs.py`'s per-run `REQUIRED_FILES`: doing
+so would make the two non-anchor runs invalid and prevent selecting the anchor.
 
 Interpret query performance primarily with median and Q1–Q3. Do not interpret
 p95 below 200 samples; the FULL profile has 30. Keep mean, min, max, sample

@@ -6,6 +6,7 @@ from __future__ import annotations
 from pathlib import Path
 import csv
 import json
+import runpy
 import subprocess
 import sys
 import tempfile
@@ -13,6 +14,8 @@ import unittest
 
 
 SCRIPT = Path(__file__).with_name("compare-runs.py")
+RENDER_SCRIPT = Path(__file__).with_name("render-report-html.py")
+COMPARE_FUNCTIONS = runpy.run_path(str(SCRIPT))
 RANDOM_SEED = 20260728
 MIB = 1024 * 1024
 
@@ -205,6 +208,46 @@ def make_run(root: Path, name: str, order: str, seed: int = RANDOM_SEED) -> Path
     return run
 
 
+def set_memory_totals(
+    run: Path,
+    local_mib: float,
+    reference_mib: float,
+    local_peak_mib: float,
+    reference_peak_mib: float,
+) -> None:
+    path = run / "memory-summary.csv"
+    with path.open(encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    for row in rows:
+        if row["component"] == "local-total":
+            row["medianBytes"] = str(int(local_mib * MIB))
+            row["peakBytes"] = str(int(local_peak_mib * MIB))
+        elif row["component"] == "reference-total":
+            row["medianBytes"] = str(int(reference_mib * MIB))
+            row["peakBytes"] = str(int(reference_peak_mib * MIB))
+    write_csv(path, list(rows[0]), rows)
+
+
+class CompareRunsClassificationTest(unittest.TestCase):
+    def test_direction_verdict_uses_the_smallest_paired_effect(self) -> None:
+        classify = COMPARE_FUNCTIONS["classify_ratios"]
+        self.assertEqual(("LOCAL", 1.5, "SUPPORTED"), classify([2.0, 1.5, 1.8], 1.25))
+        self.assertEqual(
+            ("REFERENCE", 1.25, "BELOW_MEASUREMENT_ERROR"),
+            classify([0.5, 0.8, 0.6], 1.30),
+        )
+        self.assertEqual(("UNRESOLVED", 1.0, "DIRECTION_CHANGES"), classify([0.9, 1.2], 1.1))
+
+    def test_magnitude_instability_is_diagnostic_not_a_direction_verdict(self) -> None:
+        diagnose = COMPARE_FUNCTIONS["magnitude_diagnostic"]
+        spread, max_iqr, stability = diagnose([1.75, 30.40, 29.68], [1.1, 18.0, 1.2])
+        self.assertAlmostEqual(30.40 / 1.75, spread)
+        self.assertEqual(18.0, max_iqr)
+        self.assertEqual("UNSTABLE_MAGNITUDE", stability)
+        classify = COMPARE_FUNCTIONS["classify_ratios"]
+        self.assertEqual(("LOCAL", 1.75, "SUPPORTED"), classify([1.75, 30.40, 29.68], 1.21))
+
+
 class CompareRunsEndToEndTest(unittest.TestCase):
     def test_valid_series_writes_polish_final_report(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -220,11 +263,80 @@ class CompareRunsEndToEndTest(unittest.TestCase):
             self.assertTrue(report.startswith("# Analiza serii kontrbalansowanych przebiegów"))
             self.assertIn("powtarzalny ponad błędem", report)
             self.assertIn("stabilny wzrost ponad błędem", report)
+            self.assertIn("Efekt konserwatywny", report)
+            self.assertIn("eksploracyjne skalowanie poza predeklarowanym kontraktem", report)
             self.assertIn("# Szczegóły diagnostyczne bloku kotwiczącego", report)
             self.assertIn("Poniższa część zawiera wyłącznie wyniki przebiegu kotwiczącego.", report)
             self.assertNotIn("Niniejszy raport zawiera wyłącznie wyniki jednego przebiegu benchmarku.", report)
             self.assertTrue((output / "series-scaling.csv").is_file())
+            self.assertTrue((output / "series-scaling-exploratory.csv").is_file())
+            self.assertTrue((output / "series-cell-stability.csv").is_file())
+            self.assertTrue((output / "report-provenance.json").is_file())
             self.assertTrue((output / "thesis-tables-series.tex").is_file())
+
+    def test_memory_direction_below_cross_run_spread_remains_unresolved(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            runs = [make_run(root, f"run-{order}", order) for order in ("declared", "reversed", "random")]
+            for run, values in zip(
+                runs,
+                ((2497.0, 2415.0, 2900.0, 2450.0),
+                 (2415.0, 2250.0, 2850.0, 2440.0),
+                 (2402.0, 1765.0, 2800.0, 2430.0)),
+            ):
+                set_memory_totals(run, *values)
+            output = root / "combined"
+            result = subprocess.run(
+                [sys.executable, str(SCRIPT), *(str(run) for run in runs), "--out-dir", str(output)],
+                text=True, capture_output=True, check=False,
+            )
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            report = (output / "thesis-report-series.md").read_text(encoding="utf-8")
+            self.assertIn("Q3-pamięć: nierozstrzygnięte — kierunek poniżej błędu pomiaru", report)
+            self.assertIn("Nie są estymacją minimalnej wymaganej pamięci", report)
+
+    def test_final_renderer_rejects_series_without_isolated_storage_probe(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            runs = [make_run(root, f"run-{order}", order) for order in ("declared", "reversed", "random")]
+            anchor = runs[1]
+            compare = subprocess.run(
+                [sys.executable, str(SCRIPT), *(str(run) for run in runs), "--out-dir", str(anchor)],
+                text=True, capture_output=True, check=False,
+            )
+            self.assertEqual(0, compare.returncode, compare.stdout + compare.stderr)
+            render = subprocess.run(
+                [sys.executable, str(RENDER_SCRIPT), str(anchor)],
+                text=True, capture_output=True, check=False,
+            )
+            self.assertNotEqual(0, render.returncode)
+            self.assertIn("storage-scaling.csv", render.stdout + render.stderr)
+
+    def test_final_renderer_rejects_invalid_generator_provenance(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            runs = [make_run(root, f"run-{order}", order) for order in ("declared", "reversed", "random")]
+            anchor = runs[1]
+            compare = subprocess.run(
+                [sys.executable, str(SCRIPT), *(str(run) for run in runs), "--out-dir", str(anchor)],
+                text=True, capture_output=True, check=False,
+            )
+            self.assertEqual(0, compare.returncode, compare.stdout + compare.stderr)
+            write_csv(
+                anchor / "storage-scaling.csv",
+                ["measurementMode"],
+                [{"measurementMode": "isolated-fresh-stack"}],
+            )
+            provenance_path = anchor / "report-provenance.json"
+            provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+            provenance["generatorGitCommit"] = None
+            provenance_path.write_text(json.dumps(provenance), encoding="utf-8")
+            render = subprocess.run(
+                [sys.executable, str(RENDER_SCRIPT), str(anchor)],
+                text=True, capture_output=True, check=False,
+            )
+            self.assertNotEqual(0, render.returncode)
+            self.assertIn("generatorGitCommit", render.stdout + render.stderr)
 
     def test_random_block_with_unregistered_seed_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
