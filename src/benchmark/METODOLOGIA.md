@@ -59,10 +59,10 @@ dyskwalifikuje przebieg:
    `mem_limit`, więc swap nie rozszerza żadnego budżetu. Przy zarejestrowanym
    budżecie VM 7936 MiB pozostaje 1280 MiB (16,1%) dla systemu VM i Dockera.
    Jest to jawna decyzja eksperymentalna: LOCAL musi podzielić swój równy budżet
-   między dwie usługi, bo taki jest koszt jego architektury. Wcześniejszy wariant
-   `unlimited` nie był neutralny — trzy JVM reklamowały łącznie ponad 14 GiB sterty
-   w VM 7,75 GiB i pełny blok `20260801-145312` zakończył się ubiciem JVM
-   REFERENCE przez OOM. Każdy przebieg zapisuje faktyczne limity, efektywne sterty,
+   między dwie usługi, bo taki jest koszt jego architektury. Konfiguracja
+   `unlimited` nie jest tu neutralna: przy trzech JVM reklamujących łącznie ponad
+   14 GiB sterty w VM o 7,75 GiB pomiar trafia w przepełnienie pamięci maszyny
+   wirtualnej zamiast w koszt workloadu. Każdy przebieg zapisuje faktyczne limity, efektywne sterty,
    `OOMKilled`, `RestartCount` i obecność procesów JVM; OOM, restart lub brak JVM
    unieważnia blok.
 5. **Świeży stan dla pomiarów storage.** Finalne pomiary rozmiaru bazy
@@ -102,7 +102,7 @@ podzbioru; wyniki do pracy pochodzą wyłącznie z profilu FULL.
 
 Górny punkt osi trace wynosi 20 000, ponieważ oficjalny obraz REFERENCE odrzuca
 plik 50 000×10×5 odpowiedzią HTTP 400 „The file is not a valid XES file” także
-w izolowanej próbie na pustym stosie (`20260801-122052`, bez OOM). Plik przechodzi
+w izolowanej próbie na pustym stosie, bez OOM. Plik przechodzi
 lokalny parser i ma poprawną strukturę XML, ale punkt spoza wspólnej dziedziny
 importu obu aplikacji nie może być użyty do porównania czasu. Ograniczenie jest
 cechą badanego zestawu aplikacja+wersja obrazu, a nie podstawą do przypisania
@@ -420,22 +420,11 @@ specyfikacją PQL”.
    zera, aby drugi blok nie dziedziczył stron, WAL ani cache danych z pierwszego.
    Po sprzątaniu runner ponownie odczytuje stan wszystkich kontenerów i obecność
    procesów JVM; działający PID 1 lub wadliwy healthcheck nie zastępuje tej kontroli.
-8. **Finalny eksperyment zawiera co najmniej trzy ważne bloki FULL** na tej samej
-   wersji. Bieżący kontrakt zapisu ma `benchmarkProtocolVersion=10`; wersje poniżej
-   2 nie mają pełnej kontroli semantycznej, a wersja 2 kumuluje wszystkie datasety
-   w pamięci baz i może mierzyć presję wspólnej VM zamiast bieżącego workloadu.
-   Wersja 3 izoluje datasety, lecz nie kompensuje wychłodzenia przez pomiar `idle`;
-   wersja 4 aktywuje tylko zapytania na datastore utworzonym przed baseline'em,
-   pozostawiając pierwszy świeży import w pozycji wyjątkowej; wersja 5 dodaje
-   pełny cykl świeżego importu i kasowania, wersja 6 precyzuje odporną bramkę
-   szerokiej niestabilności Q2 opisaną niżej, wersja 7 wprowadza skończony,
-   równy budżet pamięci całych aplikacji, końcową kontrolę OOM/JVM i 200 rund
-   globalnej rozgrzewki, a wersja 8 podnosi limit pamięci pojedynczej transakcji
-   Neo4j z 256 do 512 MiB bez zmiany budżetu cgroup całej aplikacji LOCAL;
-   wersja 9 zwiększa aktywację po 60-sekundowym oknie idle z 10 do 200 rund, a
-   wersja 10 buduje LOCAL raz na serię i przy każdym kolejnym świeżym stacku
-   wymaga ponownego użycia dokładnie tego samego obrazu.
-   Żadna z wcześniejszych wersji nie jest finalnym dowodem. `compare-runs.py` waliduje kompletność macierzy, 30 repetycji,
+8. **Finalny eksperyment zawiera co najmniej trzy ważne bloki FULL** zebrane na tej
+   samej wersji protokołu. Wersja jest zapisywana w każdym przebiegu jako
+   `benchmarkProtocolVersion`; dowodem w pracy są wyłącznie przebiegi zebrane
+   protokołem opisanym w tym dokumencie, a przebieg o innej wersji jest odrzucany
+   przez walidację, a nie interpretowany. `compare-runs.py` waliduje kompletność macierzy, 30 repetycji,
    roundtrip, sprzątanie, pamięć, środowisko, fingerprint i trzy wymagane kolejności. Skrypt
    nie wybiera „reprezentatywnego wyniku”: wszystkie bloki są jednostkami dowodu.
    Jeden środkowy blok jest wskazywany jedynie jako kotwica dla szczegółowych
@@ -503,27 +492,7 @@ specyfikacją PQL”.
    różnica poniżej 2 ms może dać iloraz ×1,4. Użycie go jednocześnie jako bramki
    całego bloku i per-zapytaniowego flooru liczyłoby ten sam lokalny problem
    podwójnie. Górny kwartyl odrzuca **szeroki** dryf protokołu, a maksimum nadal
-   konserwatywnie ogranicza wniosek o konkretnym zapytaniu. W diagnostyce przed
-   serią finalną protokół v4 dawał Q3 ×1,26 (max ×1,40), natomiast pełny
-   cykl aktywacyjny v5 obniżył Q3 do ×1,20 (max ×1,39); brak globalnej rozgrzewki
-   dawał maksimum do ×2,37 (Q2) i ×10,43 (Q1). Były to jednak diagnostyki
-   zawierające wyłącznie trzy sąsiadujące replikaty. Pierwszy kompletny blok v6
-   (`20260801-145312`) wykazał, że 40 rund nadal nie obejmuje horyzontu pełnej
-   sekwencji: Q3 wyniosło ×1,57, a dla LOCAL mediana ilorazów 14 zapytań
-   `trace-100/event-10` wyniosła ×1,404 i `trace-100/attr-5` ×1,555, podczas gdy
-   późniejsze `event-10/attr-5` miało ×1,118 (maks. ×1,234). Ten sam blok ujawnił
-   OOM JVM REFERENCE po ostatnim mierzonym datasetcie. Z tego powodu v7 zwiększa
-   rozgrzewkę i wymusza budżety/stan runtime. Diagnostyczny przebieg v7
-   (`20260801-162538`) potwierdził brak OOM i obniżył Q3 do ×1,15, lecz jego
-   limit transakcji Neo4j 256 MiB przerwał eksport XES zbioru Hospital po
-   osiągnięciu 254,5 MiB; v8 podnosi ten sufit do 512 MiB w niezmienionym
-   budżecie LOCAL 3,25 GiB. Pierwszy kompletny blok v8 (`20260801-170734`)
-   zakończył się technicznie poprawnie, ale po 10 rundach aktywacyjnych nadal
-   wykazał szeroki dryf LOCAL: Q3 ×1,36 (maks. ×1,58), przy czym 13 z 14
-   najgorszych rozrzutów zapytań dotyczyło LOCAL, a pierwszy `trace-100` był
-   systematycznie wolniejszy od identycznych `event-10` i `attr-5`. Protokół v9
-   wykonuje po idle pełne 200 rund; nie rozluźnia progu jakości ×1,25. Wersje
-   v6–v8 nie są dopuszczane do serii finalnej.
+   konserwatywnie ogranicza wniosek o konkretnym zapytaniu.
    Niezależnie od bramki każdy
    zaakceptowany efekt musi przekroczyć faktycznie zmierzony floor swojej
    metryki, także wtedy, gdy jest on znacznie mniejszy lub większy niż ×1,25.
