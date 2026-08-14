@@ -151,6 +151,7 @@ internal class CypherExpressionRenderer(
 
     private fun renderRegularBinaryOp(e: PqlExpression.Binary, s: CypherBuildState): String {
         val left = render(e.left, s)
+        renderSimpleLike(e, left, s)?.let { return it }
         val right = renderBinaryRightOperand(e, s)
 
         return when (e.op) {
@@ -177,6 +178,69 @@ internal class CypherExpressionRenderer(
             // pattern to search anywhere. `(?s)` lets the wrap cross newlines;
             // explicit ^/$ anchors inside the pattern keep working.
             BinaryOperator.MATCHES_REGEX -> "$left =~ ('(?s).*(?:' + $right + ').*')"
+        }
+    }
+
+    private fun renderSimpleLike(
+        e: PqlExpression.Binary,
+        left: String,
+        s: CypherBuildState,
+    ): String? {
+        val pattern = likePatternLiteral(e) ?: return null
+        val parsed = parseSimpleLikePattern(pattern) ?: return null
+        val parameter = "\$${s.bindParam(parsed.literal)}"
+        val predicate = when (parsed.operator) {
+            SimpleLikeOperator.EQUALS -> "$left = $parameter"
+            SimpleLikeOperator.STARTS_WITH -> "$left STARTS WITH $parameter"
+            SimpleLikeOperator.ENDS_WITH -> "$left ENDS WITH $parameter"
+            SimpleLikeOperator.CONTAINS -> "$left CONTAINS $parameter"
+        }
+        return if (e.op == BinaryOperator.NOT_LIKE) "NOT ($predicate)" else predicate
+    }
+
+    /**
+     * Lowers only patterns whose wildcard shape has a direct Cypher string
+     * operator. Internal `%` segments and `_` retain the regex fallback.
+     */
+    private fun parseSimpleLikePattern(pattern: String): SimpleLikePattern? {
+        val parts = mutableListOf(StringBuilder())
+        var previousWasWildcard = false
+        var i = 0
+        while (i < pattern.length) {
+            val c = pattern[i]
+            when {
+                c == '\\' && i + 1 < pattern.length -> {
+                    val next = pattern[i + 1]
+                    if (next != '%' && next != '_') parts.last().append('\\')
+                    parts.last().append(next)
+                    previousWasWildcard = false
+                    i += 2
+                }
+                c == '%' -> {
+                    if (!previousWasWildcard) parts += StringBuilder()
+                    previousWasWildcard = true
+                    i++
+                }
+                c == '_' -> return null
+                else -> {
+                    parts.last().append(c)
+                    previousWasWildcard = false
+                    i++
+                }
+            }
+        }
+
+        return when {
+            parts.size == 1 -> SimpleLikePattern(SimpleLikeOperator.EQUALS, parts.single().toString())
+            parts.size == 2 && parts.first().isEmpty() && parts.last().isEmpty() ->
+                SimpleLikePattern(SimpleLikeOperator.CONTAINS, "")
+            parts.size == 2 && parts.last().isEmpty() ->
+                SimpleLikePattern(SimpleLikeOperator.STARTS_WITH, parts.first().toString())
+            parts.size == 2 && parts.first().isEmpty() ->
+                SimpleLikePattern(SimpleLikeOperator.ENDS_WITH, parts.last().toString())
+            parts.size == 3 && parts.first().isEmpty() && parts.last().isEmpty() ->
+                SimpleLikePattern(SimpleLikeOperator.CONTAINS, parts[1].toString())
+            else -> null
         }
     }
 
@@ -225,6 +289,18 @@ internal class CypherExpressionRenderer(
         if (e.op != BinaryOperator.LIKE && e.op != BinaryOperator.NOT_LIKE) return null
         val literal = e.right as? PqlExpression.Literal ?: return null
         return literal.value as? String
+    }
+
+    private data class SimpleLikePattern(
+        val operator: SimpleLikeOperator,
+        val literal: String,
+    )
+
+    private enum class SimpleLikeOperator {
+        EQUALS,
+        STARTS_WITH,
+        ENDS_WITH,
+        CONTAINS,
     }
 
     private fun isEqualityOperator(operator: BinaryOperator): Boolean =

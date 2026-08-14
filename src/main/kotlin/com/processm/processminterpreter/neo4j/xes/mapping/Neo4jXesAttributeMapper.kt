@@ -5,6 +5,7 @@ import com.processm.processminterpreter.xes.model.XesLog
 import com.processm.processminterpreter.xes.model.XesTrace
 import com.processm.processminterpreter.pql.catalog.Scope
 import com.processm.processminterpreter.pql.catalog.StandardAttributeCatalog
+import com.processm.processminterpreter.neo4j.xes.schema.Neo4jXesCustomAttributeCodec
 import com.processm.processminterpreter.neo4j.xes.schema.Neo4jXesSchema
 import org.springframework.stereotype.Component
 import java.time.LocalDateTime
@@ -13,14 +14,14 @@ import java.time.ZoneOffset
 @Component
 class Neo4jXesAttributeMapper {
     fun logAttributes(log: XesLog): Map<String, Any?> = buildMap {
-        putAll(log.customAttributes)
+        putCustom(Scope.LOG, log.customAttributes)
         log.conceptName?.let { putPhysical(Scope.LOG, StandardAttributeCatalog.CONCEPT_NAME, it) }
         log.identityId?.let { putPhysical(Scope.LOG, StandardAttributeCatalog.IDENTITY_ID, it.toString()) }
         log.lifecycleModel?.let { put(StandardAttributeCatalog.LIFECYCLE_MODEL, it) }
     }
 
     fun traceAttributes(trace: XesTrace): Map<String, Any?> = buildMap {
-        putAll(trace.customAttributes)
+        putCustom(Scope.TRACE, trace.customAttributes)
         trace.conceptName?.let { putPhysical(Scope.TRACE, StandardAttributeCatalog.CONCEPT_NAME, it) }
         trace.identityId?.let { putPhysical(Scope.TRACE, StandardAttributeCatalog.IDENTITY_ID, it.toString()) }
         trace.costCurrency?.let { putPhysical(Scope.TRACE, StandardAttributeCatalog.COST_CURRENCY, it) }
@@ -28,7 +29,7 @@ class Neo4jXesAttributeMapper {
     }
 
     fun eventAttributes(event: XesEvent): Map<String, Any?> = buildMap {
-        putAll(event.customAttributes)
+        putCustom(Scope.EVENT, event.customAttributes)
         event.conceptName?.let { putPhysical(Scope.EVENT, StandardAttributeCatalog.CONCEPT_NAME, it) }
         event.conceptInstance?.let { putPhysical(Scope.EVENT, StandardAttributeCatalog.CONCEPT_INSTANCE, it) }
         event.identityId?.let { putPhysical(Scope.EVENT, StandardAttributeCatalog.IDENTITY_ID, it.toString()) }
@@ -47,5 +48,11 @@ class Neo4jXesAttributeMapper {
 
     private fun MutableMap<String, Any?>.putPhysical(scope: Scope, canonicalName: String, value: Any?) {
         put(Neo4jXesSchema.physicalName(scope, canonicalName), value)
+    }
+
+    private fun MutableMap<String, Any?>.putCustom(scope: Scope, attributes: Map<String, Any?>) {
+        attributes.forEach { (xesName, value) ->
+            put(Neo4jXesCustomAttributeCodec.physicalName(scope, xesName), value)
+        }
     }
 }

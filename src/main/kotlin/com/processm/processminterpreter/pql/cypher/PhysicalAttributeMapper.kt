@@ -3,6 +3,7 @@ package com.processm.processminterpreter.pql.cypher
 import com.processm.processminterpreter.pql.catalog.AttributeKind
 import com.processm.processminterpreter.pql.catalog.Scope
 import com.processm.processminterpreter.pql.ast.PqlExpression
+import com.processm.processminterpreter.neo4j.xes.schema.Neo4jXesCustomAttributeCodec
 import com.processm.processminterpreter.neo4j.xes.schema.Neo4jXesSchema
 import org.springframework.stereotype.Component
 
@@ -31,7 +32,8 @@ data class PropertyRef(
  *  - explicit columns (`event.activity`, `event.timestamp`, `event.resource`),
  *  - hybrid columns written via `SET node += attributes` that keep XES colons
  *    (`trace.`cost:total``, `event.`cost:currency``),
- *  - pure custom attributes stored with their raw PQL name.
+ *  - pure custom attributes, reversibly encoded when their names collide with
+ *    standard or structural properties,
  *  - system attributes (`l:logId`) exposed by the query model.
  *
  * Pure data, no Neo4j session access. Safe to unit-test against any plan.
@@ -44,7 +46,8 @@ class PhysicalAttributeMapper {
     fun map(attr: PqlExpression.Attribute, nodeVar: String): PropertyRef {
         val propertyName = when (attr.kind) {
             AttributeKind.STANDARD -> neo4jPropertyFor(attr.effectiveScope, attr.xesStandardName ?: attr.name)
-            AttributeKind.CUSTOM -> attr.name
+            AttributeKind.CUSTOM ->
+                Neo4jXesCustomAttributeCodec.expressionPhysicalName(attr.baseScope, attr.name)
             AttributeKind.CLASSIFIER -> attr.name
             AttributeKind.SYSTEM -> attr.name
         }

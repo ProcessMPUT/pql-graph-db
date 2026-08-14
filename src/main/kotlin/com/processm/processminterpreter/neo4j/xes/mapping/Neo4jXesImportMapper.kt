@@ -8,6 +8,7 @@ import com.processm.processminterpreter.pql.catalog.Scope
 import com.processm.processminterpreter.pql.catalog.StandardAttributeCatalog
 import com.processm.processminterpreter.neo4j.xes.metadata.XesLogMetadataCodec
 import com.processm.processminterpreter.neo4j.xes.schema.Neo4jXesSchema
+import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Component
 import java.time.Instant
 import java.time.LocalDateTime
@@ -21,6 +22,8 @@ import java.util.UUID
 @Component
 class Neo4jXesImportMapper(
     private val attributes: Neo4jXesAttributeMapper = Neo4jXesAttributeMapper(),
+    @param:Value("\${processm.neo4j.persist-follows:false}")
+    private val persistFollows: Boolean = false,
 ) {
     fun toImportBatch(
         log: XesLog,
@@ -36,7 +39,7 @@ class Neo4jXesImportMapper(
             logId = logId,
             logName = log.conceptName ?: "Unnamed Log",
             importedAt = importedAt,
-            logAttributes = Neo4jPropertySanitizer.sanitizeAttributes(attributes.logAttributes(log)),
+            logAttributes = attributePayload(Scope.LOG, attributes.logAttributes(log)),
             classifiers = XesLogMetadataCodec.serializeClassifiers(log.classifiers),
             traceGlobals = XesLogMetadataCodec.serializeGlobals(log.traceGlobals),
             eventGlobals = XesLogMetadataCodec.serializeGlobals(log.eventGlobals),
@@ -47,7 +50,7 @@ class Neo4jXesImportMapper(
                 Neo4jXesTraceBatch(
                     traces = traceRows(traceBatch, importedAt),
                     events = eventRows(traceBatch, importedAt),
-                    follows = followRows(traceBatch, importedAt),
+                    follows = if (persistFollows) followRows(traceBatch, importedAt) else emptyList(),
                 )
             },
         )
@@ -186,9 +189,11 @@ class Neo4jXesImportMapper(
         fun eventId(traceId: String, index: Int): String =
             "$traceId-event-${index + 1}"
 
-        val TRACE_ID_PROPERTY: String = Neo4jXesSchema.physicalName(Scope.TRACE, StandardAttributeCatalog.IDENTITY_ID)
+        /* Generated storage keys, not the XES `identity:id` of the trace/event. */
+        const val TRACE_ID_PROPERTY: String = Neo4jXesSchema.TRACE_ID_PROPERTY
+        const val EVENT_ID_PROPERTY: String = Neo4jXesSchema.EVENT_ID_PROPERTY
+
         val TRACE_NAME_PROPERTY: String = Neo4jXesSchema.physicalName(Scope.TRACE, StandardAttributeCatalog.CONCEPT_NAME)
-        val EVENT_ID_PROPERTY: String = Neo4jXesSchema.physicalName(Scope.EVENT, StandardAttributeCatalog.IDENTITY_ID)
         val EVENT_NAME_PROPERTY: String = Neo4jXesSchema.physicalName(Scope.EVENT, StandardAttributeCatalog.CONCEPT_NAME)
         val EVENT_TIMESTAMP_PROPERTY: String = Neo4jXesSchema.physicalName(Scope.EVENT, StandardAttributeCatalog.TIME_TIMESTAMP)
         val EVENT_RESOURCE_PROPERTY: String = Neo4jXesSchema.physicalName(Scope.EVENT, StandardAttributeCatalog.ORG_RESOURCE)

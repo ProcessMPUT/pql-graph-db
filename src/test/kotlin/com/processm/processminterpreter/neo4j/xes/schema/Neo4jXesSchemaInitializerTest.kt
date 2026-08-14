@@ -53,6 +53,7 @@ class Neo4jXesSchemaInitializerTest {
                 YIELD name, type, labelsOrTypes, properties
                 WHERE name IN [
                     'log_logId_unique',
+                    'importing_logId_unique',
                     'trace_traceId_unique',
                     'event_eventId_unique',
                     'datastore_dataStoreId_unique'
@@ -70,12 +71,25 @@ class Neo4jXesSchemaInitializerTest {
             assertEquals(
                 mapOf(
                     "log_logId_unique" to ConstraintSpec("UNIQUENESS", "Log", "logId"),
+                    "importing_logId_unique" to ConstraintSpec("UNIQUENESS", "ImportingLog", "logId"),
                     "trace_traceId_unique" to ConstraintSpec("UNIQUENESS", "Trace", "traceId"),
                     "event_eventId_unique" to ConstraintSpec("UNIQUENESS", "Event", "eventId"),
                     "datastore_dataStoreId_unique" to ConstraintSpec("UNIQUENESS", "DataStore", "dataStoreId"),
                 ),
                 constraints,
             )
+
+            val traceWindowIndex = session.run(
+                """
+                SHOW INDEXES
+                YIELD name, type, labelsOrTypes, properties
+                WHERE name = 'trace_parent_import_order'
+                RETURN type, labelsOrTypes, properties
+                """.trimIndent(),
+            ).single()
+            assertEquals("RANGE", traceWindowIndex["type"].asString())
+            assertEquals(listOf("Trace"), traceWindowIndex["labelsOrTypes"].asList { it.asString() })
+            assertEquals(listOf("parentLogId", "importOrder"), traceWindowIndex["properties"].asList { it.asString() })
         }
     }
 
@@ -96,6 +110,28 @@ class Neo4jXesSchemaInitializerTest {
             }
 
             assertEquals("Neo.ClientError.Schema.ConstraintValidationFailed", error.code())
+        }
+    }
+
+    @Test
+    fun `schema initialization fails when a required uniqueness constraint cannot be created`() {
+        Neo4jXesSchemaInitializer(driver).ensureIndexes()
+        driver.session().use { session ->
+            session.run("DROP CONSTRAINT importing_logId_unique IF EXISTS").consume()
+            session.run(
+                "CREATE (:ImportingLog {logId: 'duplicate'}), (:ImportingLog {logId: 'duplicate'})",
+            ).consume()
+        }
+
+        try {
+            assertFailsWith<Neo4jException> {
+                Neo4jXesSchemaInitializer(driver).ensureIndexes()
+            }
+        } finally {
+            driver.session().use { session ->
+                session.run("MATCH (log:ImportingLog) DETACH DELETE log").consume()
+            }
+            Neo4jXesSchemaInitializer(driver).ensureIndexes()
         }
     }
 

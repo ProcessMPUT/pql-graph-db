@@ -128,6 +128,86 @@ class CypherCodegenTest {
     }
 
     @Test
+    fun `simple LIKE literals use native Cypher string operators instead of regex`() {
+        val name = stdAttr(Scope.EVENT, "concept:name")
+        val cases = listOf(
+            "%zzq%" to "event.activity CONTAINS \$param0",
+            "prefix%" to "event.activity STARTS WITH \$param0",
+            "%suffix" to "event.activity ENDS WITH \$param0",
+            "exact" to "event.activity = \$param0",
+        )
+
+        cases.forEach { (pattern, expected) ->
+            val filter = PqlExpression.Binary(
+                BinaryOperator.LIKE,
+                name,
+                PqlExpression.Literal(
+                    rawText = pattern,
+                    kind = PqlExpression.LiteralKind.STRING,
+                    value = pattern,
+                    type = Type.STRING,
+                    location = loc,
+                ),
+                Type.BOOLEAN,
+                loc,
+            )
+            val query = codegen.generate(selectPlan(listOf(ProjectedColumn(name, "name", Scope.EVENT)), filter))
+
+            assertTrue(query.cypher.contains(expected), query.cypher)
+            assertTrue(!query.cypher.contains("=~"), query.cypher)
+        }
+    }
+
+    @Test
+    fun `complex LIKE patterns retain regex fallback and escaping semantics`() {
+        val name = stdAttr(Scope.EVENT, "concept:name")
+        val patterns = listOf("a%b%c", "under_score", "a\\\\%b%c")
+
+        patterns.forEach { pattern ->
+            val filter = PqlExpression.Binary(
+                BinaryOperator.LIKE,
+                name,
+                PqlExpression.Literal(
+                    rawText = pattern,
+                    kind = PqlExpression.LiteralKind.STRING,
+                    value = pattern,
+                    type = Type.STRING,
+                    location = loc,
+                ),
+                Type.BOOLEAN,
+                loc,
+            )
+            val query = codegen.generate(selectPlan(listOf(ProjectedColumn(name, "name", Scope.EVENT)), filter))
+
+            assertTrue(query.cypher.contains("event.activity =~ \$param0"), query.cypher)
+        }
+    }
+
+    @Test
+    fun `NOT LIKE preserves null-aware negation when lowered to CONTAINS`() {
+        val name = stdAttr(Scope.EVENT, "concept:name")
+        val pattern = "%blocked%"
+        val filter = PqlExpression.Binary(
+            BinaryOperator.NOT_LIKE,
+            name,
+            PqlExpression.Literal(
+                rawText = pattern,
+                kind = PqlExpression.LiteralKind.STRING,
+                value = pattern,
+                type = Type.STRING,
+                location = loc,
+            ),
+            Type.BOOLEAN,
+            loc,
+        )
+
+        val query = codegen.generate(selectPlan(listOf(ProjectedColumn(name, "name", Scope.EVENT)), filter))
+
+        assertTrue(query.cypher.contains("NOT (event.activity CONTAINS \$param0)"), query.cypher)
+        assertEquals("blocked", query.parameters["param0"])
+    }
+
+    @Test
     fun `nested XES attribute equality compares string representations`() {
         val nested = customAttr(
             Scope.LOG,
@@ -655,7 +735,13 @@ class CypherCodegenTest {
 
         assertTrue(q.cypher.contains("MATCH (:DataStore {dataStoreId: \$dataStoreId})-[:CONTAINS_LOG]->(log:Log)"), q.cypher)
         assertTrue(q.cypher.contains("WITH log ORDER BY log.logId LIMIT \$logLimit"), q.cypher)
-        assertTrue(q.cypher.contains("WITH trace ORDER BY trace.importOrder LIMIT \$traceLimit"), q.cypher)
+        assertTrue(
+            q.cypher.contains(
+                "MATCH (trace:Trace {parentLogId: log.logId}) WHERE trace.importOrder IS NOT NULL" +
+                    " WITH trace ORDER BY trace.parentLogId, trace.importOrder LIMIT \$traceLimit",
+            ),
+            q.cypher,
+        )
         assertTrue(q.cypher.contains("ORDER BY _gb_0 ASC, _group_first_event_order_ LIMIT \$eventLimit"), q.cypher)
         assertTrue(
             q.cypher.contains("RETURN log.logId AS _logKey, trace, event, _event_order_0, _group_first_event_order_"),
@@ -777,8 +863,10 @@ class CypherCodegenTest {
         // the expansion must not aggregate every trace of a large log first.
         assertTrue(
             q.cypher.contains(
-                "CALL (log) { MATCH (log)-[:CONTAINS]->(trace:Trace)" +
-                    " WITH trace ORDER BY trace.importOrder LIMIT \$traceLimit RETURN trace }",
+                "CALL (log) { MATCH (trace:Trace {parentLogId: log.logId})" +
+                    " WHERE trace.importOrder IS NOT NULL" +
+                    " WITH trace ORDER BY trace.parentLogId, trace.importOrder" +
+                    " LIMIT \$traceLimit RETURN trace }",
             ),
             q.cypher,
         )
@@ -1613,7 +1701,7 @@ class CypherCodegenTest {
     }
 
     @Test
-    fun `DELETE FROM event emits DETACH DELETE`() {
+    fun `DELETE FROM event emits bounded target selection`() {
         val name = stdAttr(Scope.EVENT, "concept:name")
         val filter = PqlExpression.Binary(
             op = BinaryOperator.EQ,
@@ -1634,12 +1722,15 @@ class CypherCodegenTest {
         val c = q.cypher
         assertTrue(c.contains("MATCH (log:Log)"), c)
         assertTrue(c.contains("WHERE event.activity = \$param0"), c)
-        assertTrue(c.contains("DETACH DELETE event"), c)
+        assertTrue(c.contains("WITH DISTINCT event WHERE event IS NOT NULL"), c)
+        assertTrue(c.contains("RETURN event.eventId AS _deleteId"), c)
+        assertTrue(c.contains("LIMIT \$_deleteBatchSize"), c)
+        assertEquals(1000, q.parameters["_deleteBatchSize"])
         assertEquals("Trash", q.parameters["param0"])
     }
 
     @Test
-    fun `DELETE without filter emits DETACH DELETE over full MATCH`() {
+    fun `DELETE without filter emits unfiltered bounded target selection`() {
         val plan = LogicalPlan.Delete(
             source = LogicalSource(
                 fromScope = Scope.EVENT,
@@ -1651,8 +1742,10 @@ class CypherCodegenTest {
         )
         val q = codegen.generate(plan)
         val c = q.cypher
-        assertTrue(c.contains("DETACH DELETE event"), c)
-        assertTrue(!c.contains(" WHERE "), c)
+        assertTrue(c.contains("RETURN event.eventId AS _deleteId"), c)
+        assertTrue(c.contains("LIMIT \$_deleteBatchSize"), c)
+        assertTrue(c.contains("WHERE event IS NOT NULL"), c)
+        assertTrue(!c.contains("WHERE event.activity"), c)
     }
 
     @Test

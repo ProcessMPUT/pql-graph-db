@@ -176,7 +176,8 @@ internal class CypherHierarchyRenderer(
             emitLogLimit(s)
         }
 
-        s.cypher.append(" CALL (log) { MATCH (log)-[:CONTAINS]->(trace:Trace)")
+        s.cypher.append(" CALL (log) {")
+        emitIndexedTraceMatch(s)
         if (Scope.EVENT in filterScopes) {
             emitEventFilteredExpansion(s, filter!!, traceLimit, eventLimit)
         } else {
@@ -264,7 +265,8 @@ internal class CypherHierarchyRenderer(
         eventLimit: Long?,
         returnEvents: Boolean,
     ) {
-        s.cypher.append(" CALL (log) { MATCH (log)-[:CONTAINS]->(trace:Trace)")
+        s.cypher.append(" CALL (log) {")
+        emitIndexedTraceMatch(s)
         if (Scope.EVENT in filterScopes) {
             emitEventFilteredTraceSubquery(s, filter!!, traceLimit, eventLimit, returnEvents)
         } else {
@@ -281,9 +283,9 @@ internal class CypherHierarchyRenderer(
         returnEvents: Boolean,
     ) {
         if (filter != null && filterScopes.any { it != Scope.LOG }) {
-            s.cypher.append(" WHERE ").append(filterRenderer.renderWithHoisting(filter, s))
+            s.cypher.append(" AND (").append(filterRenderer.renderWithHoisting(filter, s)).append(')')
         }
-        s.cypher.append(" WITH trace ORDER BY ${traceOrder(s)}")
+        s.cypher.append(" WITH trace ORDER BY ${indexedTraceOrder(s)}")
         traceLimit?.let { s.cypher.append(" LIMIT ${'$'}traceLimit") }
         if (!returnEvents) {
             s.cypher.append(" RETURN trace }")
@@ -307,7 +309,7 @@ internal class CypherHierarchyRenderer(
         if (!returnEvents) {
             s.cypher.append(" RETURN count(event) > 0 AS _hasEvents }")
             s.cypher.append(" WITH trace WHERE _hasEvents")
-            s.cypher.append(" WITH trace ORDER BY ${traceOrder(s)}")
+            s.cypher.append(" WITH trace ORDER BY ${indexedTraceOrder(s)}")
             traceLimit?.let { s.cypher.append(" LIMIT ${'$'}traceLimit") }
             s.cypher.append(" RETURN trace }")
             return
@@ -316,7 +318,7 @@ internal class CypherHierarchyRenderer(
         eventLimit?.let { s.cypher.append(" LIMIT ${'$'}eventLimit") }
         s.cypher.append(" RETURN collect(event) AS _events }")
         s.cypher.append(" WITH trace, _events WHERE size(_events) > 0")
-        s.cypher.append(" WITH trace, _events ORDER BY ${traceOrder(s)}")
+        s.cypher.append(" WITH trace, _events ORDER BY ${indexedTraceOrder(s)}")
         traceLimit?.let { s.cypher.append(" LIMIT ${'$'}traceLimit") }
         s.cypher.append(" UNWIND _events AS event RETURN trace, event }")
     }
@@ -351,9 +353,9 @@ internal class CypherHierarchyRenderer(
         eventLimit: Long?,
     ) {
         if (filter != null && filterScopes.any { it != Scope.LOG }) {
-            s.cypher.append(" WHERE ").append(filterRenderer.renderWithHoisting(filter, s))
+            s.cypher.append(" AND (").append(filterRenderer.renderWithHoisting(filter, s)).append(')')
         }
-        s.cypher.append(" WITH trace ORDER BY ${traceOrder(s)}")
+        s.cypher.append(" WITH trace ORDER BY ${indexedTraceOrder(s)}")
         traceLimit?.let { s.cypher.append(" LIMIT ${'$'}traceLimit") }
 
         if (eventLimit == null) {
@@ -387,7 +389,7 @@ internal class CypherHierarchyRenderer(
         eventLimit?.let { s.cypher.append(" LIMIT ${'$'}eventLimit") }
         s.cypher.append(" RETURN collect(event) AS _events }")
         s.cypher.append(" WITH trace, _events WHERE size(_events) > 0")
-        s.cypher.append(" WITH trace, _events ORDER BY ${traceOrder(s)}")
+        s.cypher.append(" WITH trace, _events ORDER BY ${indexedTraceOrder(s)}")
         traceLimit?.let { s.cypher.append(" LIMIT ${'$'}traceLimit") }
         s.cypher.append(" UNWIND _events AS event RETURN trace, event }")
     }
@@ -404,6 +406,16 @@ internal class CypherHierarchyRenderer(
 
     private fun traceOrder(s: CypherBuildState): String =
         scopedOrder(s, Scope.TRACE, "trace.importOrder")
+
+    private fun indexedTraceOrder(s: CypherBuildState): String =
+        "trace.parentLogId, ${traceOrder(s)}"
+
+    private fun emitIndexedTraceMatch(s: CypherBuildState) {
+        s.cypher.append(
+            " MATCH (trace:Trace {parentLogId: log.logId})" +
+                " WHERE trace.importOrder IS NOT NULL",
+        )
+    }
 
     private fun logOrder(s: CypherBuildState): String =
         scopedOrder(s, Scope.LOG, defaultLogOrder(s))

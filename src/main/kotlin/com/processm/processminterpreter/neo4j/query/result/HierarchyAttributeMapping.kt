@@ -3,6 +3,7 @@ package com.processm.processminterpreter.neo4j.query.result
 import com.processm.processminterpreter.neo4j.property.NestedAttributePathCodec
 import com.processm.processminterpreter.pql.catalog.Scope
 import com.processm.processminterpreter.pql.cypher.ColumnAlias
+import com.processm.processminterpreter.neo4j.xes.schema.Neo4jXesCustomAttributeCodec
 import com.processm.processminterpreter.neo4j.xes.schema.Neo4jXesSchema
 
 internal data class ProjectedAttributeValue(
@@ -14,6 +15,7 @@ internal data class ProjectedAttributeValue(
 internal data class NodeAttributeValue(
     val physicalName: String,
     val xesName: String?,
+    val customKey: String?,
     val value: Any,
 )
 
@@ -45,10 +47,16 @@ internal fun Map<String, Any?>.nodeAttributes(
             if (value == null) continue
             if (NestedAttributePathCodec.isEncoded(physical)) continue
             if (Neo4jXesSchema.isStorageMetadata(scope, physical)) continue
+            val customXesName = Neo4jXesCustomAttributeCodec.xesName(scope, physical)
             yield(
                 NodeAttributeValue(
                     physicalName = physical,
-                    xesName = Neo4jXesSchema.inversePhysicalName(scope, physical),
+                    xesName = if (customXesName == null) {
+                        Neo4jXesSchema.inversePhysicalName(scope, physical)
+                    } else {
+                        null
+                    },
+                    customKey = customXesName,
                     value = value,
                 ),
             )

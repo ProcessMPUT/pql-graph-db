@@ -301,6 +301,11 @@ class PqlQueryServiceExecuteTest {
         assertEquals(2, result.rowCount)
         assertEquals("a\n-- per-log --\nb", result.executedQueryDescription)
         assertEquals(
+            listOf("a", "b"),
+            repo.findByIdCalls.sorted(),
+            "classifier metadata loaded during preparation must be reused for per-log compilation",
+        )
+        assertEquals(
             listOf(null, null),
             callsByLog.map { it.limits.log },
             "log limit must be applied once after merging, not once per per-log plan",
@@ -344,6 +349,7 @@ class PqlQueryServiceExecuteTest {
         assertEquals(1, executor.candidateLogCalls.size)
         assertEquals(listOf("b"), executor.selectCalls.map { it.first.source.logId })
         assertEquals(listOf("b"), result.logs.mapNotNull { it.conceptName })
+        assertEquals(listOf("a", "b"), repo.findByIdCalls.sorted())
     }
 
     @Test

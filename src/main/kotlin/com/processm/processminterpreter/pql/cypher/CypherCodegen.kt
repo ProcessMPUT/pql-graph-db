@@ -127,8 +127,10 @@ class CypherCodegen(propertyMapper: PhysicalAttributeMapper) {
         s.bindHierarchyLimitParams(logLimit = null, traceLimit = traceLimit, eventLimit = null)
         CypherMatchEmitter.emitLog(s)
         s.cypher.append(
-            " CALL (log) { MATCH (log)-[:CONTAINS]->(trace:Trace)" +
-                " WITH trace ORDER BY trace.importOrder LIMIT ${'$'}traceLimit RETURN trace }" +
+            " CALL (log) { MATCH (trace:Trace {parentLogId: log.logId})" +
+                " WHERE trace.importOrder IS NOT NULL" +
+                " WITH trace ORDER BY trace.parentLogId, trace.importOrder" +
+                " LIMIT ${'$'}traceLimit RETURN trace }" +
                 " MATCH (trace)-[:HAS_EVENT]->(event:Event)",
         )
         return true

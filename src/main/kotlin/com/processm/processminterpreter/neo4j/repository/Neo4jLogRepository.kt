@@ -4,6 +4,8 @@ import com.processm.processminterpreter.xes.model.Log
 import com.processm.processminterpreter.xes.LogNotFoundException
 import com.processm.processminterpreter.xes.LogRepository
 import com.processm.processminterpreter.xes.LogStatistics
+import com.processm.processminterpreter.neo4j.xes.schema.Neo4jXesCustomAttributeCodec
+import com.processm.processminterpreter.pql.catalog.Scope
 import org.neo4j.driver.Driver
 import java.time.LocalDateTime
 import org.springframework.stereotype.Repository
@@ -81,11 +83,12 @@ class Neo4jLogRepository(
 
     override fun findByAttribute(key: String, value: Any): List<Log> {
         require(key.isNotBlank()) { "Attribute key cannot be blank" }
+        val physicalKey = Neo4jXesCustomAttributeCodec.physicalName(Scope.LOG, key)
         return driver.session().use { session ->
             session.executeRead { tx ->
                 tx.run(
                     "MATCH (l:Log) WHERE l[\$key] = \$value RETURN l",
-                    mapOf("key" to key, "value" to value),
+                    mapOf("key" to physicalKey, "value" to value),
                 ).list { Neo4jLogNodeMapper.toDomain(it.get("l").asNode()) }
             }
         }
@@ -160,9 +163,17 @@ class Neo4jLogRepository(
         }
 
     override fun update(log: Log): Log {
-        if (!exists(log.id)) throw LogNotFoundException(log.id)
-        // Use now() for updatedAt so callers can't freeze the timestamp.
-        return save(log.copy(updatedAt = LocalDateTime.now()))
+        // MATCH makes existence checking and replacement one atomic write. All
+        // non-managed properties are the previous XES attribute set and are
+        // cleared by UPDATE before the replacement set is applied.
+        val updated = log.copy(updatedAt = LocalDateTime.now())
+        return driver.session().use { session ->
+            session.executeWrite { tx ->
+                val result = tx.run(Neo4jLogNodeWrite.UPDATE, Neo4jLogNodeWrite.parameters(updated))
+                if (!result.hasNext()) throw LogNotFoundException(log.id)
+                Neo4jLogNodeMapper.toDomain(result.single().get("log").asNode())
+            }
+        }
     }
 
     // Deleting only the log node used to leave its traces/events orphaned and

@@ -59,7 +59,7 @@ class Neo4jXesBatchWriterTest {
     }
 
     @Test
-    fun `writes log trace events and event order relationships`() {
+    fun `writes log trace and events without unused event order relationships by default`() {
         writer.write(minimalBatch())
 
         driver.session().use { session ->
@@ -69,6 +69,7 @@ class Neo4jXesBatchWriterTest {
                 OPTIONAL MATCH (log)-[:CONTAINS]->(trace:Trace)
                 OPTIONAL MATCH (trace)-[:HAS_EVENT]->(event:Event)
                 RETURN log.name AS logName,
+                       trace.parentLogId AS parentLogId,
                        count(DISTINCT trace) AS traces,
                        count(DISTINCT event) AS events
                 """.trimIndent(),
@@ -76,6 +77,7 @@ class Neo4jXesBatchWriterTest {
             ).single()
 
             assertEquals("Audit", graph["logName"].asString())
+            assertEquals(LOG_ID, graph["parentLogId"].asString())
             assertEquals(1, graph["traces"].asLong())
             assertEquals(2, graph["events"].asLong())
 
@@ -90,7 +92,20 @@ class Neo4jXesBatchWriterTest {
                 ),
             ).single()
 
-            assertEquals(1, follows["follows"].asLong())
+            assertEquals(0, follows["follows"].asLong())
+        }
+    }
+
+    @Test
+    fun `writes event order relationships when explicitly enabled`() {
+        Neo4jXesBatchWriter(driver, persistFollows = true).write(minimalBatch())
+
+        driver.session().use { session ->
+            val follows = session.run(
+                "MATCH (:Event)-[follow:FOLLOWS]->(:Event) RETURN count(follow) AS follows",
+            ).single()["follows"].asLong()
+
+            assertEquals(1, follows)
         }
     }
 
@@ -105,6 +120,49 @@ class Neo4jXesBatchWriterTest {
         }
 
         assertEquals("Neo.ClientError.Schema.ConstraintValidationFailed", error.code())
+    }
+
+    @Test
+    fun `failed later batch leaves no visible or orphaned data and can be retried`() {
+        val valid = minimalBatch()
+        val first = valid.traceBatches.single()
+        val importedAt = valid.importedAt
+        val failingSecond = Neo4jXesTraceBatch(
+            traces = listOf(
+                mapOf(
+                    "traceId" to "trace-2",
+                    "caseId" to "Case 2",
+                    "createdAt" to importedAt,
+                    "importOrder" to 1,
+                    "attributes" to emptyMap<String, Any?>(),
+                ),
+            ),
+            events = listOf(eventRow("trace-1-event-1", "duplicate", importedAt, importOrder = 0)),
+            follows = emptyList(),
+        )
+        val failing = valid.copy(
+            traceCount = 2,
+            eventCount = 3,
+            traceBatches = sequenceOf(first, failingSecond),
+        )
+
+        assertFailsWith<Neo4jException> { writer.write(failing) }
+
+        driver.session().use { session ->
+            val counts = session.run(
+                "MATCH (n) RETURN count(n) AS nodes",
+            ).single()
+            assertEquals(0, counts["nodes"].asInt())
+        }
+
+        writer.write(minimalBatch())
+        driver.session().use { session ->
+            val logCount = session.run(
+                "MATCH (:Log {logId: ${'$'}logId}) RETURN count(*) AS logs",
+                mapOf("logId" to LOG_ID),
+            ).single()["logs"].asInt()
+            assertEquals(1, logCount)
+        }
     }
 
     private fun minimalBatch(): Neo4jXesImportBatch {

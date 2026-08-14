@@ -14,10 +14,12 @@ import com.processm.processminterpreter.pql.ast.PqlExpression
 import com.processm.processminterpreter.neo4j.query.Neo4jQueryPlanExecutor
 import com.processm.processminterpreter.xes.io.OpenXesWriter
 import org.springframework.stereotype.Service
+import org.springframework.beans.factory.annotation.Qualifier
 import java.io.OutputStream
 import java.util.concurrent.Callable
 import java.util.concurrent.ExecutionException
-import java.util.concurrent.Executors
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.ForkJoinPool
 
 /**
  * Application service for everything PQL-query-shaped: execution, validation,
@@ -33,6 +35,8 @@ open class PqlQueryService(
     private val compiler: PqlCompiler,
     private val executor: Neo4jQueryPlanExecutor,
     private val writer: OpenXesWriter,
+    @param:Qualifier("pqlPerLogExecutor")
+    private val perLogExecutor: ExecutorService = ForkJoinPool.commonPool(),
 ) {
 
     open fun execute(request: ExecutePqlQueryRequest): QueryResult {
@@ -42,8 +46,14 @@ open class PqlQueryService(
             dataStoreId = request.dataStoreId,
             defaultLimits = request.defaultLimits,
         )
+        return executePrepared(request, prepared)
+    }
 
-        return when (prepared) {
+    private fun executePrepared(
+        request: ExecutePqlQueryRequest,
+        prepared: PreparedPqlQuery,
+    ): QueryResult =
+        when (prepared) {
             is PreparedPqlQuery.Single -> when (val plan = prepared.plan) {
                 is LogicalPlan.Select -> {
                     val result = executor.execute(
@@ -69,7 +79,7 @@ open class PqlQueryService(
                 val candidateLogIds = executor.findMatchingLogIds(prepared.candidateLogs)
                 val plans = compiler.compilePerLog(prepared, candidateLogIds)
                 // Per-log plans are independent read queries — run them concurrently.
-                val perLogResults = plans.mapConcurrently(PER_LOG_PARALLELISM) { plan ->
+                val perLogResults = plans.mapConcurrently { plan ->
                     plan to executor.execute(
                         plan,
                         ExecutionOptions(
@@ -102,7 +112,6 @@ open class PqlQueryService(
                 )
             }
         }
-    }
 
     /**
      * Read-only execution for query/export REST endpoints. A DELETE query is
@@ -111,15 +120,17 @@ open class PqlQueryService(
      * the reference, which never executes DELETE from its API.
      */
     fun executeRead(request: ExecutePqlQueryRequest): QueryResult {
-        require(!isDeleteQuery(request.query)) {
+        val prepared = compiler.prepareForExecution(
+            query = request.query,
+            logId = request.logId,
+            dataStoreId = request.dataStoreId,
+            defaultLimits = request.defaultLimits,
+        )
+        require(prepared !is PreparedPqlQuery.Single || prepared.plan !is LogicalPlan.Delete) {
             "DELETE is not allowed on a read/query endpoint; use DELETE /logs/{logId}"
         }
-        return execute(request)
+        return executePrepared(request, prepared)
     }
-
-    /** Cheap textual pre-check for a DELETE query — same guard used by [exportAsXes]. */
-    private fun isDeleteQuery(query: String): Boolean =
-        query.trim().lowercase().startsWith("delete")
 
     /**
      * Runs the shared PQL compiler without executing against the backend. Suitable
@@ -157,8 +168,8 @@ open class PqlQueryService(
      * DELETE queries aren't a valid export target — reject early so callers
      * can't silently emit an empty XES file instead of seeing their mistake.
      *
-     * Note: this is a self-call into [execute] — proxy-based annotations added
-     * to [execute] later (e.g. @Transactional) will not apply on this path.
+     * Compilation and execution share one prepared plan so authorization cannot
+     * disagree with the operation that is ultimately sent to Neo4j.
      */
     fun exportAsXes(request: ExportQueryAsXesRequest, output: OutputStream): ExportResult {
         val prepared = prepareXesExport(request)
@@ -173,19 +184,24 @@ open class PqlQueryService(
      * straight to the servlet output instead of buffering the whole file.
      */
     fun prepareXesExport(request: ExportQueryAsXesRequest): PreparedXesExport {
-        require(!isDeleteQuery(request.query)) {
+        val executeRequest = ExecutePqlQueryRequest(
+            query = request.query,
+            logId = request.logId,
+            dataStoreId = request.dataStoreId,
+            defaultLimits = request.defaultLimits,
+            materializedScopes = setOf(Scope.LOG, Scope.TRACE, Scope.EVENT),
+        )
+        val prepared = compiler.prepareForExecution(
+            query = executeRequest.query,
+            logId = executeRequest.logId,
+            dataStoreId = executeRequest.dataStoreId,
+            defaultLimits = executeRequest.defaultLimits,
+        )
+        require(prepared !is PreparedPqlQuery.Single || prepared.plan !is LogicalPlan.Delete) {
             "DELETE queries cannot be exported as XES"
         }
 
-        val result = this.execute(
-            ExecutePqlQueryRequest(
-                query = request.query,
-                logId = request.logId,
-                dataStoreId = request.dataStoreId,
-                defaultLimits = request.defaultLimits,
-                materializedScopes = setOf(Scope.LOG, Scope.TRACE, Scope.EVENT),
-            ),
-        )
+        val result = executePrepared(executeRequest, prepared)
         val logs = result.logs
         return PreparedXesExport(
             result = ExportResult(
@@ -280,26 +296,16 @@ open class PqlQueryService(
      * order. Original exceptions propagate unwrapped, matching sequential
      * `map` semantics. Falls back to plain `map` for zero/one element.
      */
-    private fun <T, R> List<T>.mapConcurrently(parallelism: Int, transform: (T) -> R): List<R> {
-        if (size <= 1 || parallelism <= 1) return map(transform)
-        val pool = Executors.newFixedThreadPool(minOf(size, parallelism))
-        try {
-            val futures = pool.invokeAll(map { item -> Callable { transform(item) } })
-            return futures.map { future ->
-                try {
-                    future.get()
-                } catch (e: ExecutionException) {
-                    throw e.cause ?: e
-                }
+    private fun <T, R> List<T>.mapConcurrently(transform: (T) -> R): List<R> {
+        if (size <= 1) return map(transform)
+        val futures = perLogExecutor.invokeAll(map { item -> Callable { transform(item) } })
+        return futures.map { future ->
+            try {
+                future.get()
+            } catch (e: ExecutionException) {
+                throw e.cause ?: e
             }
-        } finally {
-            pool.shutdown()
         }
-    }
-
-    private companion object {
-        /** Concurrent per-log query fan-out width for classifier queries spanning many logs. */
-        const val PER_LOG_PARALLELISM = 4
     }
 }
 

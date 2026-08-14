@@ -3,6 +3,8 @@ package com.processm.processminterpreter.neo4j.repository
 import com.processm.processminterpreter.xes.model.AttributeScope
 import com.processm.processminterpreter.xes.model.Log
 import com.processm.processminterpreter.pql.catalog.StandardAttributeCatalog
+import com.processm.processminterpreter.pql.catalog.Scope
+import com.processm.processminterpreter.neo4j.xes.schema.Neo4jXesCustomAttributeCodec
 import com.processm.processminterpreter.neo4j.xes.schema.Neo4jXesSchema
 import com.processm.processminterpreter.neo4j.xes.metadata.XesLogMetadataCodec
 import org.neo4j.driver.types.Node
@@ -45,7 +47,10 @@ object Neo4jLogNodeMapper {
 
         val customAttributes = node.keys()
             .filter { it !in Neo4jXesSchema.logNonAttributeKeys }
-            .associateWith { node[it].asObject() }
+            .associate { physicalName ->
+                val xesName = Neo4jXesCustomAttributeCodec.xesName(Scope.LOG, physicalName) ?: physicalName
+                xesName to node[physicalName].asObject()
+            }
 
         return Log(
             id = logId,

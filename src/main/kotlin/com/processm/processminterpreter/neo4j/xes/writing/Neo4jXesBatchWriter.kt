@@ -1,20 +1,33 @@
 package com.processm.processminterpreter.neo4j.xes.writing
 
 import com.processm.processminterpreter.neo4j.repository.Neo4jLogNodeWrite
+import com.processm.processminterpreter.neo4j.repository.deleteLogSubtreesBatched
 import com.processm.processminterpreter.neo4j.xes.mapping.Neo4jXesImportBatch
 import com.processm.processminterpreter.neo4j.xes.mapping.Neo4jXesTraceBatch
 import org.neo4j.driver.Driver
 import org.neo4j.driver.TransactionContext
 import org.slf4j.LoggerFactory
+import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Component
 
 @Component
-class Neo4jXesBatchWriter(private val driver: Driver) {
+class Neo4jXesBatchWriter(
+    private val driver: Driver,
+    @param:Value("\${processm.neo4j.persist-follows:false}")
+    private val persistFollows: Boolean = false,
+) {
     private val logger = LoggerFactory.getLogger(Neo4jXesBatchWriter::class.java)
 
     fun write(batch: Neo4jXesImportBatch) {
-        writeLog(batch)
-        writeTraceBatches(batch)
+        try {
+            writeLog(batch)
+            writeTraceBatches(batch)
+            publishLog(batch.logId)
+        } catch (failure: Exception) {
+            runCatching { discardImport(batch.logId) }
+                .onFailure(failure::addSuppressed)
+            throw failure
+        }
     }
 
     private fun writeLog(batch: Neo4jXesImportBatch) {
@@ -40,7 +53,7 @@ class Neo4jXesBatchWriter(private val driver: Driver) {
                 session.executeWrite { tx ->
                     writeTraces(tx, batch.logId, traceBatch)
                     writeEvents(tx, traceBatch)
-                    writeFollows(tx, traceBatch)
+                    if (persistFollows) writeFollows(tx, traceBatch)
                 }
             }
         }
@@ -51,7 +64,7 @@ class Neo4jXesBatchWriter(private val driver: Driver) {
         batch: Neo4jXesImportBatch,
     ) {
         tx.run(
-            Neo4jLogNodeWrite.MERGE,
+            Neo4jLogNodeWrite.CREATE_IMPORT,
             Neo4jLogNodeWrite.parameters(
                 logId = batch.logId,
                 name = batch.logName,
@@ -64,6 +77,28 @@ class Neo4jXesBatchWriter(private val driver: Driver) {
                 attributes = batch.logAttributes,
             ),
         ).consume()
+    }
+
+    private fun publishLog(logId: String) {
+        driver.session().use { session ->
+            session.executeWrite { tx ->
+                tx.run(
+                    "MATCH (log:ImportingLog {logId: ${'$'}logId}) SET log:Log REMOVE log:ImportingLog",
+                    mapOf("logId" to logId),
+                ).consume()
+            }
+        }
+    }
+
+    private fun discardImport(logId: String) {
+        driver.session().use { session ->
+            val params = mapOf<String, Any?>("logId" to logId)
+            deleteLogSubtreesBatched(session, "MATCH (log:ImportingLog {logId: ${'$'}logId})", params)
+            session.run(
+                "MATCH (log:ImportingLog {logId: ${'$'}logId}) DETACH DELETE log",
+                params,
+            ).consume()
+        }
     }
 
     private fun writeTraces(
@@ -101,9 +136,10 @@ class Neo4jXesBatchWriter(private val driver: Driver) {
         val CREATE_TRACES =
             """
             UNWIND ${'$'}traces as traceProps
-            MATCH (log:Log {logId: ${'$'}logId})
+            MATCH (log:ImportingLog {logId: ${'$'}logId})
             CREATE (trace:Trace {
                 traceId: traceProps.traceId,
+                parentLogId: ${'$'}logId,
                 caseId: traceProps.caseId,
                 createdAt: traceProps.createdAt,
                 importOrder: traceProps.importOrder

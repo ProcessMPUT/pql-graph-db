@@ -6,6 +6,7 @@ import com.processm.processminterpreter.neo4j.query.DeleteExecutionResult
 import com.processm.processminterpreter.neo4j.query.ExecutionOptions
 import com.processm.processminterpreter.neo4j.query.QueryExecutionResult
 import com.processm.processminterpreter.pql.cypher.CypherCodegen
+import com.processm.processminterpreter.pql.cypher.CypherDeleteRenderer
 import com.processm.processminterpreter.pql.cypher.CypherQuery
 import com.processm.processminterpreter.pql.cypher.SYNTHETIC_LOG_KEY_ALIAS
 import com.processm.processminterpreter.pql.cypher.SYNTHETIC_LOG_METADATA_ALIAS
@@ -15,6 +16,10 @@ import com.processm.processminterpreter.neo4j.query.result.HierarchyReconstructo
 import com.processm.processminterpreter.neo4j.query.result.NodeRowHierarchyBuilder
 import com.processm.processminterpreter.neo4j.query.result.ProjectedRowHierarchyBuilder
 import com.processm.processminterpreter.neo4j.query.result.nodeProperties
+import com.processm.processminterpreter.neo4j.repository.deleteEventsBatched
+import com.processm.processminterpreter.neo4j.repository.deleteLogSubtreesBatched
+import com.processm.processminterpreter.neo4j.repository.deleteTraceSubtreesBatched
+import com.processm.processminterpreter.pql.catalog.Scope
 import org.neo4j.driver.Driver
 import org.neo4j.driver.Record
 import org.slf4j.LoggerFactory
@@ -230,18 +235,79 @@ class Neo4jQueryPlanExecutor(
     }
 
     fun executeDelete(plan: LogicalPlan.Delete): DeleteExecutionResult {
-        val cypher = codegen.generate(plan)
-        logger.trace("Generated DELETE Cypher:\n{}\nparams={}", cypher.cypher, cypher.parameters)
-        val deletedCount = driver.session().use { session ->
-            session.executeWrite { tx ->
-                val result = tx.run(cypher.cypher, cypher.parameters)
-                result.consume().counters().nodesDeleted()
+        val selection = codegen.generate(plan)
+        logger.trace("Generated DELETE target selection:\n{}\nparams={}", selection.cypher, selection.parameters)
+        var deletedCount = 0L
+        while (true) {
+            val targetIds = driver.session().use { session ->
+                session.executeRead { tx ->
+                    tx.run(selection.cypher, selection.parameters)
+                        .list { it[CypherDeleteRenderer.DELETE_ID_ALIAS].asString() }
+                }
             }
+            if (targetIds.isEmpty()) break
+
+            logger.trace("Deleting {} {} targets in the current PQL batch", targetIds.size, plan.target)
+            val deletedBatch = deleteTargetBatch(plan.target, targetIds)
+            deletedCount += deletedBatch
         }
         return DeleteExecutionResult(
-            nodesDeleted = deletedCount,
-            executedQueryDescription = cypher.cypher,
+            nodesDeleted = deletedCount.toInt(),
+            executedQueryDescription = selection.cypher + "\n-- targets are deleted in bounded batches --",
         )
+    }
+
+    private fun deleteTargetBatch(target: Scope, targetIds: List<String>): Long =
+        driver.session().use { session ->
+            val expectedDeleted = session.run(
+                deleteSubtreeCountCypher(target),
+                mapOf("targetIds" to targetIds),
+            ).single()["nodes"].asLong()
+            when (target) {
+                Scope.EVENT -> deleteEventsBatched(session, targetIds)
+                Scope.TRACE -> deleteTraceSubtreesBatched(session, targetIds)
+                Scope.LOG -> {
+                    val params = mapOf<String, Any?>("logIds" to targetIds)
+                    deleteLogSubtreesBatched(
+                        session,
+                        "MATCH (log:Log) WHERE log.logId IN ${'$'}logIds WITH log MATCH (log)",
+                        params,
+                    )
+                    session.run(
+                        "UNWIND ${'$'}logIds AS logId MATCH (log:Log {logId: logId}) DETACH DELETE log",
+                        params,
+                    ).consume()
+                }
+            }
+            val remainingTargets = session.run(
+                remainingDeleteTargetsCypher(target),
+                mapOf("targetIds" to targetIds),
+            ).single()["nodes"].asLong()
+            check(remainingTargets < targetIds.size) {
+                "DELETE selected ${targetIds.size} ${target.name.lowercase()} targets but made no progress"
+            }
+            expectedDeleted
+        }
+
+    private fun deleteSubtreeCountCypher(target: Scope): String = when (target) {
+        Scope.EVENT ->
+            "UNWIND ${'$'}targetIds AS targetId MATCH (:Event {eventId: targetId}) RETURN count(*) AS nodes"
+        Scope.TRACE ->
+            "UNWIND ${'$'}targetIds AS targetId MATCH (trace:Trace {traceId: targetId})" +
+                " RETURN sum(1 + COUNT { (trace)-[:HAS_EVENT]->(:Event) }) AS nodes"
+        Scope.LOG ->
+            "UNWIND ${'$'}targetIds AS targetId MATCH (log:Log {logId: targetId})" +
+                " RETURN sum(1 + COUNT { (log)-[:CONTAINS]->(:Trace) } +" +
+                " COUNT { (log)-[:CONTAINS]->(:Trace)-[:HAS_EVENT]->(:Event) }) AS nodes"
+    }
+
+    private fun remainingDeleteTargetsCypher(target: Scope): String = when (target) {
+        Scope.EVENT ->
+            "UNWIND ${'$'}targetIds AS targetId MATCH (:Event {eventId: targetId}) RETURN count(*) AS nodes"
+        Scope.TRACE ->
+            "UNWIND ${'$'}targetIds AS targetId MATCH (:Trace {traceId: targetId}) RETURN count(*) AS nodes"
+        Scope.LOG ->
+            "UNWIND ${'$'}targetIds AS targetId MATCH (:Log {logId: targetId}) RETURN count(*) AS nodes"
     }
 
     private fun LogicalPlan.Select.projectedRecordKeys(cypher: CypherQuery): Set<String> {

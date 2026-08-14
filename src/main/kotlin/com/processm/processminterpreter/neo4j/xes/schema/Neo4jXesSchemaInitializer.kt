@@ -15,34 +15,33 @@ class Neo4jXesSchemaInitializer(
 
     fun ensureIndexes() {
         logger.info("Ensuring Neo4j XES schema constraints are created...")
-        try {
-            driver.session().use { session ->
-                session.executeWrite { tx ->
-                    val legacyIndexes = tx.run("SHOW INDEXES YIELD name RETURN collect(name) AS names")
-                        .single()["names"]
-                        .asList { it.asString() }
-                        .toSet()
+        driver.session().use { session ->
+            session.executeWrite { tx ->
+                val legacyIndexes = tx.run("SHOW INDEXES YIELD name RETURN collect(name) AS names")
+                    .single()["names"]
+                    .asList { it.asString() }
+                    .toSet()
 
-                    Neo4jXesSchemaDefinitions.uniqueConstraints.forEach { constraint ->
-                        if (constraint.legacyIndexName in legacyIndexes) {
-                            val duplicateResult = tx.run(constraint.duplicateCheckCypher())
-                            if (duplicateResult.hasNext()) {
-                                val duplicate = duplicateResult.single()
-                                error(
-                                    "Cannot replace legacy index ${constraint.legacyIndexName} with unique constraint " +
-                                        "${constraint.name}: duplicate ${constraint.label}.${constraint.property} value " +
-                                        "'${duplicate["value"].asObject()}' appears ${duplicate["count"].asLong()} times",
-                                )
-                            }
-                            tx.run("DROP INDEX ${constraint.legacyIndexName} IF EXISTS").consume()
+                Neo4jXesSchemaDefinitions.uniqueConstraints.forEach { constraint ->
+                    if (constraint.legacyIndexName in legacyIndexes) {
+                        val duplicateResult = tx.run(constraint.duplicateCheckCypher())
+                        if (duplicateResult.hasNext()) {
+                            val duplicate = duplicateResult.single()
+                            error(
+                                "Cannot replace legacy index ${constraint.legacyIndexName} with unique constraint " +
+                                    "${constraint.name}: duplicate ${constraint.label}.${constraint.property} value " +
+                                    "'${duplicate["value"].asObject()}' appears ${duplicate["count"].asLong()} times",
+                            )
                         }
-                        tx.run(constraint.createCypher()).consume()
+                        tx.run("DROP INDEX ${constraint.legacyIndexName} IF EXISTS").consume()
                     }
+                    tx.run(constraint.createCypher()).consume()
+                }
+                Neo4jXesSchemaDefinitions.rangeIndexes.forEach { index ->
+                    tx.run(index.createCypher()).consume()
                 }
             }
-            logger.info("Neo4j XES schema constraints are in place.")
-        } catch (e: Exception) {
-            logger.error("Failed to create Neo4j XES schema constraints. Integrity and performance may be degraded.", e)
         }
+        logger.info("Neo4j XES schema constraints and indexes are in place.")
     }
 }

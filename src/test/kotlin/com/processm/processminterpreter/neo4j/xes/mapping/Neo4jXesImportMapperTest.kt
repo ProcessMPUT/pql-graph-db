@@ -5,6 +5,8 @@ import com.processm.processminterpreter.neo4j.property.NestedAttributePathCodec
 import com.processm.processminterpreter.xes.model.XesEvent
 import com.processm.processminterpreter.xes.model.XesLog
 import com.processm.processminterpreter.xes.model.XesTrace
+import com.processm.processminterpreter.neo4j.xes.schema.Neo4jXesCustomAttributeCodec
+import com.processm.processminterpreter.pql.catalog.Scope
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Test
@@ -13,7 +15,24 @@ import java.time.LocalDateTime
 import java.util.UUID
 
 class Neo4jXesImportMapperTest {
-    private val mapper = Neo4jXesImportMapper()
+    private val mapper = Neo4jXesImportMapper(persistFollows = true)
+
+    @Test
+    fun `default import mapping skips unused FOLLOWS payload`() {
+        val importedAt = LocalDateTime.parse("2026-04-24T09:00:00")
+        val log = XesLog(
+            traces = listOf(
+                XesTrace(events = listOf(XesEvent(conceptName = "A"), XesEvent(conceptName = "B"))),
+            ),
+        )
+
+        val follows = Neo4jXesImportMapper()
+            .toImportBatch(log, requestedLogId = "log-1", importedAt = importedAt)
+            .traceBatches.single()
+            .follows
+
+        assertEquals(0, follows.size)
+    }
 
     @Test
     fun `maps XesLog to Neo4j import batch rows`() {
@@ -109,12 +128,14 @@ class Neo4jXesImportMapperTest {
     }
 
     @Test
-    fun `identity id and reserved-named custom attributes never overwrite generated structural ids`() {
-        // Regression: identity:id maps onto the physical traceId/eventId column,
-        // and a custom attribute could be named after any structural column; if
-        // either reached `SET node += attributes` it would overwrite the
+    fun `keeps source identity id while reserved-named custom attributes never overwrite structural ids`() {
+        // Regression: a custom attribute could be named after any structural
+        // column; reaching `SET node += attributes` it would overwrite the
         // generated id and the writer's CREATE_EVENTS/CREATE_FOLLOWS MATCH would
         // silently drop all events + follows of the trace.
+        // Second regression: identity:id used to map onto those same physical
+        // columns, so the filter below discarded the source UUID and no export
+        // could reconstruct it. It now travels under its own XES name.
         val importedAt = LocalDateTime.parse("2026-04-24T09:00:00")
         val log = XesLog(
             conceptName = "Round-tripped",
@@ -122,6 +143,11 @@ class Neo4jXesImportMapperTest {
                 XesTrace(
                     conceptName = "Case 1",
                     identityId = UUID.fromString("11111111-1111-1111-1111-111111111111"),
+                    customAttributes = mapOf(
+                        "traceId" to "custom trace id",
+                        "parentLogId" to "custom parent id",
+                        "caseId" to "custom case id",
+                    ),
                     events = listOf(
                         XesEvent(
                             conceptName = "A",
@@ -142,14 +168,77 @@ class Neo4jXesImportMapperTest {
         @Suppress("UNCHECKED_CAST")
         val eventAttrs = event["attributes"] as Map<String, Any?>
 
-        // Generated structural ids are intact and NOT clobbered by identity:id.
+        // Generated structural ids are intact.
         assertEquals("log-1-trace-1-Case_1", trace["traceId"])
         assertEquals("log-1-trace-1-Case_1-event-1", event["eventId"])
         assertEquals("A", event["activity"])
         // The attribute payload carries no key that would overwrite a structural column.
         assertEquals(false, traceAttrs.containsKey("traceId"))
+        assertEquals(false, traceAttrs.containsKey("parentLogId"))
+        assertEquals(false, traceAttrs.containsKey("caseId"))
         assertEquals(false, eventAttrs.containsKey("eventId"))
         assertEquals(false, eventAttrs.containsKey("activity"))
+        // Colliding custom attributes remain present under reversible physical names.
+        assertEquals(
+            "custom trace id",
+            traceAttrs[Neo4jXesCustomAttributeCodec.physicalName(Scope.TRACE, "traceId")],
+        )
+        assertEquals(
+            "custom case id",
+            traceAttrs[Neo4jXesCustomAttributeCodec.physicalName(Scope.TRACE, "caseId")],
+        )
+        assertEquals(
+            "custom parent id",
+            traceAttrs[Neo4jXesCustomAttributeCodec.physicalName(Scope.TRACE, "parentLogId")],
+        )
+        assertEquals(
+            "hijack",
+            eventAttrs[Neo4jXesCustomAttributeCodec.physicalName(Scope.EVENT, "eventId")],
+        )
+        assertEquals(
+            "hijack",
+            eventAttrs[Neo4jXesCustomAttributeCodec.physicalName(Scope.EVENT, "activity")],
+        )
+        // The source identity:id is stored, so an export can reconstruct it.
+        assertEquals("11111111-1111-1111-1111-111111111111", traceAttrs["identity:id"])
+        assertEquals("22222222-2222-2222-2222-222222222222", eventAttrs["identity:id"])
+    }
+
+    @Test
+    fun `log custom attribute named after a structural column cannot overwrite it`() {
+        val importedAt = LocalDateTime.parse("2026-04-24T09:00:00")
+        val log = XesLog(
+            conceptName = "Hospital",
+            customAttributes = mapOf("logId" to "hijack", "name" to "hijack"),
+        )
+
+        val batch = mapper.toImportBatch(log, requestedLogId = "log-1", importedAt = importedAt)
+
+        assertEquals("log-1", batch.logId)
+        assertEquals("Hospital", batch.logName)
+        assertEquals(false, batch.logAttributes.containsKey("logId"))
+        assertEquals(false, batch.logAttributes.containsKey("name"))
+        assertEquals(
+            "hijack",
+            batch.logAttributes[Neo4jXesCustomAttributeCodec.physicalName(Scope.LOG, "logId")],
+        )
+        assertEquals(
+            "hijack",
+            batch.logAttributes[Neo4jXesCustomAttributeCodec.physicalName(Scope.LOG, "name")],
+        )
+    }
+
+    @Test
+    fun `colliding nested custom attribute uses the encoded parent for flat child properties`() {
+        val importedAt = LocalDateTime.parse("2026-04-24T09:00:00")
+        val nested = XesAttributeValue(value = "parent", children = mapOf("child" to "nested"))
+        val log = XesLog(conceptName = "Hospital", customAttributes = mapOf("name" to nested))
+
+        val attributes = mapper.toImportBatch(log, requestedLogId = "log-1", importedAt = importedAt).logAttributes
+        val physicalParent = Neo4jXesCustomAttributeCodec.physicalName(Scope.LOG, "name")
+
+        assertNotNull(attributes[physicalParent])
+        assertEquals("nested", attributes[NestedAttributePathCodec.encodedChildKey(physicalParent, "child")])
     }
 
     @Test

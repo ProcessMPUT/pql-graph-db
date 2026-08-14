@@ -35,6 +35,10 @@ logging:
 
 
 processm:
+  neo4j:
+    # PQL uses source-order properties and does not traverse FOLLOWS. Keep the
+    # redundant relationship disabled unless another graph consumer needs it.
+    persist-follows: false
   xes:
     upload:
       max-file-size: 500MB

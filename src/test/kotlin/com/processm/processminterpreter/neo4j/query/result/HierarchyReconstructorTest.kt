@@ -1,6 +1,8 @@
 package com.processm.processminterpreter.neo4j.query.result
 
+import com.processm.processminterpreter.neo4j.xes.schema.Neo4jXesCustomAttributeCodec
 import com.processm.processminterpreter.pql.catalog.Scope
+import com.processm.processminterpreter.pql.catalog.StandardAttributeCatalog
 import com.processm.processminterpreter.pql.common.HierarchicalLimits
 import com.processm.processminterpreter.pql.common.HierarchicalOffsets
 import com.processm.processminterpreter.pql.cypher.ColumnAlias
@@ -86,6 +88,47 @@ class HierarchyReconstructorTest {
         assertEquals(1, logs[0].traces.size)
         assertEquals("Case", logs[0].traces[0].conceptName)
         assertEquals(listOf("A", "B"), logs[0].traces[0].events.map { it.conceptName })
+    }
+
+    @Test
+    fun `node-shaped rows decode colliding custom attributes at every XES scope`() {
+        val rows = listOf(
+            mapOf(
+                "log" to mapOf(
+                    "logId" to "L",
+                    "name" to "Log",
+                    StandardAttributeCatalog.LIFECYCLE_MODEL to "standard lifecycle",
+                    Neo4jXesCustomAttributeCodec.physicalName(Scope.LOG, "name") to "custom log name",
+                    Neo4jXesCustomAttributeCodec.physicalName(
+                        Scope.LOG,
+                        StandardAttributeCatalog.LIFECYCLE_MODEL,
+                    ) to "custom lifecycle",
+                ),
+                "trace" to mapOf(
+                    "traceId" to "T",
+                    "caseId" to "Case",
+                    Neo4jXesCustomAttributeCodec.physicalName(Scope.TRACE, "traceId") to "custom trace id",
+                ),
+                "events" to listOf(
+                    mapOf(
+                        "eventId" to "E",
+                        "activity" to "A",
+                        Neo4jXesCustomAttributeCodec.physicalName(Scope.EVENT, "activity") to "custom activity",
+                    ),
+                ),
+            ),
+        )
+
+        val log = reconstructor.reconstruct(rows = rows, columnAliases = emptyMap()).single()
+
+        assertEquals("Log", log.conceptName)
+        assertEquals("standard lifecycle", log.lifecycleModel)
+        assertEquals("custom log name", log.customAttributes["name"])
+        assertEquals("custom lifecycle", log.customAttributes[StandardAttributeCatalog.LIFECYCLE_MODEL])
+        assertEquals("Case", log.traces.single().conceptName)
+        assertEquals("custom trace id", log.traces.single().customAttributes["traceId"])
+        assertEquals("A", log.traces.single().events.single().conceptName)
+        assertEquals("custom activity", log.traces.single().events.single().customAttributes["activity"])
     }
 
     @Test

@@ -18,25 +18,25 @@ internal class CypherDeleteRenderer(
         CypherMatchEmitter.emit(s)
         filterRenderer.emitWhereClause(s)
         CypherMatchEmitter.emitPendingOptionalEventMatch(s)
-        when (plan.target) {
-            Scope.LOG -> s.cypher.append(
-                " WITH DISTINCT log" +
-                    " OPTIONAL MATCH (log)-[:CONTAINS]->(trace:Trace)" +
-                    " OPTIONAL MATCH (trace)-[:HAS_EVENT]->(event:Event)" +
-                    " WITH collect(DISTINCT log) AS logs, collect(DISTINCT trace) AS traces, collect(DISTINCT event) AS events" +
-                    " FOREACH (e IN events | DETACH DELETE e)" +
-                    " FOREACH (t IN traces | DETACH DELETE t)" +
-                    " FOREACH (l IN logs | DETACH DELETE l)",
-            )
-            Scope.TRACE -> s.cypher.append(
-                " WITH DISTINCT trace" +
-                    " OPTIONAL MATCH (trace)-[:HAS_EVENT]->(event:Event)" +
-                    " WITH collect(DISTINCT trace) AS traces, collect(DISTINCT event) AS events" +
-                    " FOREACH (e IN events | DETACH DELETE e)" +
-                    " FOREACH (t IN traces | DETACH DELETE t)",
-            )
-            Scope.EVENT -> s.cypher.append(" DETACH DELETE event")
+        val (targetNode, targetId) = when (plan.target) {
+            Scope.LOG -> "log" to "log.logId"
+            Scope.TRACE -> "trace" to "trace.traceId"
+            Scope.EVENT -> "event" to "event.eventId"
         }
+        // Event materialization may use OPTIONAL MATCH when no clause references
+        // event data. Empty traces then bind event=null, which is not a delete
+        // target and must not become a permanently repeated null batch.
+        s.cypher.append(
+            " WITH DISTINCT $targetNode WHERE $targetNode IS NOT NULL" +
+                " RETURN $targetId AS $DELETE_ID_ALIAS LIMIT ${'$'}$DELETE_BATCH_SIZE_PARAM",
+        )
+        s.bindNamedParam(DELETE_BATCH_SIZE_PARAM, DELETE_TARGET_BATCH_SIZE)
         return s.finish()
+    }
+
+    companion object {
+        const val DELETE_ID_ALIAS = "_deleteId"
+        const val DELETE_BATCH_SIZE_PARAM = "_deleteBatchSize"
+        const val DELETE_TARGET_BATCH_SIZE = 1000
     }
 }

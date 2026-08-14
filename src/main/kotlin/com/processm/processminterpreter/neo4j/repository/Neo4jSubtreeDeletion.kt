@@ -17,15 +17,36 @@ import org.neo4j.driver.Session
  * deleted. Deletion is resumable — re-running removes the remainder — which
  * matches how callers treat delete (idempotent cleanup), unlike imports.
  */
-internal fun deleteLogSubtreesBatched(session: Session, logMatch: String, params: Map<String, Any?>) {
-    session.run(
+internal fun deleteLogSubtreesBatched(session: Session, logMatch: String, params: Map<String, Any?>): Long {
+    val eventsDeleted = session.run(
         "$logMatch-[:CONTAINS]->(:Trace)-[:HAS_EVENT]->(e:Event)" +
             " CALL (e) { DETACH DELETE e } IN TRANSACTIONS OF 20000 ROWS",
         params,
-    ).consume()
-    session.run(
+    ).consume().counters().nodesDeleted().toLong()
+    val tracesDeleted = session.run(
         "$logMatch-[:CONTAINS]->(t:Trace)" +
             " CALL (t) { DETACH DELETE t } IN TRANSACTIONS OF 20000 ROWS",
         params,
-    ).consume()
+    ).consume().counters().nodesDeleted().toLong()
+    return eventsDeleted + tracesDeleted
 }
+
+internal fun deleteTraceSubtreesBatched(session: Session, traceIds: List<String>): Long {
+    val params = mapOf<String, Any?>("traceIds" to traceIds)
+    val eventsDeleted = session.run(
+        "UNWIND ${'$'}traceIds AS traceId MATCH (trace:Trace {traceId: traceId})-[:HAS_EVENT]->(event:Event)" +
+            " WITH DISTINCT event CALL (event) { DETACH DELETE event } IN TRANSACTIONS OF 20000 ROWS",
+        params,
+    ).consume().counters().nodesDeleted().toLong()
+    val tracesDeleted = session.run(
+        "UNWIND ${'$'}traceIds AS traceId MATCH (trace:Trace {traceId: traceId}) DETACH DELETE trace",
+        params,
+    ).consume().counters().nodesDeleted().toLong()
+    return eventsDeleted + tracesDeleted
+}
+
+internal fun deleteEventsBatched(session: Session, eventIds: List<String>): Long =
+    session.run(
+        "UNWIND ${'$'}eventIds AS eventId MATCH (event:Event {eventId: eventId}) DETACH DELETE event",
+        mapOf("eventIds" to eventIds),
+    ).consume().counters().nodesDeleted().toLong()

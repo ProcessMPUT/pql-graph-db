@@ -579,8 +579,11 @@ internal class CypherGroupByRenderer(
             s.cypher.append(" WITH log ORDER BY log.logId LIMIT ${'$'}logLimit")
         }
 
-        s.cypher.append(" CALL (log) { MATCH (log)-[:CONTAINS]->(trace:Trace)")
-        s.cypher.append(" WITH trace ORDER BY trace.importOrder")
+        s.cypher.append(
+            " CALL (log) { MATCH (trace:Trace {parentLogId: log.logId})" +
+                " WHERE trace.importOrder IS NOT NULL" +
+                " WITH trace ORDER BY trace.parentLogId, trace.importOrder",
+        )
         traceLimit?.let {
             s.cypher.append(" LIMIT ${'$'}traceLimit")
         }

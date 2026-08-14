@@ -85,6 +85,7 @@ class PqlCompiler(
             return PreparedPqlQuery.PerLogSelect(
                 raw = raw,
                 candidateLogs = buildCandidateLogPlan(raw, effectiveDataStoreId),
+                scopedLogsById = classifierScopedLogs.associateBy(Log::id),
                 outerLogLimit = raw.limit.log,
                 outerLogOffset = raw.offset.log,
                 defaultLimits = defaultLimits,
@@ -107,7 +108,7 @@ class PqlCompiler(
         logIds: List<String>,
     ): List<LogicalPlan.Select> =
         logIds.map { logId ->
-            val log = logs.findById(logId)
+            val log = prepared.scopedLogsById[logId] ?: logs.findById(logId)
             val plan = compile(
                 raw = prepared.raw,
                 logId = logId,
@@ -249,6 +250,7 @@ sealed interface PreparedPqlQuery {
     data class PerLogSelect(
         val raw: PqlQuery.Select,
         val candidateLogs: CandidateLogPlan,
+        val scopedLogsById: Map<String, Log>,
         val outerLogLimit: Long?,
         val outerLogOffset: Long?,
         val defaultLimits: HierarchicalLimits,

@@ -15,6 +15,16 @@ object Neo4jXesSchema {
     const val LOG_TRACE_GLOBALS_PROPERTY = "traceGlobals"
     const val LOG_EVENT_GLOBALS_PROPERTY = "eventGlobals"
 
+    /**
+     * Generated structural node keys used by the writer's MATCH joins and by the
+     * uniqueness constraints. They are storage concerns only: they carry no XES
+     * meaning and must never be confused with the standard `identity:id`, which
+     * is a source UUID the importer has to preserve verbatim at every scope.
+     */
+    const val TRACE_ID_PROPERTY = "traceId"
+    const val TRACE_PARENT_LOG_ID_PROPERTY = "parentLogId"
+    const val EVENT_ID_PROPERTY = "eventId"
+
     val eventPhysicalName: Map<String, String> = mapOf(
         StandardAttributeCatalog.CONCEPT_NAME to "activity",
         StandardAttributeCatalog.CONCEPT_INSTANCE to "concept_instance",
@@ -26,14 +36,14 @@ object Neo4jXesSchema {
         StandardAttributeCatalog.LIFECYCLE_STATE to "lifecycle_state",
         StandardAttributeCatalog.COST_TOTAL to "cost",
         StandardAttributeCatalog.COST_CURRENCY to "cost:currency",
-        StandardAttributeCatalog.IDENTITY_ID to "eventId",
+        StandardAttributeCatalog.IDENTITY_ID to StandardAttributeCatalog.IDENTITY_ID,
     )
 
     val tracePhysicalName: Map<String, String> = mapOf(
         StandardAttributeCatalog.CONCEPT_NAME to "caseId",
         StandardAttributeCatalog.COST_TOTAL to "cost:total",
         StandardAttributeCatalog.COST_CURRENCY to "cost:currency",
-        StandardAttributeCatalog.IDENTITY_ID to "traceId",
+        StandardAttributeCatalog.IDENTITY_ID to StandardAttributeCatalog.IDENTITY_ID,
     )
 
     val logPhysicalName: Map<String, String> = mapOf(
@@ -86,11 +96,15 @@ object Neo4jXesSchema {
     /**
      * Node properties that the batch writer sets explicitly in its `CREATE`
      * (Neo4jXesBatchWriter CREATE_TRACES/CREATE_EVENTS + Neo4jLogNodeWrite).
-     * These MUST be stripped from any `SET node += attributes` payload — a
-     * standard `identity:id` maps onto `traceId`/`eventId`, and a custom
-     * attribute could be named after any of them; either would overwrite the
+     * These MUST be stripped from any `SET node += attributes` payload: a custom
+     * attribute could be named after any of them, which would overwrite the
      * generated structural id and silently break the writer's own MATCH joins,
      * dropping every event/FOLLOWS edge of the affected node.
+     *
+     * Storing a standard attribute under one of these names would have the same
+     * effect, which is why [tracePhysicalName]/[eventPhysicalName] keep
+     * `identity:id` under its own XES name instead of folding it onto
+     * `traceId`/`eventId` (doing so silently discarded the source UUID).
      */
     fun writerManagedProperties(scope: Scope): Set<String> = when (scope) {
         Scope.LOG -> setOf("logId", "name", "createdAt", "updatedAt") + logStorageMetadataKeys
@@ -98,9 +112,10 @@ object Neo4jXesSchema {
         Scope.EVENT -> eventWriterManaged
     }
 
-    private val traceWriterManaged: Set<String> = setOf("traceId", "caseId", "createdAt", "importOrder")
+    private val traceWriterManaged: Set<String> =
+        setOf(TRACE_ID_PROPERTY, TRACE_PARENT_LOG_ID_PROPERTY, "caseId", "createdAt", "importOrder")
     private val eventWriterManaged: Set<String> =
-        setOf("eventId", "activity", "timestamp", "resource", "lifecycle", "cost", "createdAt", "importOrder")
+        setOf(EVENT_ID_PROPERTY, "activity", "timestamp", "resource", "lifecycle", "cost", "createdAt", "importOrder")
 
     private fun storageMetadataKeys(scope: Scope): Set<String> =
         when (scope) {
@@ -119,8 +134,15 @@ object Neo4jXesSchema {
             LOG_TRACE_GLOBALS_PROPERTY,
             LOG_EVENT_GLOBALS_PROPERTY,
         )
-    private val traceStorageMetadataKeys: Set<String> = setOf("createdAt", "updatedAt", "importOrder")
-    private val eventStorageMetadataKeys: Set<String> = setOf("createdAt", "updatedAt", "importOrder")
+    /*
+     * The generated structural ids have no inverse XES name, so they must be
+     * declared storage metadata or reads would surface them as custom
+     * attributes named `traceId`/`eventId`.
+     */
+    private val traceStorageMetadataKeys: Set<String> =
+        setOf(TRACE_ID_PROPERTY, TRACE_PARENT_LOG_ID_PROPERTY, "createdAt", "updatedAt", "importOrder")
+    private val eventStorageMetadataKeys: Set<String> =
+        setOf(EVENT_ID_PROPERTY, "createdAt", "updatedAt", "importOrder")
 
     /*
      * ProcessM-internal helper attributes can appear in imported logs and are useful

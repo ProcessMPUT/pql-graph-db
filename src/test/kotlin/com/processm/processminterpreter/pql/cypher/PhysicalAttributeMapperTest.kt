@@ -1,5 +1,7 @@
 package com.processm.processminterpreter.pql.cypher
 
+import com.processm.processminterpreter.neo4j.property.NestedAttributePathCodec
+import com.processm.processminterpreter.neo4j.xes.schema.Neo4jXesCustomAttributeCodec
 import com.processm.processminterpreter.pql.catalog.AttributeKind
 import com.processm.processminterpreter.pql.catalog.Scope
 import com.processm.processminterpreter.pql.catalog.SourceLocation
@@ -92,6 +94,22 @@ class PhysicalAttributeMapperTest {
     }
 
     @Test
+    fun `trace identity_id maps to XES identity property not to the storage traceId`() {
+        val ref = mapper.map(std(Scope.TRACE, "identity:id"), "trace")
+        assertEquals("identity:id", ref.property)
+        assertTrue(ref.requiresBackticks)
+        assertEquals("trace.`identity:id`", ref.toCypher())
+    }
+
+    @Test
+    fun `event identity_id maps to XES identity property not to the storage eventId`() {
+        val ref = mapper.map(std(Scope.EVENT, "identity:id"), "event")
+        assertEquals("identity:id", ref.property)
+        assertTrue(ref.requiresBackticks)
+        assertEquals("event.`identity:id`", ref.toCypher())
+    }
+
+    @Test
     fun `logId system attribute maps to physical logId property`() {
         val ref = mapper.map(system(Scope.LOG, "logId"), "log")
         assertEquals("logId", ref.property)
@@ -117,6 +135,27 @@ class PhysicalAttributeMapperTest {
         val ref = mapper.map(custom(Scope.EVENT, "extraInfo"), "event")
         assertEquals("extraInfo", ref.property)
         assertFalse(ref.requiresBackticks)
+    }
+
+    @Test
+    fun `custom attribute colliding with an event column uses reversible physical name`() {
+        val ref = mapper.map(custom(Scope.EVENT, "activity"), "event")
+
+        assertEquals(Neo4jXesCustomAttributeCodec.physicalName(Scope.EVENT, "activity"), ref.property)
+        assertEquals("activity", Neo4jXesCustomAttributeCodec.xesName(Scope.EVENT, ref.property))
+        assertFalse(ref.property == "activity")
+    }
+
+    @Test
+    fun `nested custom attribute translates only its colliding parent`() {
+        val nestedName = NestedAttributePathCodec.encodedChildKey("activity", "child.name")
+        val ref = mapper.map(custom(Scope.EVENT, nestedName), "event")
+        val expected = NestedAttributePathCodec.encodedChildKey(
+            Neo4jXesCustomAttributeCodec.physicalName(Scope.EVENT, "activity"),
+            "child.name",
+        )
+
+        assertEquals(expected, ref.property)
     }
 
     @Test

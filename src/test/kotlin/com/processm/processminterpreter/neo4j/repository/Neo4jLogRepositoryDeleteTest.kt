@@ -1,5 +1,7 @@
 package com.processm.processminterpreter.neo4j.repository
 
+import com.processm.processminterpreter.xes.LogNotFoundException
+import com.processm.processminterpreter.xes.model.Log
 import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.BeforeEach
@@ -11,8 +13,11 @@ import org.neo4j.driver.GraphDatabase
 import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
 import org.testcontainers.neo4j.Neo4jContainer
+import java.time.LocalDateTime
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertFailsWith
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 @Testcontainers
@@ -117,5 +122,62 @@ class Neo4jLogRepositoryDeleteTest {
             val stores = session.run("MATCH (ds:DataStore) RETURN count(ds) AS c").single()["c"].asLong()
             assertEquals(0L, stores)
         }
+    }
+
+    @Test
+    fun `search finds custom attributes whose XES names require physical encoding`() {
+        val now = LocalDateTime.parse("2026-08-14T12:00:00")
+        logs.save(
+            Log(
+                id = "encoded-search",
+                name = "search",
+                createdAt = now,
+                updatedAt = now,
+                customAttributes = mapOf(
+                    "createdAt" to "source-created-at",
+                    "field.with.dots" to "dotted-value",
+                ),
+            ),
+        )
+
+        assertEquals(listOf("encoded-search"), logs.findByAttribute("createdAt", "source-created-at").map { it.id })
+        assertEquals(listOf("encoded-search"), logs.findByAttribute("field.with.dots", "dotted-value").map { it.id })
+    }
+
+    @Test
+    fun `update atomically replaces custom attributes instead of retaining stale properties`() {
+        val now = LocalDateTime.parse("2026-08-14T12:00:00")
+        val original = Log(
+            id = "updated-log",
+            name = "before",
+            createdAt = now,
+            updatedAt = now,
+            lifecycleModel = "standard",
+            customAttributes = mapOf("old" to "stale", "createdAt" to "custom"),
+        )
+        logs.save(original)
+
+        val updated = logs.update(
+            original.copy(
+                name = "after",
+                lifecycleModel = null,
+                customAttributes = mapOf("new" to "fresh"),
+            ),
+        )
+
+        assertEquals("after", updated.name)
+        assertEquals(mapOf("new" to "fresh"), updated.customAttributes)
+        assertNull(updated.lifecycleModel)
+        assertEquals(updated, logs.findById(original.id))
+    }
+
+    @Test
+    fun `update does not recreate a missing log`() {
+        val now = LocalDateTime.parse("2026-08-14T12:00:00")
+
+        assertFailsWith<LogNotFoundException> {
+            logs.update(Log("missing", "missing", now, now))
+        }
+        assertFalse(logs.exists("missing"))
     }
 }

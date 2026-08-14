@@ -200,5 +200,5 @@ private fun MutableMap<String, Any?>.putProjected(attribute: ProjectedAttributeV
 }
 
 private fun MutableMap<String, Any?>.putNode(attribute: NodeAttributeValue) {
-    this[attribute.xesName ?: attribute.physicalName] = normalize(attribute.value)
+    this[attribute.customKey ?: attribute.xesName ?: attribute.physicalName] = normalize(attribute.value)
 }

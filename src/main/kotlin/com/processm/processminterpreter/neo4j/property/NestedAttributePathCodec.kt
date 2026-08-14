@@ -22,17 +22,28 @@ object NestedAttributePathCodec {
         "$SEPARATOR_CHAR$STRING_MARKER$parentKey$SEPARATOR_CHAR$childKey"
 
     /**
-     * True when [rawKey] is a flat-encoded nested-attribute key (as produced by
-     * [encodedChildKey]) rather than a normal property key. Callers only need to
-     * distinguish encoded keys — the (parent, child) components are not consumed
-     * anywhere, so they are not reconstructed.
+     * Rebuild an encoded path after translating its parent property name.
+     * Returns `null` when [rawKey] is not a valid encoded child path.
      */
-    fun isEncoded(rawKey: String): Boolean {
-        if (!rawKey.startsWith("$SEPARATOR_CHAR$STRING_MARKER")) return false
+    fun mapParent(rawKey: String, transform: (String) -> String): String? {
+        val (parent, child) = segments(rawKey) ?: return null
+        return encodedChildKey(transform(parent), child)
+    }
+
+    /**
+     * True when [rawKey] is a flat-encoded nested-attribute key (as produced by
+     * [encodedChildKey]) rather than a normal property key. Hierarchy reads use
+     * this to hide flat helper properties; query mapping can translate the parent
+     * with [mapParent] while keeping the child segment intact.
+     */
+    fun isEncoded(rawKey: String): Boolean = segments(rawKey) != null
+
+    private fun segments(rawKey: String): Pair<String, String>? {
+        if (!rawKey.startsWith("$SEPARATOR_CHAR$STRING_MARKER")) return null
         val childSeparator = rawKey.indexOf(SEPARATOR_CHAR, startIndex = 2)
-        if (childSeparator < 0) return false
+        if (childSeparator < 0) return null
         val parent = rawKey.substring(2, childSeparator)
         val child = rawKey.substring(childSeparator + 1)
-        return parent.isNotEmpty() && child.isNotEmpty()
+        return (parent to child).takeIf { parent.isNotEmpty() && child.isNotEmpty() }
     }
 }
