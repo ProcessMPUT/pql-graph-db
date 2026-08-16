@@ -21,7 +21,7 @@ internal class NodeRowHierarchyBuilder {
             selectAllScopes.ifEmpty {
                 setOf(Scope.LOG, Scope.TRACE, Scope.EVENT)
             }
-        private val logs = linkedMapOf<Any, LogBuilder>()
+        private val logs = linkedMapOf<Any?, LogBuilder>()
 
         fun absorb(row: Map<String, Any?>) {
             val eventList = row.nodePropertyList("events")
@@ -35,7 +35,7 @@ internal class NodeRowHierarchyBuilder {
 
         private fun absorbLog(row: Map<String, Any?>): LogBuilder {
             val logProps = row.nodeProperties("log")
-            val logKey: Any = row["_logKey"] ?: logProps["logId"] ?: SYNTHETIC_KEY
+            val logKey = row["_logKey"] ?: logProps["logId"] ?: SyntheticHierarchyKey
             val logBuilder = logs.getOrPut(logKey) { LogBuilder() }
             logBuilder.absorbMetadataNode(logProps)
             if (Scope.LOG in selectedScopes && logProps.isNotEmpty()) {
@@ -46,8 +46,8 @@ internal class NodeRowHierarchyBuilder {
 
         private fun absorbTrace(row: Map<String, Any?>, logBuilder: LogBuilder): TraceBuilder {
             val traceProps = row.nodeProperties("trace")
-            val traceKey: Any = row["_traceKey"] ?: traceProps["traceId"] ?: SYNTHETIC_KEY
-            val traceBuilder = logBuilder.traces.getOrPut(mapOf("_id" to traceKey)) { TraceBuilder() }
+            val traceKey = row["_traceKey"] ?: traceProps["traceId"] ?: SyntheticHierarchyKey
+            val traceBuilder = logBuilder.traces.getOrPut(traceKey) { TraceBuilder() }
             if (Scope.TRACE in selectedScopes && traceProps.isNotEmpty()) {
                 traceBuilder.absorbNode(traceProps)
             }

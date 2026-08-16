@@ -34,7 +34,8 @@ internal class ProjectedRowHierarchyBuilder {
         private val selectAllScopes: Set<Scope>,
     ) {
         private val hasUserEventProjection = aliases.hasUserEventProjection(selectAllScopes)
-        private val logs = linkedMapOf<Map<String, Any?>, LogBuilder>()
+        private val logs = linkedMapOf<Any?, LogBuilder>()
+        private val logsById = mutableMapOf<String, MutableSet<LogBuilder>>()
 
         fun absorb(row: Map<String, Any?>) {
             val logBuilder = absorbLog(row)
@@ -50,14 +51,15 @@ internal class ProjectedRowHierarchyBuilder {
          * `_log_id_` hierarchy key. Must be called before [build].
          */
         fun hydrateLog(logId: String, properties: Map<String, Any?>) {
-            logs.forEach { (key, builder) ->
-                if (key[SYNTHETIC_LOG_ID_ALIAS] == logId) builder.absorbNode(properties)
-            }
+            logsById[logId]?.forEach { it.absorbNode(properties) }
         }
 
         private fun absorbLog(row: Map<String, Any?>): LogBuilder {
             val logKey = row.keyFor(aliases.log)
             val logBuilder = logs.getOrPut(logKey) { LogBuilder() }
+            (row[SYNTHETIC_LOG_ID_ALIAS] as? String)?.let { logId ->
+                logsById.getOrPut(logId, ::linkedSetOf).add(logBuilder)
+            }
             logBuilder.absorbMetadataNode(row.nodeProperties(SYNTHETIC_LOG_METADATA_ALIAS))
             logBuilder.absorbNode(row.nodeProperties(SYNTHETIC_LOG_NODE_ALIAS))
             if (Scope.LOG in selectAllScopes) logBuilder.absorbNode(row.nodeProperties("log"))
@@ -96,8 +98,18 @@ internal class ProjectedRowHierarchyBuilder {
 
         fun build(): List<XesLog> = logs.values.map { it.build() }
 
-        private fun Map<String, Any?>.keyFor(aliases: Map<String, ColumnAlias>): Map<String, Any?> =
-            if (aliases.isEmpty()) SYNTHETIC_KEY else aliases.keys.associateWith { this[it] }
+        /**
+         * The common hierarchy key is a single synthetic id. Keep that scalar
+         * directly instead of allocating a one-entry map for every result row.
+         * Multi-column grouping still uses an ordered value list, whose equality
+         * is equivalent because [aliases] has one stable column order per query.
+         */
+        private fun Map<String, Any?>.keyFor(aliases: Map<String, ColumnAlias>): Any? =
+            when (aliases.size) {
+                0 -> SyntheticHierarchyKey
+                1 -> this[aliases.keys.first()]
+                else -> aliases.keys.map { this[it] }
+            }
     }
 
     class ProjectedAliases(columnAliases: Map<String, ColumnAlias>) {

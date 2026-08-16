@@ -316,13 +316,24 @@ class Neo4jQueryPlanExecutor(
             SYNTHETIC_LOG_METADATA_ALIAS + SYNTHETIC_LOG_NODE_ALIAS + SYNTHETIC_LOG_KEY_ALIAS
     }
 
-    private fun Record.toProjectedRow(allowedKeys: Set<String>): Map<String, Any?> =
-        keys()
-            .filter { it in allowedKeys }
-            .associateWith { key -> typeMapper.toKotlin(this[key]) }
+    private fun Record.toProjectedRow(allowedKeys: Set<String>): Map<String, Any?> {
+        val recordKeys = keys()
+        val row = LinkedHashMap<String, Any?>(mapCapacity(minOf(recordKeys.size, allowedKeys.size)))
+        for (key in recordKeys) {
+            if (key in allowedKeys) row[key] = typeMapper.toKotlin(this[key])
+        }
+        return row
+    }
 
-    private fun Record.toNodeRow(): Map<String, Any?> =
-        keys().associateWith { key -> typeMapper.toKotlin(this[key]) }
+    private fun Record.toNodeRow(): Map<String, Any?> {
+        val recordKeys = keys()
+        val row = LinkedHashMap<String, Any?>(mapCapacity(recordKeys.size))
+        for (key in recordKeys) row[key] = typeMapper.toKotlin(this[key])
+        return row
+    }
+
+    private fun mapCapacity(expectedSize: Int): Int =
+        if (expectedSize < 3) expectedSize + 1 else expectedSize * 4 / 3 + 1
 
     private fun com.processm.processminterpreter.pql.catalog.Scope.nodeColumnName(): String = when (this) {
         com.processm.processminterpreter.pql.catalog.Scope.LOG -> "log"

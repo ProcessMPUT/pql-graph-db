@@ -87,7 +87,7 @@ object XESJsonConverter {
         includeTraces: Boolean = true,
         includeEvents: Boolean = true,
     ): Map<String, Any> {
-        logger.debug("Converting ${logs.size} logs to XES JSON format (projected: $isProjectedQuery)")
+        logger.debug("Converting {} logs to XES JSON format (projected: {})", logs.size, isProjectedQuery)
 
         if (logs.isEmpty()) {
             return mapOf("log" to emptyMap<String, Any>())
@@ -385,48 +385,44 @@ object XESJsonConverter {
     private fun processMJsonAttributeView(values: Map<String, Any?>): Map<String, Any> {
         val lastRunByType = linkedMapOf<String, MutableList<Map<String, String>>>()
         var previousType: String? = null
-        var currentRun = mutableListOf<Map<String, String>>()
+        var currentRun: MutableList<Map<String, String>>? = null
 
-        orderedAttributes(values).forEach { attribute ->
-            if (attribute.type != previousType) {
-                currentRun = mutableListOf()
-                lastRunByType[attribute.type] = currentRun
-                previousType = attribute.type
+        for (key in values.keys.sorted()) {
+            val scalarValue = (values[key] as? XesAttributeValue)?.value ?: values[key]
+            val type = attributeType(scalarValue)
+            val run = if (type != previousType) {
+                mutableListOf<Map<String, String>>().also {
+                    currentRun = it
+                    lastRunByType[type] = it
+                    previousType = type
+                }
+            } else {
+                checkNotNull(currentRun)
             }
-            currentRun.add(mapOf("@key" to attribute.key, "@value" to attribute.value))
+            run.add(mapOf("@key" to key, "@value" to attributeValue(scalarValue)))
         }
 
         return lastRunByType.mapValuesTo(linkedMapOf()) { (_, attrs) -> toSingleOrArray(attrs) }
     }
 
-    private fun orderedAttributes(values: Map<String, Any?>): List<AttributeToken> =
-        values.keys.sorted().map { key -> attributeToken(key, values[key]) }
-
-    private fun attributeToken(
-        key: String,
-        value: Any?,
-    ): AttributeToken {
-        val scalarValue = if (value is XesAttributeValue) value.value else value
-        return when (scalarValue) {
-            null -> AttributeToken("string", key, "null")
-            is String -> AttributeToken("string", key, scalarValue)
-            is Int, is Long -> AttributeToken("int", key, scalarValue.toString())
-            is Float, is Double -> AttributeToken("float", key, scalarValue.toString())
-            is Boolean -> AttributeToken("boolean", key, scalarValue.toString())
-            is UUID -> AttributeToken("id", key, scalarValue.toString())
-            is Instant -> AttributeToken("date", key, formatTimestamp(scalarValue))
-            is java.time.ZonedDateTime -> AttributeToken("date", key, formatTimestamp(scalarValue.toInstant()))
-            is java.time.LocalDateTime ->
-                AttributeToken("date", key, formatTimestamp(scalarValue.toInstant(ZoneOffset.UTC)))
-            else -> AttributeToken("string", key, scalarValue.toString())
-        }
+    private fun attributeType(value: Any?): String = when (value) {
+        null, is String -> "string"
+        is Int, is Long -> "int"
+        is Float, is Double -> "float"
+        is Boolean -> "boolean"
+        is UUID -> "id"
+        is Instant, is java.time.ZonedDateTime, is java.time.LocalDateTime -> "date"
+        else -> "string"
     }
 
-    private data class AttributeToken(
-        val type: String,
-        val key: String,
-        val value: String,
-    )
+    private fun attributeValue(value: Any?): String = when (value) {
+        null -> "null"
+        is String -> value
+        is Instant -> formatTimestamp(value)
+        is java.time.ZonedDateTime -> formatTimestamp(value.toInstant())
+        is java.time.LocalDateTime -> formatTimestamp(value.toInstant(ZoneOffset.UTC))
+        else -> value.toString()
+    }
 
     private fun <T : Any> toSingleOrArray(list: List<T>): Any =
         when (list.size) {

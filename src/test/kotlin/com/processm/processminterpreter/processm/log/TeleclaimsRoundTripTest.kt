@@ -216,7 +216,7 @@ class TeleclaimsRoundTripTest {
 
     private fun assertNoTechnicalAttributes(attributes: Map<String, Any?>, owner: String) {
         val forbiddenPrefixes = listOf("_", "l_", "t_", "e_")
-        val forbiddenNames = setOf("logId", "traceId", "eventId", "importOrder")
+        val forbiddenNames = setOf("logId", "traceId", "parentLogId", "eventId", "parentTraceId", "importOrder")
         val leaked = attributes.keys.filter { key ->
             key in forbiddenNames || forbiddenPrefixes.any { prefix -> key.startsWith(prefix) }
         }

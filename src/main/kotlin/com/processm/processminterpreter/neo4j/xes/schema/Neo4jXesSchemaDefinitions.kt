@@ -14,6 +14,7 @@ internal object Neo4jXesSchemaDefinitions {
 
     val rangeIndexes = listOf(
         RangeIndexSpec("trace_parent_import_order", "Trace", listOf("parentLogId", "importOrder")),
+        RangeIndexSpec("event_parent_import_order", "Event", listOf("parentTraceId", "importOrder")),
     )
 }
 

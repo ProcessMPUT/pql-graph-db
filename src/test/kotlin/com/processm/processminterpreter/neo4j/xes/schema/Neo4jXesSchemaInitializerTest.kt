@@ -90,6 +90,18 @@ class Neo4jXesSchemaInitializerTest {
             assertEquals("RANGE", traceWindowIndex["type"].asString())
             assertEquals(listOf("Trace"), traceWindowIndex["labelsOrTypes"].asList { it.asString() })
             assertEquals(listOf("parentLogId", "importOrder"), traceWindowIndex["properties"].asList { it.asString() })
+
+            val eventWindowIndex = session.run(
+                """
+                SHOW INDEXES
+                YIELD name, type, labelsOrTypes, properties
+                WHERE name = 'event_parent_import_order'
+                RETURN type, labelsOrTypes, properties
+                """.trimIndent(),
+            ).single()
+            assertEquals("RANGE", eventWindowIndex["type"].asString())
+            assertEquals(listOf("Event"), eventWindowIndex["labelsOrTypes"].asList { it.asString() })
+            assertEquals(listOf("parentTraceId", "importOrder"), eventWindowIndex["properties"].asList { it.asString() })
         }
     }
 

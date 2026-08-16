@@ -140,6 +140,7 @@ class PqlQueryServiceExecuteTest {
         val plan = executor.selectCalls.single().first
         assertEquals("log-1", plan.source.logId)
         assertNull(plan.source.dataStoreId)
+        assertTrue(dataStores.existsCalls.isEmpty(), "non-empty datastore should be resolved in one repository call")
     }
 
     @Test

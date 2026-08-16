@@ -43,11 +43,13 @@ class PQLQueryController(
         request: PQLQueryRequest,
         format: String,
     ): ResponseEntity<PQLQueryResponse> {
-        logger.info("=== Executing PQL Query ===")
-        logger.info("PQL: ${request.query}")
-        logger.info("LogId: ${request.logId ?: "ALL"}")
-        logger.info("DataStoreId: ${request.dataStoreId ?: "ALL"}")
-        logger.info("Format: $format")
+        logger.debug(
+            "Executing PQL query: pql={}, logId={}, dataStoreId={}, format={}",
+            request.query,
+            request.logId ?: "ALL",
+            request.dataStoreId ?: "ALL",
+            format,
+        )
 
         return try {
             val result = pqlQueryService.execute(
@@ -63,8 +65,8 @@ class PQLQueryController(
                 ),
             )
 
-            logger.info("Generated Cypher: ${result.executedQueryDescription}")
-            logger.info("Results count: ${result.rowCount}")
+            logger.trace("Generated Cypher: {}", result.executedQueryDescription)
+            logger.debug("PQL query completed with {} rows", result.rowCount)
 
             ResponseEntity.ok(responseMapper.toQueryResponse(request.query, result, format))
         } catch (e: PQLCompileError) {
@@ -88,10 +90,13 @@ class PQLQueryController(
         compress: Boolean,
         logName: String,
     ): ResponseEntity<StreamingResponseBody> {
-        logger.info("=== Executing PQL Query as XES ===")
-        logger.info(
-            "PQL: ${request.query}, LogId: ${request.logId ?: "ALL"}, " +
-                "DataStoreId: ${request.dataStoreId ?: "ALL"}, compress=$compress, logName=$logName",
+        logger.debug(
+            "Executing PQL query as XES: pql={}, logId={}, dataStoreId={}, compress={}, logName={}",
+            request.query,
+            request.logId ?: "ALL",
+            request.dataStoreId ?: "ALL",
+            compress,
+            logName,
         )
 
         return try {
@@ -126,7 +131,7 @@ class PQLQueryController(
                             .build()
                 }
 
-            logger.info("XES export prepared: ${prepared.result.logCount} logs, filename: $filename")
+            logger.debug("XES export prepared: {} logs, filename={}", prepared.result.logCount, filename)
             ResponseEntity.ok().headers(headers).body(StreamingResponseBody(prepared.write))
         } catch (e: IllegalArgumentException) {
             logger.warn("Rejected XES export: ${e.message}")
@@ -148,7 +153,7 @@ class PQLQueryController(
     override fun validateQuery(
         request: PQLValidationRequest,
     ): ResponseEntity<PQLValidationResponse> {
-        logger.debug("Validating PQL query: ${request.query}")
+        logger.debug("Validating PQL query: {}", request.query)
 
         return try {
             val result = pqlQueryService.validate(

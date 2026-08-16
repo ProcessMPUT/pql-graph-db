@@ -47,12 +47,17 @@ class Neo4jXesBatchWriter(
             val startTrace = traceOffset + 1
             traceOffset += traceBatch.traces.size
             val endTrace = traceOffset
-            logger.trace("Processing batch ${batchIndex + 1} of ${batch.traceCount} traces. Traces $startTrace to $endTrace")
+            logger.trace(
+                "Processing batch {} of {} traces. Traces {} to {}",
+                batchIndex + 1,
+                batch.traceCount,
+                startTrace,
+                endTrace,
+            )
 
             driver.session().use { session ->
                 session.executeWrite { tx ->
-                    writeTraces(tx, batch.logId, traceBatch)
-                    writeEvents(tx, traceBatch)
+                    writeTraceHierarchy(tx, batch.logId, traceBatch)
                     if (persistFollows) writeFollows(tx, traceBatch)
                 }
             }
@@ -101,26 +106,36 @@ class Neo4jXesBatchWriter(
         }
     }
 
-    private fun writeTraces(
+    /**
+     * Creates a whole trace batch in one driver round-trip. Events are grouped
+     * by trace before sending the parameters, so Neo4j performs one indexed
+     * trace lookup per trace rather than one lookup per event.
+     */
+    private fun writeTraceHierarchy(
         tx: TransactionContext,
         logId: String,
         traceBatch: Neo4jXesTraceBatch,
     ) {
-        if (traceBatch.traces.isEmpty()) return
+        if (traceBatch.traces.isEmpty() && traceBatch.events.isEmpty()) return
 
         tx.run(
-            CREATE_TRACES,
-            mapOf("logId" to logId, "traces" to traceBatch.traces),
+            CREATE_TRACE_HIERARCHY,
+            mapOf(
+                "logId" to logId,
+                "traces" to traceBatch.traces,
+                "eventGroups" to traceBatch.events.groupByTrace(),
+            ),
         ).consume()
     }
 
-    private fun writeEvents(
-        tx: TransactionContext,
-        traceBatch: Neo4jXesTraceBatch,
-    ) {
-        if (traceBatch.events.isEmpty()) return
-
-        tx.run(CREATE_EVENTS, mapOf("events" to traceBatch.events)).consume()
+    private fun List<Map<String, Any?>>.groupByTrace(): List<Map<String, Any?>> {
+        val eventsByTrace = linkedMapOf<Any?, MutableList<Map<String, Any?>>>()
+        for (event in this) {
+            eventsByTrace.getOrPut(event["traceId"], ::mutableListOf).add(event)
+        }
+        return eventsByTrace.map { (traceId, events) ->
+            mapOf("traceId" to traceId, "events" to events)
+        }
     }
 
     private fun writeFollows(
@@ -133,27 +148,29 @@ class Neo4jXesBatchWriter(
     }
 
     private companion object {
-        val CREATE_TRACES =
+        val CREATE_TRACE_HIERARCHY =
             """
-            UNWIND ${'$'}traces as traceProps
             MATCH (log:ImportingLog {logId: ${'$'}logId})
-            CREATE (trace:Trace {
-                traceId: traceProps.traceId,
-                parentLogId: ${'$'}logId,
-                caseId: traceProps.caseId,
-                createdAt: traceProps.createdAt,
-                importOrder: traceProps.importOrder
-            })
-            SET trace += traceProps.attributes
-            CREATE (log)-[:CONTAINS]->(trace)
-            """.trimIndent()
-
-        val CREATE_EVENTS =
-            """
-            UNWIND ${'$'}events as eventProps
-            MATCH (trace:Trace {traceId: eventProps.traceId})
+            CALL (log) {
+                UNWIND ${'$'}traces AS traceProps
+                CREATE (trace:Trace {
+                    traceId: traceProps.traceId,
+                    parentLogId: ${'$'}logId,
+                    caseId: traceProps.caseId,
+                    createdAt: traceProps.createdAt,
+                    importOrder: traceProps.importOrder
+                })
+                SET trace += traceProps.attributes
+                CREATE (log)-[:CONTAINS]->(trace)
+                RETURN count(trace) AS _createdTraces
+            }
+            WITH _createdTraces
+            UNWIND ${'$'}eventGroups AS eventGroup
+            MATCH (trace:Trace {traceId: eventGroup.traceId})
+            UNWIND eventGroup.events AS eventProps
             CREATE (event:Event {
                 eventId: eventProps.eventId,
+                parentTraceId: eventProps.traceId,
                 activity: eventProps.activity,
                 timestamp: eventProps.timestamp,
                 resource: eventProps.resource,
@@ -164,6 +181,7 @@ class Neo4jXesBatchWriter(
             })
             SET event += eventProps.attributes
             CREATE (trace)-[:HAS_EVENT]->(event)
+            RETURN _createdTraces, count(event) AS _createdEvents
             """.trimIndent()
 
         val CREATE_FOLLOWS =

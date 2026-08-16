@@ -152,7 +152,11 @@ class Neo4jXesImportMapperTest {
                         XesEvent(
                             conceptName = "A",
                             identityId = UUID.fromString("22222222-2222-2222-2222-222222222222"),
-                            customAttributes = mapOf("eventId" to "hijack", "activity" to "hijack"),
+                            customAttributes = mapOf(
+                                "eventId" to "hijack",
+                                "parentTraceId" to "custom parent trace id",
+                                "activity" to "hijack",
+                            ),
                         ),
                     ),
                 ),
@@ -177,6 +181,7 @@ class Neo4jXesImportMapperTest {
         assertEquals(false, traceAttrs.containsKey("parentLogId"))
         assertEquals(false, traceAttrs.containsKey("caseId"))
         assertEquals(false, eventAttrs.containsKey("eventId"))
+        assertEquals(false, eventAttrs.containsKey("parentTraceId"))
         assertEquals(false, eventAttrs.containsKey("activity"))
         // Colliding custom attributes remain present under reversible physical names.
         assertEquals(
@@ -194,6 +199,10 @@ class Neo4jXesImportMapperTest {
         assertEquals(
             "hijack",
             eventAttrs[Neo4jXesCustomAttributeCodec.physicalName(Scope.EVENT, "eventId")],
+        )
+        assertEquals(
+            "custom parent trace id",
+            eventAttrs[Neo4jXesCustomAttributeCodec.physicalName(Scope.EVENT, "parentTraceId")],
         )
         assertEquals(
             "hijack",

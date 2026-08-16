@@ -83,7 +83,6 @@ class ProcessMDataStoreController(
         @PathVariable dataStoreId: String,
         request: MultipartHttpServletRequest,
     ): ResponseEntity<Any> {
-        dataStores.get(dataStoreId)
         val file = request.fileMap.values.firstOrNull()
             ?: return ResponseEntity.badRequest().body(mapOf("error" to "Expected a multipart file"))
         val result = logs.importXes(
@@ -108,7 +107,6 @@ class ProcessMDataStoreController(
         @RequestParam(required = false) includeEvents: Boolean?,
         @RequestHeader(HttpHeaders.ACCEPT, required = false) accept: String?,
     ): ResponseEntity<Any> {
-        dataStores.get(dataStoreId)
         val resolvedIncludeEvents = includeEvents ?: true
         val resolvedIncludeTraces = resolvedIncludeEvents || (includeTraces ?: true)
         val requestedType = resolveAcceptedContentType(accept)

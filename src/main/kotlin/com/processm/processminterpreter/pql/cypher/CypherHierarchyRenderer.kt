@@ -291,8 +291,9 @@ internal class CypherHierarchyRenderer(
             s.cypher.append(" RETURN trace }")
             return
         }
-        s.cypher.append(" CALL (trace) { MATCH (trace)-[:HAS_EVENT]->(event:Event)")
-        s.cypher.append(" WITH event ORDER BY ${eventOrder(s)}")
+        s.cypher.append(" CALL (trace) {")
+        val indexedEventWindow = emitEventMatch(s, canUseIndexedEventWindow(s, eventLimit))
+        s.cypher.append(" WITH event ORDER BY ${eventOrder(s, indexedEventWindow)}")
         eventLimit?.let { s.cypher.append(" LIMIT ${'$'}eventLimit") }
         s.cypher.append(" RETURN event } RETURN trace, event }")
     }
@@ -304,8 +305,11 @@ internal class CypherHierarchyRenderer(
         eventLimit: Long?,
         returnEvents: Boolean,
     ) {
-        s.cypher.append(" CALL (log, trace) { MATCH (trace)-[:HAS_EVENT]->(event:Event)")
-        s.cypher.append(" WHERE ").append(filterRenderer.renderWithHoisting(filter, s))
+        s.cypher.append(" CALL (log, trace) {")
+        val indexedEventWindow = emitEventMatch(s, canUseIndexedEventWindow(s, eventLimit))
+        s.cypher.append(if (indexedEventWindow) " AND (" else " WHERE (")
+            .append(filterRenderer.renderWithHoisting(filter, s))
+            .append(')')
         if (!returnEvents) {
             s.cypher.append(" RETURN count(event) > 0 AS _hasEvents }")
             s.cypher.append(" WITH trace WHERE _hasEvents")
@@ -314,7 +318,7 @@ internal class CypherHierarchyRenderer(
             s.cypher.append(" RETURN trace }")
             return
         }
-        s.cypher.append(" WITH event ORDER BY ${eventOrder(s)}")
+        s.cypher.append(" WITH event ORDER BY ${eventOrder(s, indexedEventWindow)}")
         eventLimit?.let { s.cypher.append(" LIMIT ${'$'}eventLimit") }
         s.cypher.append(" RETURN collect(event) AS _events }")
         s.cypher.append(" WITH trace, _events WHERE size(_events) > 0")
@@ -338,6 +342,9 @@ internal class CypherHierarchyRenderer(
 
     private fun eventLimitForInputExpansion(s: CypherBuildState): Long? =
         if (s.facts.hasAnyAggregation) null else CypherEffectiveLimits.event(s)
+
+    private fun canUseIndexedEventWindow(s: CypherBuildState, eventLimit: Long?): Boolean =
+        eventLimit != null && s.plan.orderBy.none { Scope.EVENT in s.facts.scopesOf(it.expression) }
 
     private fun canPushOrder(s: CypherBuildState): Boolean =
         s.plan.orderBy.all { key ->
@@ -365,9 +372,10 @@ internal class CypherHierarchyRenderer(
             }
             s.cypher.append(" RETURN trace, event }")
         } else {
+            s.cypher.append(" CALL (trace) {")
+            val indexedEventWindow = emitEventMatch(s, canUseIndexedEventWindow(s, eventLimit))
             s.cypher.append(
-                " CALL (trace) { MATCH (trace)-[:HAS_EVENT]->(event:Event)" +
-                    " WITH event ORDER BY ${eventOrder(s)} LIMIT ${'$'}eventLimit" +
+                " WITH event ORDER BY ${eventOrder(s, indexedEventWindow)} LIMIT ${'$'}eventLimit" +
                     " RETURN collect(event) AS _events }" +
                     " UNWIND _events AS event RETURN trace, event }",
             )
@@ -380,12 +388,12 @@ internal class CypherHierarchyRenderer(
         traceLimit: Long?,
         eventLimit: Long?,
     ) {
-        s.cypher.append(
-            " CALL (log, trace) {" +
-                " MATCH (trace)-[:HAS_EVENT]->(event:Event)" +
-                " WHERE ${filterRenderer.renderWithHoisting(filter, s)}" +
-                " WITH event ORDER BY ${eventOrder(s)}",
-        )
+        s.cypher.append(" CALL (log, trace) {")
+        val indexedEventWindow = emitEventMatch(s, canUseIndexedEventWindow(s, eventLimit))
+        s.cypher.append(if (indexedEventWindow) " AND (" else " WHERE (")
+            .append(filterRenderer.renderWithHoisting(filter, s))
+            .append(')')
+            .append(" WITH event ORDER BY ${eventOrder(s, indexedEventWindow)}")
         eventLimit?.let { s.cypher.append(" LIMIT ${'$'}eventLimit") }
         s.cypher.append(" RETURN collect(event) AS _events }")
         s.cypher.append(" WITH trace, _events WHERE size(_events) > 0")
@@ -401,8 +409,10 @@ internal class CypherHierarchyRenderer(
             eventOrder(s),
         ).joinToString(", ")
 
-    private fun eventOrder(s: CypherBuildState): String =
-        scopedOrder(s, Scope.EVENT, "event.importOrder")
+    private fun eventOrder(s: CypherBuildState, indexed: Boolean = false): String {
+        val order = scopedOrder(s, Scope.EVENT, "event.importOrder")
+        return if (indexed) "event.parentTraceId, $order" else order
+    }
 
     private fun traceOrder(s: CypherBuildState): String =
         scopedOrder(s, Scope.TRACE, "trace.importOrder")
@@ -415,6 +425,18 @@ internal class CypherHierarchyRenderer(
             " MATCH (trace:Trace {parentLogId: log.logId})" +
                 " WHERE trace.importOrder IS NOT NULL",
         )
+    }
+
+    private fun emitEventMatch(s: CypherBuildState, indexed: Boolean): Boolean {
+        if (indexed) {
+            s.cypher.append(
+                " MATCH (event:Event {parentTraceId: trace.traceId})" +
+                    " WHERE event.importOrder IS NOT NULL",
+            )
+        } else {
+            s.cypher.append(" MATCH (trace)-[:HAS_EVENT]->(event:Event)")
+        }
+        return indexed
     }
 
     private fun logOrder(s: CypherBuildState): String =

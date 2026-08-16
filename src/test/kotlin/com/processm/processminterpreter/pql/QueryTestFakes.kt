@@ -67,6 +67,7 @@ open class FakeDataStoreRepository(
     private val logsByDataStoreId: Map<String, List<DataStoreLogSummary>> = emptyMap(),
 ) : DataStoreRepository {
     val attached = mutableListOf<Pair<String, String>>()
+    val existsCalls = mutableListOf<String>()
 
     override fun save(dataStore: DataStore): DataStore = dataStore
 
@@ -81,7 +82,10 @@ open class FakeDataStoreRepository(
 
     override fun deleteWithLogs(id: String): Boolean = false
 
-    override fun exists(id: String): Boolean = logsByDataStoreId.containsKey(id)
+    override fun exists(id: String): Boolean {
+        existsCalls += id
+        return logsByDataStoreId.containsKey(id)
+    }
 
     override fun attachLog(dataStoreId: String, logId: String) {
         attached += dataStoreId to logId

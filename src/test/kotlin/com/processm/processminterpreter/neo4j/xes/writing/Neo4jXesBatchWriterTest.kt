@@ -70,6 +70,7 @@ class Neo4jXesBatchWriterTest {
                 OPTIONAL MATCH (trace)-[:HAS_EVENT]->(event:Event)
                 RETURN log.name AS logName,
                        trace.parentLogId AS parentLogId,
+                       min(event.parentTraceId) AS eventParentTraceId,
                        count(DISTINCT trace) AS traces,
                        count(DISTINCT event) AS events
                 """.trimIndent(),
@@ -78,6 +79,7 @@ class Neo4jXesBatchWriterTest {
 
             assertEquals("Audit", graph["logName"].asString())
             assertEquals(LOG_ID, graph["parentLogId"].asString())
+            assertEquals("trace-1", graph["eventParentTraceId"].asString())
             assertEquals(1, graph["traces"].asLong())
             assertEquals(2, graph["events"].asLong())
 
@@ -106,6 +108,25 @@ class Neo4jXesBatchWriterTest {
             ).single()["follows"].asLong()
 
             assertEquals(1, follows)
+        }
+    }
+
+    @Test
+    fun `writes traces that contain no events`() {
+        val batch = minimalBatch()
+        val traceOnly = batch.traceBatches.single().copy(events = emptyList(), follows = emptyList())
+
+        writer.write(batch.copy(eventCount = 0, traceBatches = sequenceOf(traceOnly)))
+
+        driver.session().use { session ->
+            val counts = session.run(
+                "MATCH (:Log {logId: ${'$'}logId})-[:CONTAINS]->(trace:Trace)" +
+                    " OPTIONAL MATCH (trace)-[:HAS_EVENT]->(event:Event)" +
+                    " RETURN count(DISTINCT trace) AS traces, count(DISTINCT event) AS events",
+                mapOf("logId" to LOG_ID),
+            ).single()
+            assertEquals(1, counts["traces"].asLong())
+            assertEquals(0, counts["events"].asLong())
         }
     }
 

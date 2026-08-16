@@ -1464,6 +1464,14 @@ class CypherCodegenTest {
         assertTrue(!q.cypher.contains("RETURN log, trace, event"), q.cypher)
         assertTrue(q.cypher.contains("LIMIT \$traceLimit"), q.cypher)
         assertTrue(q.cypher.contains("LIMIT \$eventLimit"), q.cypher)
+        assertTrue(
+            q.cypher.contains(
+                "MATCH (event:Event {parentTraceId: trace.traceId})" +
+                    " WHERE event.importOrder IS NOT NULL" +
+                    " WITH event ORDER BY event.parentTraceId, event.importOrder LIMIT \$eventLimit",
+            ),
+            q.cypher,
+        )
         assertEquals("Hospital-test", q.parameters["logId"])
         assertEquals(1L, q.parameters["traceLimit"])
         assertEquals(1L, q.parameters["eventLimit"])

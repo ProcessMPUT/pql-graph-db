@@ -31,7 +31,7 @@ class Neo4jXesImportMapper(
         importedAt: LocalDateTime,
     ): Neo4jXesImportBatch {
         val logId = logId(requestedLogId)
-        val indexedTraces = log.traces.mapIndexed { index, trace ->
+        val indexedTraces = log.traces.asSequence().mapIndexed { index, trace ->
             IndexedTrace(trace, index, traceId(logId, trace, index))
         }
 
@@ -46,7 +46,7 @@ class Neo4jXesImportMapper(
             extensions = XesLogMetadataCodec.serializeExtensions(log.extensions),
             traceCount = log.traces.size,
             eventCount = log.traces.sumOf { it.events.size },
-            traceBatches = chunkByEventBudget(indexedTraces).asSequence().map { traceBatch ->
+            traceBatches = chunkByEventBudget(indexedTraces).map { traceBatch ->
                 Neo4jXesTraceBatch(
                     traces = traceRows(traceBatch, importedAt),
                     events = eventRows(traceBatch, importedAt),
@@ -75,18 +75,18 @@ class Neo4jXesImportMapper(
         importedAt: LocalDateTime,
     ): List<Map<String, Any?>> =
         traceBatch.flatMap { indexed ->
-            indexed.indexedEvents().map { indexedEvent ->
+            indexed.trace.events.mapIndexed { eventIndex, event ->
                 mapOf(
                     TRACE_ID_PROPERTY to indexed.traceId,
-                    EVENT_ID_PROPERTY to indexedEvent.eventId,
-                    EVENT_NAME_PROPERTY to indexedEvent.event.conceptName,
-                    EVENT_TIMESTAMP_PROPERTY to attributes.physicalEventTimestamp(indexedEvent.event),
-                    EVENT_RESOURCE_PROPERTY to indexedEvent.event.orgResource,
-                    EVENT_LIFECYCLE_PROPERTY to indexedEvent.event.lifecycleTransition,
-                    EVENT_COST_PROPERTY to indexedEvent.event.costTotal,
+                    EVENT_ID_PROPERTY to eventId(indexed.traceId, eventIndex),
+                    EVENT_NAME_PROPERTY to event.conceptName,
+                    EVENT_TIMESTAMP_PROPERTY to attributes.physicalEventTimestamp(event),
+                    EVENT_RESOURCE_PROPERTY to event.orgResource,
+                    EVENT_LIFECYCLE_PROPERTY to event.lifecycleTransition,
+                    EVENT_COST_PROPERTY to event.costTotal,
                     "createdAt" to importedAt,
-                    "importOrder" to indexedEvent.index,
-                    "attributes" to attributePayload(Scope.EVENT, attributes.eventAttributes(indexedEvent.event)),
+                    "importOrder" to eventIndex,
+                    "attributes" to attributePayload(Scope.EVENT, attributes.eventAttributes(event)),
                 )
             }
         }
@@ -153,8 +153,7 @@ class Neo4jXesImportMapper(
      * A single oversized trace still forms its own batch — the budget caps the
      * batch, never splits a trace.
      */
-    private fun chunkByEventBudget(traces: List<IndexedTrace>): List<List<IndexedTrace>> {
-        val batches = mutableListOf<List<IndexedTrace>>()
+    private fun chunkByEventBudget(traces: Sequence<IndexedTrace>): Sequence<List<IndexedTrace>> = sequence {
         var current = mutableListOf<IndexedTrace>()
         var eventsInBatch = 0
         for (indexed in traces) {
@@ -162,15 +161,14 @@ class Neo4jXesImportMapper(
             val overBudget = eventsInBatch + traceEvents > EVENT_BATCH_BUDGET ||
                 current.size >= MAX_TRACES_PER_BATCH
             if (current.isNotEmpty() && overBudget) {
-                batches += current
+                yield(current)
                 current = mutableListOf()
                 eventsInBatch = 0
             }
             current += indexed
             eventsInBatch += traceEvents
         }
-        if (current.isNotEmpty()) batches += current
-        return batches
+        if (current.isNotEmpty()) yield(current)
     }
 
     private companion object {

@@ -24,6 +24,7 @@ object Neo4jXesSchema {
     const val TRACE_ID_PROPERTY = "traceId"
     const val TRACE_PARENT_LOG_ID_PROPERTY = "parentLogId"
     const val EVENT_ID_PROPERTY = "eventId"
+    const val EVENT_PARENT_TRACE_ID_PROPERTY = "parentTraceId"
 
     val eventPhysicalName: Map<String, String> = mapOf(
         StandardAttributeCatalog.CONCEPT_NAME to "activity",
@@ -115,7 +116,17 @@ object Neo4jXesSchema {
     private val traceWriterManaged: Set<String> =
         setOf(TRACE_ID_PROPERTY, TRACE_PARENT_LOG_ID_PROPERTY, "caseId", "createdAt", "importOrder")
     private val eventWriterManaged: Set<String> =
-        setOf(EVENT_ID_PROPERTY, "activity", "timestamp", "resource", "lifecycle", "cost", "createdAt", "importOrder")
+        setOf(
+            EVENT_ID_PROPERTY,
+            EVENT_PARENT_TRACE_ID_PROPERTY,
+            "activity",
+            "timestamp",
+            "resource",
+            "lifecycle",
+            "cost",
+            "createdAt",
+            "importOrder",
+        )
 
     private fun storageMetadataKeys(scope: Scope): Set<String> =
         when (scope) {
@@ -142,7 +153,7 @@ object Neo4jXesSchema {
     private val traceStorageMetadataKeys: Set<String> =
         setOf(TRACE_ID_PROPERTY, TRACE_PARENT_LOG_ID_PROPERTY, "createdAt", "updatedAt", "importOrder")
     private val eventStorageMetadataKeys: Set<String> =
-        setOf(EVENT_ID_PROPERTY, "createdAt", "updatedAt", "importOrder")
+        setOf(EVENT_ID_PROPERTY, EVENT_PARENT_TRACE_ID_PROPERTY, "createdAt", "updatedAt", "importOrder")
 
     /*
      * ProcessM-internal helper attributes can appear in imported logs and are useful

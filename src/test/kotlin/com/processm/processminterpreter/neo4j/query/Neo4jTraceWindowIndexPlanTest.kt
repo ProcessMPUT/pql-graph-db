@@ -39,6 +39,34 @@ class Neo4jTraceWindowIndexPlanTest {
                     assertEquals(1L, indexSeek.records())
                     assertTrue(profile.totalDbHits() <= 10, "Expected a bounded index read, got ${profile.totalDbHits()} DB hits")
                     assertEquals(null, profile.find("Top"))
+
+                    session.run(
+                        "MATCH (trace:Trace {traceId: 't-0'}) UNWIND range(0, 1999) AS i" +
+                            " CREATE (trace)-[:HAS_EVENT]->(:Event {eventId: 'e-' + i," +
+                            " parentTraceId: 't-0', importOrder: i})",
+                    ).consume()
+                    session.run(
+                        "CREATE INDEX event_parent_import_order IF NOT EXISTS FOR (event:Event)" +
+                            " ON (event.parentTraceId, event.importOrder)",
+                    ).consume()
+                    session.run("CALL db.awaitIndexes()").consume()
+
+                    val eventProfile = session.run(
+                        "PROFILE WITH 't-0' AS traceId" +
+                            " CALL (traceId) { MATCH (event:Event {parentTraceId: traceId})" +
+                            " WHERE event.importOrder IS NOT NULL" +
+                            " WITH event ORDER BY event.parentTraceId, event.importOrder" +
+                            " LIMIT 1 RETURN event } RETURN event.eventId",
+                    ).consume().profile()
+
+                    val eventIndexSeek = eventProfile.find("NodeIndexSeek")
+                    assertNotNull(eventIndexSeek)
+                    assertEquals(1L, eventIndexSeek.records())
+                    assertTrue(
+                        eventProfile.totalDbHits() <= 15,
+                        "Expected a bounded event index read, got ${eventProfile.totalDbHits()} DB hits",
+                    )
+                    assertEquals(null, eventProfile.find("Top"))
                 }
             }
         }

@@ -12,7 +12,7 @@ import com.processm.processminterpreter.neo4j.xes.schema.Neo4jXesSchema
 import java.time.Instant
 import java.util.UUID
 
-internal val SYNTHETIC_KEY: Map<String, Any?> = emptyMap()
+internal object SyntheticHierarchyKey
 
 internal class LogBuilder {
     var conceptName: String? = null
@@ -23,7 +23,7 @@ internal class LogBuilder {
     var traceGlobalsJson: String? = null
     var eventGlobalsJson: String? = null
     var extensionsJson: String? = null
-    val traces: MutableMap<Map<String, Any?>, TraceBuilder> = linkedMapOf()
+    val traces: MutableMap<Any?, TraceBuilder> = linkedMapOf()
 
     fun absorb(row: Map<String, Any?>, aliases: Map<String, ColumnAlias>) {
         for (attribute in row.projectedAttributes(aliases)) {

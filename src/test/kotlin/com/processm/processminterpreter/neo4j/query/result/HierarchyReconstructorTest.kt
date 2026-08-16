@@ -6,8 +6,12 @@ import com.processm.processminterpreter.pql.catalog.StandardAttributeCatalog
 import com.processm.processminterpreter.pql.common.HierarchicalLimits
 import com.processm.processminterpreter.pql.common.HierarchicalOffsets
 import com.processm.processminterpreter.pql.cypher.ColumnAlias
+import com.processm.processminterpreter.xes.model.XesEvent
+import com.processm.processminterpreter.xes.model.XesLog
+import com.processm.processminterpreter.xes.model.XesTrace
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.time.Instant
@@ -689,5 +693,41 @@ class HierarchyReconstructorTest {
             offsets = HierarchicalOffsets(log = 99),
         )
         assertTrue(logs.isEmpty(), "log offset past end should drop all logs: $logs")
+    }
+
+    @Test
+    fun `windowing reuses an already bounded hierarchy without copying it`() {
+        val events = listOf(XesEvent(conceptName = "A"))
+        val trace = XesTrace(conceptName = "T", events = events)
+        val traces = listOf(trace)
+        val log = XesLog(conceptName = "L", traces = traces)
+        val logs = listOf(log)
+
+        val result = HierarchicalWindowing.apply(
+            logs = logs,
+            limits = HierarchicalLimits(),
+            offsets = HierarchicalOffsets(),
+            defaultLimits = HierarchicalLimits(log = 10, trace = 30, event = 90),
+        )
+
+        assertSame(logs, result)
+        assertSame(log, result.single())
+        assertSame(traces, result.single().traces)
+        assertSame(trace, result.single().traces.single())
+        assertSame(events, result.single().traces.single().events)
+    }
+
+    @Test
+    fun `huge offset is clamped instead of wrapping to zero`() {
+        val logs = listOf(XesLog(conceptName = "L"))
+
+        val result = HierarchicalWindowing.apply(
+            logs = logs,
+            limits = HierarchicalLimits(),
+            offsets = HierarchicalOffsets(log = Long.MAX_VALUE),
+            defaultLimits = HierarchicalLimits(),
+        )
+
+        assertTrue(result.isEmpty())
     }
 }

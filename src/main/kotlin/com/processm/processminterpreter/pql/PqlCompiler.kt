@@ -2,6 +2,7 @@ package com.processm.processminterpreter.pql
 
 import com.processm.processminterpreter.xes.DataStoreRepository
 import com.processm.processminterpreter.xes.LogRepository
+import com.processm.processminterpreter.xes.datastore.DataStoreNotFoundException
 import com.processm.processminterpreter.xes.model.Classifier
 import com.processm.processminterpreter.xes.model.Log
 import com.processm.processminterpreter.pql.common.HierarchicalLimits
@@ -190,7 +191,13 @@ class PqlCompiler(
     ): List<String>? =
         when {
             logId != null -> listOf(logId)
-            dataStoreId != null -> dataStores.findLogSummaries(dataStoreId).map { it.logId }
+            dataStoreId != null -> {
+                val logIds = dataStores.findLogSummaries(dataStoreId).map { it.logId }
+                if (logIds.isEmpty() && !dataStores.exists(dataStoreId)) {
+                    throw DataStoreNotFoundException(dataStoreId)
+                }
+                logIds
+            }
             else -> null
         }
 

@@ -31,7 +31,7 @@ server:
 logging:
   level:
     org.neo4j.driver: INFO
-    com.processm.processminterpreter: DEBUG
+    com.processm.processminterpreter: INFO
 
 
 processm:
