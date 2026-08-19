@@ -265,12 +265,16 @@ class CompareRunsEndToEndTest(unittest.TestCase):
             self.assertIn("stabilny wzrost ponad błędem", report)
             self.assertIn("Efekt konserwatywny", report)
             self.assertIn("eksploracyjne skalowanie poza predeklarowanym kontraktem", report)
-            self.assertIn("# Szczegóły diagnostyczne bloku kotwiczącego", report)
-            self.assertIn("Poniższa część zawiera wyłącznie wyniki przebiegu kotwiczącego.", report)
+            self.assertNotIn("# Szczegóły diagnostyczne bloku kotwiczącego", report)
+            self.assertIn("Pełne tabele pojedynczego bloku pozostają w `thesis-report.md`", report)
             self.assertNotIn("Niniejszy raport zawiera wyłącznie wyniki jednego przebiegu benchmarku.", report)
             self.assertTrue((output / "series-scaling.csv").is_file())
             self.assertTrue((output / "series-scaling-exploratory.csv").is_file())
             self.assertTrue((output / "series-cell-stability.csv").is_file())
+            self.assertTrue((output / "series-query-outcomes.csv").is_file())
+            self.assertTrue((output / "series-real-dataset-outcomes.csv").is_file())
+            self.assertTrue((output / "series-payload.csv").is_file())
+            self.assertTrue((output / "series-memory.csv").is_file())
             self.assertTrue((output / "report-provenance.json").is_file())
             self.assertTrue((output / "thesis-tables-series.tex").is_file())
 
@@ -293,7 +297,7 @@ class CompareRunsEndToEndTest(unittest.TestCase):
             self.assertEqual(0, result.returncode, result.stdout + result.stderr)
             report = (output / "thesis-report-series.md").read_text(encoding="utf-8")
             self.assertIn("Q3-pamięć: nierozstrzygnięte — kierunek poniżej błędu pomiaru", report)
-            self.assertIn("Nie są estymacją minimalnej wymaganej pamięci", report)
+            self.assertIn("Nie są też estymacją minimalnej wymaganej pamięci", report)
 
     def test_final_renderer_rejects_series_without_isolated_storage_probe(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -20,7 +20,7 @@ PAD_TOP = 52
 PAD_BOTTOM = 88
 COLORS = {
     "local": "#2563eb",
-    "reference": "#dc2626",
+    "reference": "#d97706",
 }
 RIBBON_OPACITY = 0.16
 # Dashed context lines drawn on Q2 charts at the median latency of the
@@ -533,6 +533,70 @@ def write_grouped_bars_svg(
     lines.append(
         f'<text x="22" y="{HEIGHT / 2}" text-anchor="middle" font-family="Arial" font-size="14" transform="rotate(-90 22 {HEIGHT / 2})">{escape(y_label)}</text>'
     )
+    lines.append("</svg>")
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def write_stacked_horizontal_bars_svg(
+    path: Path,
+    title: str,
+    categories: list[str],
+    series: dict[str, list[float]],
+    x_label: str,
+) -> None:
+    """Compact outcome overview with one readable row per category."""
+    if not categories or not series:
+        return
+    height = max(360, 125 + 30 * len(categories))
+    left, right, top, bottom = 250, 45, 58, 65
+    plot_width = WIDTH - left - right
+    totals = [
+        sum(values[index] if index < len(values) and math.isfinite(values[index]) else 0.0 for values in series.values())
+        for index in range(len(categories))
+    ]
+    maximum = max(totals, default=0.0)
+    if maximum <= 0:
+        return
+    ticks = nice_ticks(0.0, maximum)
+    lines = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{WIDTH}" height="{height}" viewBox="0 0 {WIDTH} {height}">',
+        '<rect width="100%" height="100%" fill="white"/>',
+        f'<text x="{WIDTH / 2}" y="28" text-anchor="middle" font-family="Arial" font-size="22" font-weight="700">{escape(title)}</text>',
+    ]
+    for tick in ticks:
+        x = left + tick / maximum * plot_width
+        lines.append(f'<line x1="{x:.2f}" y1="{top}" x2="{x:.2f}" y2="{height - bottom}" stroke="#e5e7eb"/>')
+        lines.append(f'<text x="{x:.2f}" y="{height - bottom + 18}" text-anchor="middle" font-family="Arial" font-size="11">{format_count(tick)}</text>')
+    row_height = (height - top - bottom) / len(categories)
+    bar_height = min(20.0, row_height * 0.68)
+    for index, category in enumerate(categories):
+        y = top + index * row_height + row_height / 2
+        lines.append(
+            f'<text x="{left - 10}" y="{y + 4:.2f}" text-anchor="end" font-family="Arial" font-size="11">{escape(category)}</text>'
+        )
+        offset = 0.0
+        for name, values in series.items():
+            value = values[index] if index < len(values) else math.nan
+            if not (math.isfinite(value) and value > 0):
+                continue
+            width = value / maximum * plot_width
+            color = COLORS.get(name, "#16a34a")
+            x = left + offset / maximum * plot_width
+            lines.append(f'<rect x="{x:.2f}" y="{y - bar_height / 2:.2f}" width="{width:.2f}" height="{bar_height:.2f}" fill="{color}"/>')
+            if width >= 18:
+                lines.append(
+                    f'<text x="{x + width / 2:.2f}" y="{y + 3.5:.2f}" text-anchor="middle" font-family="Arial" font-size="10" fill="white">{format_count(value)}</text>'
+                )
+            offset += value
+    lines.append(
+        f'<text x="{left + plot_width / 2}" y="{height - 10}" text-anchor="middle" font-family="Arial" font-size="13">{escape(x_label)}</text>'
+    )
+    legend_x = left
+    for index, name in enumerate(series):
+        x = legend_x + index * 155
+        color = COLORS.get(name, "#16a34a")
+        lines.append(f'<rect x="{x}" y="{height - 42}" width="13" height="13" fill="{color}"/>')
+        lines.append(f'<text x="{x + 18}" y="{height - 31}" font-family="Arial" font-size="12">{escape(name)}</text>')
     lines.append("</svg>")
     path.write_text("\n".join(lines), encoding="utf-8")
 
@@ -1158,6 +1222,86 @@ def main() -> int:
     datasets = {row["datasetName"]: row for row in read_csv(result_dir / "datasets.csv")}
     imports = join_dataset(read_csv(result_dir / "import-results.csv"), datasets)
     current_series = has_current_series_report(result_dir)
+    if current_series:
+        query_outcomes = read_csv(result_dir / "series-query-outcomes.csv")
+        if query_outcomes:
+            colors_backup = dict(COLORS)
+            COLORS.update({
+                "LOCAL": "#2563eb",
+                "REFERENCE": "#d97706",
+                "poniżej błędu": "#94a3b8",
+                "zmiana kierunku": "#7c3aed",
+            })
+            write_stacked_horizontal_bars_svg(
+                plots_dir / "series-query-outcomes.svg",
+                "Q2: werdykty według rodzaju zapytania",
+                [row.get("queryLabel", "?") for row in query_outcomes],
+                {
+                    "LOCAL": [number(row.get("supportedLocal")) for row in query_outcomes],
+                    "REFERENCE": [number(row.get("supportedReference")) for row in query_outcomes],
+                    "poniżej błędu": [number(row.get("belowMeasurementError")) for row in query_outcomes],
+                    "zmiana kierunku": [number(row.get("directionChanges")) for row in query_outcomes],
+                },
+                "Liczba par dataset–zapytanie",
+            )
+            COLORS.clear()
+            COLORS.update(colors_backup)
+
+        real_outcomes = read_csv(result_dir / "series-real-dataset-outcomes.csv")
+        if real_outcomes:
+            colors_backup = dict(COLORS)
+            COLORS.update({
+                "LOCAL": "#2563eb",
+                "REFERENCE": "#d97706",
+                "poniżej błędu": "#94a3b8",
+                "zmiana kierunku": "#7c3aed",
+            })
+            write_stacked_horizontal_bars_svg(
+                plots_dir / "series-real-datasets.svg",
+                "Q2: werdykty na logach rzeczywistych",
+                [row.get("datasetName", "?") for row in real_outcomes],
+                {
+                    "LOCAL": [number(row.get("supportedLocal")) for row in real_outcomes],
+                    "REFERENCE": [number(row.get("supportedReference")) for row in real_outcomes],
+                    "poniżej błędu": [number(row.get("belowMeasurementError")) for row in real_outcomes],
+                    "zmiana kierunku": [number(row.get("directionChanges")) for row in real_outcomes],
+                },
+                "Liczba porównywalnych par",
+            )
+            COLORS.clear()
+            COLORS.update(colors_backup)
+
+        payload_rows = sorted(
+            read_csv(result_dir / "series-payload.csv"),
+            key=lambda row: number(row.get("largerToSmallerFactor")),
+            reverse=True,
+        )[:10]
+        if payload_rows:
+            write_grouped_bars_svg(
+                plots_dir / "series-payload.svg",
+                "Największe różnice rozmiaru odpowiedzi HTTP",
+                [f"{row.get('datasetName', '?')} / {row.get('queryLabel', '?')}" for row in payload_rows],
+                {
+                    "local": [number(row.get("medianLocalBytes")) for row in payload_rows],
+                    "reference": [number(row.get("medianReferenceBytes")) for row in payload_rows],
+                },
+                "Bajty, skala log",
+                log_scale=True,
+            )
+
+        series_memory = read_csv(result_dir / "series-memory.csv")
+        if series_memory:
+            write_grouped_bars_svg(
+                plots_dir / "series-memory.svg",
+                "Metryka pamięci docker stats w fazie zapytań",
+                [row.get("run", "?") for row in series_memory],
+                {
+                    "local": [number(row.get("localMedianMiB")) for row in series_memory],
+                    "reference": [number(row.get("referenceMedianMiB")) for row in series_memory],
+                },
+                "Mediana [MiB]",
+            )
+
     series_imports = read_csv(result_dir / "series-import.csv") if current_series else []
     if series_imports:
         imports = join_dataset(
@@ -1334,7 +1478,7 @@ def main() -> int:
         COLORS.update({"mediana": "#2563eb", "peak": "#f59e0b"})
         write_grouped_bars_svg(
             plots_dir / "memory_queries_phase.svg",
-            "RAM w fazie zapytan (GB)",
+            "Metryka pamięci docker stats w fazie zapytań (GB)",
             mem_cats,
             mem_series,
             "GB",
@@ -1446,7 +1590,7 @@ def main() -> int:
         (
             "Pamięć operacyjna",
             [
-                ("memory_queries_phase.svg", "Rys. Q3e: zużycie RAM w fazie zapytań (mediana i peak, per komponent)."),
+                ("memory_queries_phase.svg", "Rys. Q3e: metryka pamięci docker stats w fazie zapytań (mediana i peak, per komponent)."),
             ],
             "section-end",
         ),

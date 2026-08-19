@@ -220,6 +220,10 @@ def build(run_dir: Path, out_path: Path) -> None:
         required_series_files = (
             "repeatability.csv",
             "series-comparison.csv",
+            "series-query-outcomes.csv",
+            "series-real-dataset-outcomes.csv",
+            "series-payload.csv",
+            "series-memory.csv",
             "series-cell-stability.csv",
             "series-import.csv",
             "series-import-comparison.csv",
@@ -230,6 +234,11 @@ def build(run_dir: Path, out_path: Path) -> None:
             "thesis-tables-series.tex",
         )
         missing_series_files = [name for name in required_series_files if not (run_dir / name).is_file()]
+        if "hoisted-group-evidence.json" in md_text:
+            missing_series_files += [
+                name for name in ("hoisted-group-evidence.json", "hoisted-group-evidence.md")
+                if not (run_dir / name).is_file()
+            ]
         if missing_series_files:
             raise SystemExit(
                 "error: final report is missing cross-run artifacts: " + ", ".join(missing_series_files),
@@ -269,9 +278,12 @@ def build(run_dir: Path, out_path: Path) -> None:
             )
         required_final_sections = (
             "## Werdykt serii — Q2",
+            "## Q2 — przekrój po rodzaju zapytania",
+            "## Q2 — rozmiar odpowiedzi HTTP",
             "## Q2 — skalowanie między przebiegami",
             "## Q2 — eksploracyjne skalowanie poza predeklarowanym kontraktem",
             "## Q4 — zgodność odpowiedzi między przebiegami",
+            "## Luki obecnego eksperymentu i następne pomiary",
             "Kompletna izolowana sonda storage została dołączona",
             "Generator raportu:",
         )

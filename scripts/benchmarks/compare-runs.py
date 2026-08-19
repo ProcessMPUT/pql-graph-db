@@ -25,6 +25,7 @@ import csv
 import hashlib
 import json
 import math
+import re
 import subprocess
 import sys
 
@@ -32,7 +33,7 @@ MS = 1000.0
 MIB = 1024.0 * 1024.0
 VALIDITY_GATE_DEFAULT = 1.25
 SERIES_RANDOM_SEED = 20260728
-BENCHMARK_PROTOCOL_VERSION = 10
+MIN_BENCHMARK_PROTOCOL_VERSION = 10
 MIN_GLOBAL_WARMUP_ROUNDS = 200
 MIN_POST_IDLE_WARMUP_ROUNDS = 200
 POST_IDLE_WARMUP_MODE = "fresh-import-query-delete"
@@ -106,6 +107,57 @@ def query_medians(run: Path) -> dict[tuple[str, str, str], float]:
         key = (row.get("datasetName", ""), row.get("queryLabel", ""), row.get("system", ""))
         grouped.setdefault(key, []).append(value * MS)
     return {key: type7_quantile(values, 0.50) for key, values in grouped.items()}
+
+
+def query_payload_medians(run: Path) -> dict[tuple[str, str, str], float]:
+    """Median serialized response bytes per warm cell, including mismatches.
+
+    Mismatching bodies remain unsuitable for latency comparison, but their size is
+    still an important black-box transport/serialization diagnostic.
+    """
+    grouped: dict[tuple[str, str, str], list[float]] = {}
+    for row in read_csv(run / "query-results.csv"):
+        if row.get("phase") != "warm" or row.get("status") not in {"OK", "MISMATCH"}:
+            continue
+        value = as_float(row.get("responseBytes"))
+        if value is None or value < 0:
+            continue
+        key = (row.get("datasetName", ""), row.get("queryLabel", ""), row.get("system", ""))
+        grouped.setdefault(key, []).append(value)
+    return {key: type7_quantile(values, 0.50) for key, values in grouped.items()}
+
+
+def sha256_file(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def compatibility_summary(path: Path | None) -> dict[str, Any] | None:
+    """Read the small, stable counter block from a compatibility report."""
+    if path is None:
+        return None
+    report_dir = path if path.is_dir() else path.parent
+    summary_path = report_dir / "summary.md"
+    results_path = report_dir / "results.json"
+    if not summary_path.is_file() or not results_path.is_file():
+        sys.exit("error: --compatibility-report needs summary.md and results.json")
+    text = summary_path.read_text(encoding="utf-8")
+
+    def count(label: str) -> int:
+        match = re.search(rf"^- {re.escape(label)}: (\d+)$", text, re.M)
+        if not match:
+            sys.exit(f"error: compatibility summary is missing '{label}'")
+        return int(match.group(1))
+
+    return {
+        "path": str(report_dir.resolve()),
+        "checks": count("Checks"),
+        "matches": count("Matches"),
+        "accepted": count("Accepted compatibility checks"),
+        "strictProblems": count("Strict problems"),
+        "informationalMismatches": count("Informational mismatches"),
+        "summarySha256": sha256_file(summary_path),
+        "resultsSha256": sha256_file(results_path),
+    }
 
 
 def query_iqr_metrics(run: Path) -> dict[tuple[str, str, str], tuple[float, float, float]]:
@@ -514,10 +566,11 @@ def load_run(path: Path) -> RunData:
 
     if environment.get("profile") != "full":
         issues.append(f"profil {environment.get('profile')!r}, wymagany 'full'")
-    if environment.get("benchmarkProtocolVersion") != BENCHMARK_PROTOCOL_VERSION:
+    protocol_version = environment.get("benchmarkProtocolVersion")
+    if not isinstance(protocol_version, int) or protocol_version < MIN_BENCHMARK_PROTOCOL_VERSION:
         issues.append(
-            f"wersja protokołu {environment.get('benchmarkProtocolVersion')!r}, "
-            f"wymagana {BENCHMARK_PROTOCOL_VERSION}"
+            f"wersja protokołu {protocol_version!r}, "
+            f"wymagana co najmniej {MIN_BENCHMARK_PROTOCOL_VERSION}"
         )
     if int(environment.get("globalWarmupRounds") or 0) < MIN_GLOBAL_WARMUP_ROUNDS:
         issues.append(
@@ -934,6 +987,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("run_dirs", type=Path, nargs="+", help="at least three FULL run directories")
     parser.add_argument("--out-dir", type=Path, default=None)
+    parser.add_argument(
+        "--compatibility-report",
+        type=Path,
+        default=None,
+        help="directory containing the broad compatibility summary.md and results.json",
+    )
     args = parser.parse_args()
     if len(args.run_dirs) < 3:
         sys.exit("error: methodology requires at least three complete runs")
@@ -1196,12 +1255,78 @@ def main() -> int:
                 "status": "EXPLORATORY_NOT_PREREGISTERED",
             })
 
+    query_outcome_rows: list[dict[str, Any]] = []
+    for query_label in sorted({str(row["queryLabel"]) for row in comparison_rows}):
+        rows = [row for row in comparison_rows if row["queryLabel"] == query_label]
+        query_outcome_rows.append({
+            "queryLabel": query_label,
+            "comparablePairs": len(rows),
+            "supportedLocal": sum(row["verdict"] == "SUPPORTED" and row["direction"] == "LOCAL" for row in rows),
+            "supportedReference": sum(row["verdict"] == "SUPPORTED" and row["direction"] == "REFERENCE" for row in rows),
+            "belowMeasurementError": sum(row["verdict"] == "BELOW_MEASUREMENT_ERROR" for row in rows),
+            "directionChanges": sum(row["verdict"] == "DIRECTION_CHANGES" for row in rows),
+            "magnitudeAlerts": sum(row["magnitudeStability"] == "UNSTABLE_MAGNITUDE" for row in rows),
+        })
+
+    dataset_series = {row.get("datasetName", ""): row.get("series", "") for row in anchor.datasets}
+    real_dataset_outcome_rows: list[dict[str, Any]] = []
+    for dataset_name in sorted(name for name, series in dataset_series.items() if series == "real-validation"):
+        rows = [row for row in comparison_rows if row["datasetName"] == dataset_name]
+        real_dataset_outcome_rows.append({
+            "datasetName": dataset_name,
+            "comparablePairs": len(rows),
+            "supportedLocal": sum(row["verdict"] == "SUPPORTED" and row["direction"] == "LOCAL" for row in rows),
+            "supportedReference": sum(row["verdict"] == "SUPPORTED" and row["direction"] == "REFERENCE" for row in rows),
+            "belowMeasurementError": sum(row["verdict"] == "BELOW_MEASUREMENT_ERROR" for row in rows),
+            "directionChanges": sum(row["verdict"] == "DIRECTION_CHANGES" for row in rows),
+            "mismatchPairs": sum((dataset_name, query) in anchor.mismatch_pairs for query in anchor.queries),
+        })
+
+    payloads_by_run = [query_payload_medians(run.path) for run in runs]
+    payload_pair_keys = sorted({(dataset, query) for dataset, query, _ in payloads_by_run[0]})
+    payload_rows: list[dict[str, Any]] = []
+    for dataset, query in payload_pair_keys:
+        local_values = [payloads[(dataset, query, "local")] for payloads in payloads_by_run]
+        reference_values = [payloads[(dataset, query, "reference")] for payloads in payloads_by_run]
+        local_bytes = median(local_values)
+        reference_bytes = median(reference_values)
+        smaller = min(local_bytes, reference_bytes)
+        factor = max(local_bytes, reference_bytes) / smaller if smaller > 0 else math.inf
+        larger = "equal" if local_bytes == reference_bytes else ("local" if local_bytes > reference_bytes else "reference")
+        payload_rows.append({
+            "datasetName": dataset,
+            "queryLabel": query,
+            "pairStatus": "MISMATCH" if (dataset, query) in anchor.mismatch_pairs else "COMPARABLE",
+            "medianLocalBytes": f"{local_bytes:.0f}",
+            "medianReferenceBytes": f"{reference_bytes:.0f}",
+            "largerPayloadSystem": larger,
+            "largerToSmallerFactor": "inf" if not math.isfinite(factor) else f"{factor:.6f}",
+        })
+
+    memory_rows: list[dict[str, Any]] = []
+    for run in runs:
+        memory_rows.append({
+            "run": run.name,
+            "localMedianMiB": f"{run.memory['local-total']:.6f}",
+            "referenceMedianMiB": f"{run.memory['reference-total']:.6f}",
+            "localPeakMiB": f"{run.memory_peaks['local-total']:.6f}",
+            "referencePeakMiB": f"{run.memory_peaks['reference-total']:.6f}",
+        })
+
     provenance = generator_provenance()
     provenance["measurementGitCommit"] = reference_signature["gitCommit"]
+    compatibility = compatibility_summary(args.compatibility_report)
+    provenance["compatibilityReport"] = compatibility
+    evidence_path = out_dir / "hoisted-group-evidence.json"
+    evidence = read_json(evidence_path)
+    if evidence:
+        provenance["hoistedGroupEvidenceSha256"] = sha256_file(evidence_path)
     memory_analysis = memory_series_analysis(runs)
 
     for artifact in (
         "repeatability.csv", "repeatability.md", "series-comparison.csv",
+        "series-query-outcomes.csv", "series-real-dataset-outcomes.csv",
+        "series-payload.csv", "series-memory.csv",
         "series-cell-stability.csv", "series-import.csv", "series-import-comparison.csv",
         "series-scaling.csv", "series-scaling-exploratory.csv", "report-provenance.json",
         "thesis-tables-series.tex", "thesis-report-series.md",
@@ -1210,6 +1335,17 @@ def main() -> int:
 
     write_csv(out_dir / "repeatability.csv", repeatability_rows)
     write_csv(out_dir / "series-comparison.csv", comparison_rows)
+    write_csv(out_dir / "series-query-outcomes.csv", query_outcome_rows)
+    write_csv(
+        out_dir / "series-real-dataset-outcomes.csv",
+        real_dataset_outcome_rows,
+        fieldnames=[
+            "datasetName", "comparablePairs", "supportedLocal", "supportedReference",
+            "belowMeasurementError", "directionChanges", "mismatchPairs",
+        ],
+    )
+    write_csv(out_dir / "series-payload.csv", payload_rows)
+    write_csv(out_dir / "series-memory.csv", memory_rows)
     write_csv(out_dir / "series-cell-stability.csv", cell_stability_rows)
     write_csv(out_dir / "series-import.csv", import_rows)
     write_csv(out_dir / "series-import-comparison.csv", import_comparison_rows)
@@ -1242,8 +1378,18 @@ def main() -> int:
         row for row in supported
         if row["magnitudeStability"] == "UNSTABLE_MAGNITUDE"
     ]
+    top_magnitude_alerts = sorted(
+        magnitude_alerts,
+        key=lambda row: float(row["ratioMagnitudeSpread"]),
+        reverse=True,
+    )[:10]
     below = [row for row in comparison_rows if row["verdict"] == "BELOW_MEASUREMENT_ERROR"]
     changing = [row for row in comparison_rows if row["verdict"] == "DIRECTION_CHANGES"]
+    top_payload_rows = sorted(
+        (row for row in payload_rows if math.isfinite(float(row["largerToSmallerFactor"]))),
+        key=lambda row: float(row["largerToSmallerFactor"]),
+        reverse=True,
+    )[:10]
     supported_imports = [row for row in import_comparison_rows if row["verdict"] == "SUPPORTED"]
     supported_imports_local = [row for row in supported_imports if row["direction"] == "LOCAL"]
     supported_imports_reference = [row for row in supported_imports if row["direction"] == "REFERENCE"]
@@ -1299,6 +1445,8 @@ def main() -> int:
         f"- SHA-256 `scripts/benchmarks/compare-runs.py`: `{provenance['compareRunsSha256']}`",
         f"- Przebieg kotwiczący szczegółowe tabele/wykresy: **{anchor.name}** "
         "(środkowa mediana LOCAL; wybór służy wyłącznie prezentacji, nie estymacji efektu)",
+        "- Pełne tabele pojedynczego bloku pozostają w `thesis-report.md`; raport serii "
+        "nie duplikuje ich automatycznie.",
         "",
         "## Werdykt serii — Q2",
         "",
@@ -1333,28 +1481,76 @@ def main() -> int:
                 f"×{float(row['conservativeMagnitude']):.2f} ({direction_pl(str(row['direction']))}), "
                 f"zakres R/L [{float(row['minRatio']):.2f}; {float(row['maxRatio']):.2f}], "
                 f"maks. Q3/Q1 komórki ×{float(row['maxWithinCellIqrFactor']):.2f}."
-                for row in magnitude_alerts
+                for row in top_magnitude_alerts
             ]
             if magnitude_alerts
             else ["- Brak par objętych alarmem dużej niestabilności wielkości."]
+        ),
+        *(
+            [f"- Pokazano 10 największych z {len(magnitude_alerts)} alarmów; pełny wykaz jest w `series-comparison.csv`."]
+            if len(magnitude_alerts) > 10 else []
         ),
         "",
         "Dane pozwalają stwierdzić obecność różnych reżimów opóźnienia, lecz nie wskazują "
         "ich przyczyny. Bez planów wykonania lub logów `EXPLAIN` raport nie przypisuje ich "
         "przełączeniu planu PostgreSQL ani żadnemu innemu mechanizmowi.",
         "",
-        "| Dataset | Zapytanie | Efekt konserwatywny | Kierunek | Próg | Werdykt | Mediana R/L (diag.) | Zakres R/L (diag.) | Stabilność wielkości |",
-        "| :--- | :--- | ---: | :--- | ---: | :--- | ---: | :--- | :--- |",
+        "## Q2 — przekrój po rodzaju zapytania",
+        "",
+        "Poniższe zestawienie zapobiega dominacji licznych punktów siatki syntetycznej. "
+        "Jednostką wniosku nadal jest para dataset–zapytanie; tabela jedynie agreguje "
+        f"werdykty, a komplet {len(comparison_rows)} wierszy pozostaje w `series-comparison.csv`.",
+        "",
+        "![Werdykty Q2 według zapytania](plots/series-query-outcomes.svg)",
+        "",
+        "| Zapytanie | Pary | LOCAL | REFERENCE | Poniżej błędu | Zmiana kierunku | Alarm wielkości |",
+        "| :--- | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
-    for row in comparison_rows:
+    for row in query_outcome_rows:
         md.append(
-            f"| {row['datasetName']} | {row['queryLabel']} "
-            f"| {conservative_effect_text(row)} | {direction_pl(str(row['direction']))} "
-            f"| ×{float(row['practicalFloor']):.2f} | {verdict_pl(str(row['verdict']))} "
-            f"| ×{float(row['medianRatioReferenceToLocal']):.2f} "
-            f"| [{float(row['minRatio']):.2f}; {float(row['maxRatio']):.2f}] "
-            f"| {magnitude_stability_pl(str(row['magnitudeStability']))} |"
+            f"| {row['queryLabel']} | {row['comparablePairs']} | {row['supportedLocal']} "
+            f"| {row['supportedReference']} | {row['belowMeasurementError']} "
+            f"| {row['directionChanges']} | {row['magnitudeAlerts']} |"
         )
+
+    if real_dataset_outcome_rows:
+        md += [
+            "",
+            "### Walidacja na logach rzeczywistych",
+            "",
+            "![Werdykty Q2 na logach rzeczywistych](plots/series-real-datasets.svg)",
+            "",
+            "| Dataset | Porównywalne | LOCAL | REFERENCE | Poniżej błędu | Zmiana kierunku | MISMATCH |",
+            "| :--- | ---: | ---: | ---: | ---: | ---: | ---: |",
+            *[
+                f"| {row['datasetName']} | {row['comparablePairs']} | {row['supportedLocal']} "
+                f"| {row['supportedReference']} | {row['belowMeasurementError']} "
+                f"| {row['directionChanges']} | {row['mismatchPairs']} |"
+                for row in real_dataset_outcome_rows
+            ],
+        ]
+
+    md += [
+        "",
+        "## Q2 — rozmiar odpowiedzi HTTP",
+        "",
+        "Czas end-to-end obejmuje serializację i transfer, dlatego różne rozmiary odpowiedzi "
+        "mogą współtworzyć obserwowany efekt. To diagnostyka mechanizmu, nie korekta czasu: "
+        "nie odejmujemy kosztu transportu ani nie przeliczamy wyniku na bajt.",
+        "",
+        "![Największe różnice rozmiaru odpowiedzi](plots/series-payload.svg)",
+        "",
+        "| Dataset | Zapytanie | Status pary | LOCAL [B] | REFERENCE [B] | Większy payload | Faktor |",
+        "| :--- | :--- | :--- | ---: | ---: | :--- | ---: |",
+        *[
+            f"| {row['datasetName']} | {row['queryLabel']} | {row['pairStatus']} "
+            f"| {row['medianLocalBytes']} | {row['medianReferenceBytes']} "
+            f"| {row['largerPayloadSystem']} | ×{float(row['largerToSmallerFactor']):.2f} |"
+            for row in top_payload_rows
+        ],
+        "",
+        "Pełne wartości dla wszystkich par, w tym unieważnionych MISMATCH, zapisano w `series-payload.csv`.",
+    ]
 
     md += [
         "",
@@ -1467,6 +1663,8 @@ def main() -> int:
         "",
         disk_verdict.removeprefix("- "),
         "",
+        "![Q3: przyrost storage względem liczby zdarzeń](plots/storage_scaling_delta_by_totalEvents.svg)",
+        "",
         "## Q3 — pamięć między przebiegami",
         "",
         "| Składnik | " + " | ".join(run.name for run in runs) + " | Rozrzut |",
@@ -1510,7 +1708,10 @@ def main() -> int:
         memory_conclusion = "nierozstrzygnięte — kierunek zmienia się między blokami"
     md += [
         "",
-        f"**Q3-pamięć: {memory_conclusion}.** Konserwatywny efekt kierunku niższego RSS "
+        "![Metryka pamięci docker stats między blokami](plots/series-memory.svg)",
+        "",
+        f"**Q3-pamięć: {memory_conclusion}.** Konserwatywny efekt kierunku niższego wskazania "
+        "`docker stats` "
         f"wynosi ×{float(memory_analysis['conservativeMagnitude']):.3f}, a próg wynikający "
         f"z większego rozrzutu międzyblokowego obu systemów wynosi "
         f"×{float(memory_analysis['practicalFloor']):.3f} "
@@ -1522,11 +1723,13 @@ def main() -> int:
         f"{', '.join(f'{value:+.0f} MiB' for value in differences)}. Zgodny znak różnicy "
         "jest warunkiem koniecznym, lecz w tej serii nie wystarcza do wniosku o przewadze.",
         "",
-        "Są to wartości **obserwowanej pamięci rezydentnej** w rozgrzanej fazie zapytań "
-        "przy równych, stałych budżetach całych aplikacji. Nie są estymacją minimalnej "
+        "Są to wartości metryki kontenerowej `docker stats` w rozgrzanej fazie zapytań "
+        "przy równych, stałych budżetach całych aplikacji. Na Linuksie CLI raportuje "
+        "użycie cgroup pomniejszone o nieaktywny cache plikowy, więc nie jest to procesowy "
+        "RSS. Nie są też estymacją minimalnej "
         "wymaganej pamięci. Piki pozostały poniżej limitów, a walidacja serii potwierdziła "
         "zakończenie obu aplikacji bez OOM i restartów; limity nie zostały więc potraktowane "
-        "jako wyjaśnienie samego kierunku RSS.",
+        "jako wyjaśnienie samego kierunku obserwacji.",
         "",
     ]
 
@@ -1539,20 +1742,89 @@ def main() -> int:
         f"kontrolę semantyczną protokołu i {len(mismatches)} par miało status MISMATCH "
         f"na {runs[0].total_query_pairs}.",
     ]
+    if compatibility:
+        md += [
+            "",
+            "### Niezależna szeroka kontrola kompatybilności",
+            "",
+            f"Do serii dołączono raport obejmujący **{compatibility['checks']} kontroli**: "
+            f"{compatibility['matches']} MATCH, {compatibility['informationalMismatches']} "
+            f"zaakceptowanych różnic informacyjnych i **{compatibility['strictProblems']} "
+            "ścisłych problemów**. Hashe `summary.md` i `results.json` zapisano w "
+            "`report-provenance.json`. Wynik ten jest właściwą podstawą twierdzenia o "
+            "szerokiej zgodności; sam benchmark wydajnościowy nie zastępuje testów semantycznych.",
+        ]
+    else:
+        md += [
+            "",
+            "**Brak dołączonego szerokiego raportu kompatybilności.** Ten artefakt trzeba "
+            "wskazać przez `--compatibility-report`, zanim Q4 zostanie użyte jako finalny dowód.",
+        ]
     if degenerate_note:
         md += ["", degenerate_note]
     if mismatches:
-        md += [
-            "Wszystkie MISMATCH mają sygnaturę wcześniej niezależnie zweryfikowanej klasy "
-            "hoistowanego grupowania wariantów na logach rzeczywistych. Sama sygnatura nie "
-            "stanowi diagnozy przyczyny; szczegóły i odwołanie do reguły kolejności źródłowej "
-            "PQL znajdują się w raporcie przebiegu kotwiczącego:",
-            "",
-            *[f"- {dataset} / {query}" for dataset, query in mismatches],
-        ]
+        evidence_confirmed = (
+            evidence.get("classification") == "NON_TOTAL_ORDER_WITH_LIMIT_BOUNDARY_TIE"
+            and evidence.get("boundaryTieExplanationConfirmed") is True
+            and evidence.get("timestampOrderingHypothesisRejected") is True
+            and evidence.get("referenceBugProven") is False
+            and evidence.get("localBugFixProven") is False
+        )
+        if evidence_confirmed:
+            md += [
+                "",
+                "### Audyt trzech MISMATCH `hoistedGroup`",
+                "",
+                "Audyt surowych XES, kodu obu implementacji oraz replay live potwierdził "
+                "**remis na granicy domyślnego limitu 30**, przy sortowaniu tylko po "
+                "`count(t:name) desc`. Oba systemy mogą zgodnie z tak określonym zapytaniem "
+                "wybrać inny podzbiór grup remisujących. Hipoteza sortowania REFERENCE po "
+                "timestampie została odrzucona.",
+                "",
+                "**Mismatch nie dowodzi błędu REFERENCE ani poprawki LOCAL.** Pary pozostają "
+                "unieważnione dla Q2, bo odpowiedzi różnią się i ich czasów nie wolno porównywać. "
+                "Dowód maszynowy: `hoisted-group-evidence.json`; opis: `hoisted-group-evidence.md`.",
+                "",
+                "| Dataset | Ponad progiem | Remis na progu | Wybierane z remisu | Możliwe zdarzenia |",
+                "| :--- | ---: | ---: | ---: | :--- |",
+                *[
+                    f"| {dataset_name} | {row.get('variantsAboveCutoff')} "
+                    f"| {row.get('variantsTiedAtCutoff')} | {row.get('tiedVariantsToSelect')} "
+                    f"| {row.get('minimumPossibleEventCount')}–{row.get('maximumPossibleEventCount')} |"
+                    for dataset_name, row in sorted(evidence.get("datasets", {}).items())
+                    if isinstance(row, dict)
+                ],
+            ]
+        else:
+            md += [
+                "",
+                "MISMATCH nie mają kompletnego, zweryfikowanego artefaktu przyczynowego. "
+                "Nie wolno przypisywać ich błędowi żadnej strony:",
+                "",
+                *[f"- {dataset} / {query}" for dataset, query in mismatches],
+            ]
     else:
         md.append("Nie wystąpił żaden MISMATCH Q4.")
-    md.append("")
+    md += [
+        "",
+        "## Luki obecnego eksperymentu i następne pomiary",
+        "",
+        "Obecna seria dobrze mierzy porównanie end-to-end dla ustalonego workloadu, lecz "
+        "nie odpowiada na wszystkie pytania wydajnościowe. Następny, osobno wersjonowany "
+        "protokół powinien dodać:",
+        "",
+        "- profil strukturalny logów (liczba wariantów, długości śladów, selektywność filtrów), "
+        "aby wyjaśniać, a nie tylko opisywać różnice między datasetami;",
+        "- jawne poziomy selektywności predykatów (0%, rzadkie, średnie, częste dopasowania);",
+        "- wydajność datastore'u wielologowego i zapytań przekrojowych;",
+        "- osobny czas pełnego eksportu XES, bo obecnie roundtrip sprawdza poprawność, nie raportuje latencji;",
+        "- izolowany pomiar dysku także dla logów rzeczywistych; obecna sonda przyczynowa obejmuje serię syntetyczną;",
+        "- przepustowość i skalowanie przy współbieżności oraz użycie CPU. Dzisiejszy protokół jest celowo jednowątkowy i mierzy opóźnienie, nie throughput.",
+        "",
+        "Nie należy dokładać tych osi do istniejącej serii po fakcie. Zmieniają workload i "
+        "wymagają nowej wersji protokołu oraz nowych trzech kontrbalansowanych bloków.",
+        "",
+    ]
 
     # Only the repeatability narrative, not the whole series report. Writing the full
     # `md` here made this file a byte-exact prefix of `thesis-report-series.md` — 60 kB
@@ -1577,18 +1849,7 @@ def main() -> int:
         + "\n",
         encoding="utf-8",
     )
-    base_details = base_report_text.split("\n", 1)[1].lstrip() if base_report_text.startswith("# ") else base_report_text
-    base_details = base_details.replace(
-        "Niniejszy raport zawiera wyłącznie wyniki jednego przebiegu benchmarku.",
-        "Poniższa część zawiera wyłącznie wyniki przebiegu kotwiczącego.",
-        1,
-    )
-    combined = (
-        "\n".join(md)
-        + "\n\n# Szczegóły diagnostyczne bloku kotwiczącego\n\n"
-        + base_details
-        + "\n"
-    )
+    combined = "\n".join(md) + "\n"
     (out_dir / "thesis-report-series.md").write_text(combined, encoding="utf-8")
 
     print(f"\nSeria ważna. Przebieg kotwiczący: {anchor.name}")
