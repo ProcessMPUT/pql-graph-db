@@ -55,6 +55,10 @@ consistent with each other. Use it rather than re-deriving:
   `report-provenance.json`, and `thesis-tables-series.tex`. Descriptive
   magnitude-stability and non-preregistered scaling diagnostics must remain
   separate from the confirmatory direction verdicts.
+- `benchmarks/verify-hoisted-group-mismatches.py`: reproduces the raw-XES,
+  source-code and optional live evidence for the protocol-10 hoisted-group
+  boundary tie. It must never turn the tie signature into a claim that either
+  implementation is incorrect.
 - `benchmarks/test_compare_runs.py`: standard-library end-to-end contract test
   for the three-block aggregator, including its rejection path.
 - `benchmarks/measure-storage-scaling.py`: isolated storage probe with a fresh

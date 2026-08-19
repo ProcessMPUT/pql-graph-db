@@ -18,9 +18,11 @@ magisterskiej (artefakt `thesis-report.md` + tabele `thesis-tables.tex`).
    klasy operacji (okno hierarchii, filtrowanie, sortowanie, grupowanie,
    agregacje, hoisting, atrybuty niestandardowe)?
 3. **Q3 (zasobożerność):** Jaki przyrost trwałego miejsca na dysku oraz jaką
-   pamięć rezydentną obserwuje się dla każdego systemu przy tych samych danych,
-   obciążeniu i równym stałym budżecie całej aplikacji? Pomiar RSS opisuje stan
-   tej konfiguracji, nie minimalną pamięć potrzebną do uruchomienia systemu.
+   metrykę użycia pamięci kontenerów raportowaną przez `docker stats` obserwuje
+   się dla każdego systemu przy tych samych danych, obciążeniu i równym stałym
+   budżecie całej aplikacji? Na Linuksie wartość CLI odejmuje nieaktywny cache
+   plikowy od użycia cgroup, dlatego nie jest procesowym RSS. Opisuje stan tej
+   konfiguracji, nie minimalną pamięć potrzebną do uruchomienia systemu.
 4. **Q4 (poprawność):** Czy mierzone odpowiedzi obu systemów są semantycznie
    równoważne? Pomiar szybkości błędnych odpowiedzi jest bezwartościowy.
 
@@ -293,9 +295,10 @@ Rejestrowane: czas ściany każdej próbki, rozmiar odpowiedzi (bajty), licznoś
   dyskwalifikuje przebieg jako dowód Q3. Pojedynczy blok pozostaje opisowy.
   W serii co najmniej trzech pełnych przebiegów zgodny znak różnicy jest
   warunkiem koniecznym, lecz niewystarczającym: najmniejszy efekt kierunku
-  niższego RSS musi przekroczyć większy z międzyblokowych rozrzutów max/min
+  niższego wskazania `docker stats` musi przekroczyć większy z międzyblokowych
+  rozrzutów max/min
   obu systemów. Peak i jego udział w budżecie służą do sprawdzenia, czy limit
-  został faktycznie osiągnięty; sam równy limit nie unieważnia obserwacji RSS.
+  został faktycznie osiągnięty; sam równy limit nie unieważnia obserwacji.
   Ta konserwatywna reguła interpretacji została dodana po przeglądzie raportu;
   nie zmienia interwału pomiarowego, protokołu 10 ani zebranych próbek.
 
@@ -305,41 +308,43 @@ Rejestrowane: czas ściany każdej próbki, rozmiar odpowiedzi (bajty), licznoś
   (sekcja 2 pkt 6),
 - odwołanie do niezależnego raportu kompatybilności.
 
-#### Kolejność zdarzeń a hoistowane warianty śladu (ustalenie interpretacyjne)
+#### Hoistowane warianty śladu i remis na granicy limitu
 
-**Rozjazd liczności na zapytaniach `group by ^e:name` wynika z odstępstwa systemu
-REFERENCE od specyfikacji PQL, a nie z błędu implementacji LOCAL.** Ustalenie jest
-istotne dla interpretacji wyników Q4 i musi być przywołane w pracy.
+**Rozjazd liczności dla `hoistedGroup` nie dowodzi odstępstwa REFERENCE ani poprawki
+w LOCAL.** Wcześniejsze wyjaśnienie kolejnością `time:timestamp` zostało odrzucone
+po ponownym audycie kodu, surowych XES i odpowiedzi obu API.
 
-Zapytania grupujące ślady po hoistowanym atrybucie zdarzenia dzielą je na warianty
-procesu według **sekwencji** wartości tego atrybutu, więc wynik zależy wprost od
-kolejności zdarzeń wewnątrz śladu. Specyfikacja PQL ustala tę kolejność jednoznacznie:
+Zapytanie `group by ^e:name order by count(t:name) desc` grupuje ślady według pełnej
+sekwencji nazw zdarzeń, ale porządkuje powstałe grupy tylko po ich liczności. Oba API
+nakładają następnie domyślny limit 30 śladów. Sam `count(t:name) desc` nie definiuje
+porządku między grupami o tej samej liczności, a właśnie na granicy 30 wyników
+występuje duży remis:
 
-> By omitting the `order by` clause, the components are returned in the same order
-> as provided by the data source.
+| Dataset | Grupy liczniejsze od progu | Grupy remisujące na progu | Miejsca do obsadzenia z remisu | Zakres możliwej liczby zdarzeń | LOCAL | REFERENCE |
+|---|---:|---:|---:|---:|---:|---:|
+| Hospital | 25 | 13 | 5 | 125–186 | 141 | 135 |
+| JournalReview | 3 | 93 | 27 | 432–984 | 714 | 603 |
+| Sepsis | 27 | 35 | 3 | 237–266 | 255 | 245 |
 
-— *ProcessM PQL specification*, `docs/pql.md`
-(https://github.com/ProcessMPUT/processm/blob/master/docs/pql.md).
+W każdym przypadku oba obserwowane wyniki składają się z tych samych grup o
+liczności większej od progu i z innego, dozwolonego podzbioru grup remisujących.
+Celowane wykonanie live potwierdziło dokładne długości wybranych wariantów.
 
-Domyślną kolejnością jest zatem kolejność **ze źródła danych** (zapisu w pliku XES),
-a nie chronologiczna według `time:timestamp`. LOCAL zachowuje kolejność źródłową
-(`importOrder` nadawany przy imporcie, zgodny co do znaku z plikiem XES); REFERENCE
-porządkuje zdarzenia po znaczniku czasu, a przy **równych** znacznikach — w kolejności
-narzuconej przez plan zapytania bazy relacyjnej. Logi rzeczywiste zawierają zdarzenia
-o identycznych znacznikach czasu w obrębie śladu, więc systemy budują wtedy różne
-sekwencje wariantów, co zmienia podział śladów na grupy i łączną liczbę zdarzeń.
+Hipoteza timestampowa jest sprzeczna z dowodami: wszystkie trzy pliki mają
+niemalejące timestampy wewnątrz śladów, stabilne sortowanie po timestampie nie
+zmienia żadnej sekwencji nazw, a referencyjny `TranslatedQuery` używa dla pustego
+porządku zdarzeń identyfikatora `e.id`, nie `time:timestamp`. Reguła specyfikacji PQL
+o zachowaniu kolejności źródłowej nadal obowiązuje i LOCAL realizuje ją przez
+`importOrder`, lecz nie wyjaśnia tych trzech rozjazdów.
 
-Zjawisko nie jest niedeterminizmem: obie strony są powtarzalne (wielokrotne wykonanie
-daje po każdej stronie identyczne liczności), a różnica jest systematyczna. Nie
-występuje na zbiorach syntetycznych, które mają ściśle rosnące znaczniki czasu.
-Poprawność przechowywania danych potwierdza niezależnie roundtrip XES (`MATCH`, zero
-różnic dla wszystkich zbiorów).
-
-Zgodnie z zasadą „nie normalizujemy rozbieżności, by komparator zaraportował `MATCH`”
-(sekcja 2) **nie dostosowujemy LOCAL do zachowania REFERENCE** — byłoby to odejście od
-specyfikacji. Pary te są unieważniane i wykluczane z tabel czasów, a `thesis-report.md`
-generuje dla nich dedykowaną sekcję „Kolejność zdarzeń w wariantach śladu — zgodność ze
-specyfikacją PQL”.
+Benchmark zachowuje twardy status `MISMATCH` i wyklucza te pary z porównań czasów,
+ponieważ odpowiedzi nie są identyczne. Raport nie przypisuje jednak winy żadnemu
+systemowi. Audyt odtwarza
+`scripts/benchmarks/verify-hoisted-group-mismatches.py`; jego JSON zapisuje hashe
+XES i źródeł, rozkład remisów, obserwacje wszystkich bloków oraz opcjonalny replay
+live. W kolejnym protokole workload powinien mierzyć koszt grupowania projekcją
+niezależną od wyboru remisujących wariantów, np. `select count(t:name) group by
+^e:name order by count(t:name) desc`.
 
 ## 5. Protokół pomiarowy
 
@@ -407,8 +412,10 @@ specyfikacją PQL”.
    dla bloku `random` z góry ustalonego ziarna `20260728` (jest ono również
    wartością domyślną runnera). Są to trzy bloki
    eksperymentu, nie trzy warianty, spośród których wybiera się najkorzystniejszy.
-6. Dla każdej pary (dataset, zapytanie) wykonuje się po jednym opisowym pomiarze
-   `cold`, trzy nieraportowane rozgrzewki i 30 repetycji warm. W każdym numerze
+6. Dla każdej pary (dataset, zapytanie) wykonuje się po jednym opisowym pierwszym
+   wykonaniu na nowym datastore (`phase=cold`), trzy nieraportowane rozgrzewki
+   zapytania i 30 repetycji warm. Aplikacje przeszły już globalną i po-idle
+   rozgrzewkę, więc próbka `cold` nie jest zimnym startem procesu. W każdym numerze
    repetycji oba systemy tworzą przyległy blok; kolejność zmienia się AB/BA, a
    system rozpoczynający pierwszą parę zmienia się między parami. Błąd HTTP
    przerywa przebieg. Liczności odpowiedzi są porównywane w każdej repetycji warm,
@@ -421,7 +428,11 @@ specyfikacją PQL”.
    Po sprzątaniu runner ponownie odczytuje stan wszystkich kontenerów i obecność
    procesów JVM; działający PID 1 lub wadliwy healthcheck nie zastępuje tej kontroli.
 8. **Finalny eksperyment zawiera co najmniej trzy ważne bloki FULL** zebrane na tej
-   samej wersji protokołu. Wersja jest zapisywana w każdym przebiegu jako
+   samej wersji protokołu. Wersja 11 zastępuje historyczne `hoistedGroup`
+   wariantem agregującym, który nie materializuje arbitralnego podzbioru grup
+   remisujących na granicy limitu. Finalna seria zebrana wcześniej protokołem 10
+   pozostaje ważnym, niezmienianym historycznie dowodem; jej trzy pary MISMATCH są
+   wykluczone z Q2 i wyjaśnione osobnym audytem. Wersja jest zapisywana w każdym przebiegu jako
    `benchmarkProtocolVersion`; dowodem w pracy są wyłącznie przebiegi zebrane
    protokołem opisanym w tym dokumencie, a przebieg o innej wersji jest odrzucany
    przez walidację, a nie interpretowany. `compare-runs.py` waliduje kompletność macierzy, 30 repetycji,
@@ -437,7 +448,8 @@ specyfikacją PQL”.
    konserwatywny jako czynnik ≥ 1 wraz z kierunkiem; surowa mediana i zakres R/L
    pozostają jawnie oznaczoną diagnostyką pomocniczą. Wyniki trafiają do
    `series-comparison.csv`, `series-cell-stability.csv`, `series-import.csv`,
-   `repeatability.csv`, `series-scaling.csv`, `series-scaling-exploratory.csv`,
+   `repeatability.csv`, `series-query-outcomes.csv`, `series-real-dataset-outcomes.csv`,
+   `series-payload.csv`, `series-memory.csv`, `series-scaling.csv`, `series-scaling-exploratory.csv`,
    `report-provenance.json`, `thesis-report-series.md` oraz
    `thesis-tables-series.tex` (tabele międzyblokowe; pakiety `booktabs` i
    `longtable`):
@@ -446,7 +458,8 @@ specyfikacją PQL”.
    python3 scripts/benchmarks/compare-runs.py \
      tmp/benchmark-results/<declared> \
      tmp/benchmark-results/<reversed> \
-     tmp/benchmark-results/<random>
+     tmp/benchmark-results/<random> \
+     --compatibility-report tmp/compatibility-reports/<reportId>
    ```
 
    Przy trzech blokach reguła ta jest kryterium **powtarzalności na
@@ -573,6 +586,14 @@ wykresów. Wykresy generuje
 `plot-benchmark-results.py` z surowych CSV i — gdy dostępne są artefakty serii —
 z median pełnych bloków; przy każdym uruchomieniu usuwa stare SVG, aby zmiana
 workloadu nie pozostawiała nieaktualnych figur.
+
+Finalny raport serii nie kopiuje automatycznie wielostronicowych tabel bloku
+kotwiczącego. Zamiast tego pokazuje przekrój werdyktów per zapytanie, osobny
+przekrój logów rzeczywistych, największe różnice payloadu oraz pamięć między
+blokami; komplet komórek pozostaje w CSV, a szczegółowy raport bloku w
+`thesis-report.md`. Do `report-provenance.json` trafiają także hashe szerokiego
+raportu kompatybilności i — dla historycznej serii v10 — audytu granicznego
+remisu `hoistedGroup`.
 
 Finalny Q3-dysk i finalny render wymagają dodatkowego `storage-scaling.csv` z izolowanej sondy.
 Starszy plik bez `measurementMode=isolated-fresh-stack` jest jawnie oznaczany

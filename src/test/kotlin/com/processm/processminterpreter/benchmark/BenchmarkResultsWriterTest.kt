@@ -37,6 +37,15 @@ class BenchmarkResultsWriterTest {
             traceCount = 10,
             eventCount = 100,
         )
+        val mismatchSamples = listOf("local", "reference").map { system ->
+            querySample.copy(
+                system = system,
+                queryLabel = "hoistedGroup",
+                run = 1,
+                phase = QUERY_PHASE_WARM,
+                status = QUERY_STATUS_MISMATCH,
+            )
+        }
         val memorySample = MemorySample(
             timestamp = "2026-07-02T10:00:00Z",
             phase = MEMORY_PHASE_IDLE,
@@ -54,9 +63,20 @@ class BenchmarkResultsWriterTest {
             settings = settings,
             datasets = emptyList(),
             imports = emptyList(),
-            queries = listOf(querySample),
+            queries = listOf(querySample) + mismatchSamples,
             querySummaries = emptyList(),
-            storage = emptyList(),
+            storage = listOf(
+                StorageBenchmarkResult(
+                    system = "local",
+                    datasetName = "trace-100",
+                    beforeBytes = null,
+                    afterBytes = null,
+                    deltaBytes = null,
+                    deltaToXesRatio = null,
+                    deltaToGzipRatio = null,
+                    status = STORAGE_STATUS_UNAVAILABLE,
+                ),
+            ),
             roundtrips = emptyList(),
             cleanup = emptyList(),
             memorySamples = listOf(memorySample),
@@ -77,6 +97,10 @@ class BenchmarkResultsWriterTest {
         val summaryLines = tempDir.resolve("memory-summary.csv").readLines()
         assertEquals("component,phase,medianBytes,peakBytes", summaryLines[0])
         assertEquals("processm-neo4j,idle,1073741824,2147483648", summaryLines[1])
+
+        val markdown = tempDir.resolve("summary.md").readLines()
+        assertTrue(markdown.contains("- Query samples: 3, errors: 0, mismatch samples: 2 across 1 (dataset, query) pairs"))
+        assertTrue(markdown.contains("- Storage measurements: 1, errors: 1, non-OK diagnostics: 0"))
     }
 
     @Test

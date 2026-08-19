@@ -103,11 +103,11 @@ data class InvalidatedPair(
     val queryLabel: String,
     val reason: String,
     /**
-     * True when the pair has the same observable signature as the previously
-     * investigated REFERENCE source-order deviation. This is a candidate
-     * classification, not an automatic diagnosis of a new mismatch.
+     * True when a real-log hoisted-variant pair can be affected by a non-total
+     * trace-group order at the REST trace-limit boundary. The query shape is only
+     * a candidate classification; the raw-XES audit is the diagnosis.
      */
-    val sourceOrderCandidate: Boolean = false,
+    val boundaryTieCandidate: Boolean = false,
 )
 
 private const val SYSTEM_LOCAL = "local"
@@ -117,18 +117,9 @@ private const val NOT_ATTRIBUTABLE = "nieprzypisywalne"
 private const val CONTAMINATED_CELL = "pomiar skażony (delta ujemna)"
 private const val BELOW_GRANULARITY = "poniżej granulacji"
 private const val LOCAL_NOT_REPORTED = "nie raportowane (§Q3)"
-private const val SOURCE_ORDER_FINDING_HEADING =
-    "Kolejność zdarzeń w wariantach śladu — zgodność ze specyfikacją PQL"
-private const val SOURCE_ORDER_MARK = "kandydat: znane odstępstwo kolejności źródłowej"
-
-/**
- * The PQL specification fixes the default component order, which is what makes the
- * hoisted trace-variant difference a REFERENCE deviation rather than a defect here.
- */
-private const val PQL_SPEC_URL = "https://github.com/ProcessMPUT/processm/blob/master/docs/pql.md"
-private const val PQL_SPEC_QUOTE =
-    "By omitting the `order by` clause, the components are returned in the same order " +
-        "as provided by the data source."
+private const val BOUNDARY_TIE_FINDING_HEADING =
+    "Hoistowane warianty śladu — remis na granicy limitu"
+private const val BOUNDARY_TIE_MARK = "kandydat: niepełny porządek przy limicie"
 
 /**
  * Report model computed once from the in-memory benchmark records; both output
@@ -160,8 +151,8 @@ data class ThesisReportModel(
     val parityOkPairs: Int,
     val parityMismatchPairs: Int,
     val invalidatedPairs: List<InvalidatedPair>,
-    /** Subset matching the observable signature of the independently investigated finding. */
-    val sourceOrderCandidatePairs: List<InvalidatedPair> = invalidatedPairs.filter { it.sourceOrderCandidate },
+    /** Subset requiring the independent raw-XES boundary-tie audit. */
+    val boundaryTieCandidatePairs: List<InvalidatedPair> = invalidatedPairs.filter { it.boundaryTieCandidate },
     val caveatTable: ThesisTable,
     val verdicts: List<ComparisonVerdict>,
     val conclusions: List<String>,
@@ -215,7 +206,7 @@ data class ThesisReportModel(
                         datasetName = pair.first,
                         queryLabel = pair.second,
                         reason = invalidationReason(samples),
-                        sourceOrderCandidate = mismatchOnly &&
+                        boundaryTieCandidate = mismatchOnly &&
                             pair.first in realDatasetNames &&
                             pair.second in hoistedVariantLabels,
                     )
@@ -713,7 +704,7 @@ data class ThesisReportModel(
                         "REFERENCE mediana [ms]",
                         "REFERENCE Q1–Q3 [ms]",
                         "Efekt w bloku",
-                        "95% CI ilorazu",
+                        "95% CI R/L",
                         "p (Holm)",
                         "Werdykt",
                     ),
@@ -731,7 +722,9 @@ data class ThesisReportModel(
                             reference?.let { fmt1(it.median * MS) } ?: MISSING,
                             reference?.let { quartiles(it) } ?: MISSING,
                             verdict?.let { advantageOf(it) } ?: MISSING,
-                            verdict?.confidenceInterval?.let { "[${fmt2(it.low)}; ${fmt2(it.high)}]" } ?: MISSING,
+                            verdict?.confidenceInterval?.let {
+                                "[${fmt2(1.0 / it.high)}; ${fmt2(1.0 / it.low)}]"
+                            } ?: MISSING,
                             verdict?.let { formatPValue(it.adjustedPValue) } ?: MISSING,
                             if (runIsValid) verdict?.verdict?.label ?: MISSING else "przebieg nieważny — diagnostyka",
                         )
@@ -741,9 +734,10 @@ data class ThesisReportModel(
                         append(samplesPerCell.sorted().joinToString(", "))
                         append(" próbek warm na komórkę. ")
                         append(
-                            "„Efekt w bloku” podaje iloraz median jako czynnik ≥ 1 wraz z kierunkiem; " +
+                            "„Efekt w bloku” podaje czynnik ≥ 1 wraz z kierunkiem. Kolumna CI ma " +
+                                "jedną, zgodną z raportem serii orientację REFERENCE/LOCAL (R/L); " +
                                 "przedział to percentylowy bootstrap (${InferentialStatistics.BOOTSTRAP_RESAMPLES} " +
-                                "losowań par repetycji) dla ilorazu median; p to sparowany test rang " +
+                                "losowań par repetycji) dla ilorazu median. p to sparowany test rang " +
                                 "Wilcoxona po korekcie Holma na wszystkie porównania przebiegu. ",
                         )
                         if (runIsValid) {
@@ -803,14 +797,14 @@ data class ThesisReportModel(
             }
             return ThesisTable(
                 slug = "zapytania-cold",
-                caption = "Zapytania (Q2): pierwsze (zimne) wykonania po imporcie [ms]",
-                headers = listOf("Dataset", "Zapytanie", "LOCAL cold [ms]", "REFERENCE cold [ms]"),
+                caption = "Zapytania (Q2): pierwsze wykonania na nowym datastore po imporcie [ms]",
+                headers = listOf("Dataset", "Zapytanie", "LOCAL pierwsze [ms]", "REFERENCE pierwsze [ms]"),
                 rightAligned = listOf(false, false, true, true),
                 rows = rows,
-                note = "Globalna rozgrzewka poprzedza całą fazę pomiarową, dlatego pierwszy dataset " +
-                    "nie jest traktowany jako osobna klasa. Cold oznacza pierwsze wykonanie na nowym " +
-                    "datastore po imporcie. To pojedyncza próbka na komórkę — bez ilorazu, przedziału " +
-                    "ufności i testu; tabela pozostaje wyłącznie diagnostyką.",
+                note = "Aplikacje przeszły globalną rozgrzewkę i aktywację po fazie bezczynności. " +
+                    "Jest to więc pierwsze wykonanie na nowym datastore, a nie zimny start procesu, " +
+                    "JVM ani bazy. To pojedyncza próbka na komórkę — bez ilorazu, przedziału ufności " +
+                    "i testu; tabela pozostaje wyłącznie diagnostyką.",
             )
         }
 
@@ -1129,7 +1123,7 @@ class ThesisReportWriter(
                 appendLine()
                 appendMarkdownTable(table)
             }
-            appendLine("### Zimne wykonania (cold)")
+            appendLine("### Pierwsze wykonania na nowym datastore (diagnostyka)")
             appendLine()
             appendMarkdownTable(model.coldTable)
             appendLine("### Pomiary unieważnione")
@@ -1138,15 +1132,15 @@ class ThesisReportWriter(
                 appendLine("Brak — żadna para (dataset, zapytanie) nie została unieważniona.")
             } else {
                 model.invalidatedPairs.forEach {
-                    val mark = if (it.sourceOrderCandidate) " **[$SOURCE_ORDER_MARK]**" else ""
+                    val mark = if (it.boundaryTieCandidate) " **[$BOUNDARY_TIE_MARK]**" else ""
                     appendLine("- ${it.datasetName} / ${it.queryLabel}: ${it.reason}$mark")
                 }
-                if (model.sourceOrderCandidatePairs.isNotEmpty()) {
+                if (model.boundaryTieCandidatePairs.isNotEmpty()) {
                     appendLine()
                     appendLine(
-                        "**Uwaga:** pozycje oznaczone jako *$SOURCE_ORDER_MARK* mają tę samą sygnaturę " +
-                            "co wcześniej zbadane odstępstwo REFERENCE. Sam kształt zapytania nie dowodzi " +
-                            "jednak przyczyny nowego mismatchu; rozpoznanie wymaga raportu kompatybilności.",
+                        "**Uwaga:** pozycje oznaczone jako *$BOUNDARY_TIE_MARK* wymagają audytu " +
+                            "rozkładu wariantów na granicy limitu. Sam kształt zapytania nie diagnozuje " +
+                            "przyczyny; finalna seria używa `hoisted-group-evidence.json`.",
                     )
                 }
             }
@@ -1187,7 +1181,7 @@ class ThesisReportWriter(
                 )
             }
             appendLine()
-            appendSourceOrderFinding(model)
+            appendBoundaryTieFinding(model)
             appendLine("## Zastrzeżenia")
             appendLine()
             if (model.caveatTable.rows.isEmpty()) {
@@ -1289,7 +1283,7 @@ class ThesisReportWriter(
             "- **Q3 (pamięć).** " +
                 (
                     model.memoryComparison?.let {
-                        "Obserwowana pamięć rezydentna: LOCAL ${format1(it.localMiB)} MiB " +
+                        "Metryka pamięci kontenerów z `docker stats`: LOCAL ${format1(it.localMiB)} MiB " +
                             "(suma: ${it.localComponents.joinToString(" + ")}) wobec REFERENCE " +
                             "${format1(it.referenceMiB)} MiB, różnica " +
                             "${format1(it.differenceMiB)} MiB (×${format2(it.ratio)}). " +
@@ -1306,8 +1300,8 @@ class ThesisReportWriter(
         }
         appendLine(
             "- **Q4 (poprawność).** $parityClaim, ${model.parityMismatchPairs} unieważnionych. " +
-                "${model.sourceOrderCandidatePairs.size} mismatchów ma sygnaturę znanego odstępstwa " +
-                "kolejności REFERENCE; raport nie przypisuje im przyczyny bez osobnej weryfikacji.",
+                "${model.boundaryTieCandidatePairs.size} mismatchów ma sygnaturę niepełnego " +
+                "porządku przy granicy limitu; nie są dowodem błędu żadnego systemu.",
         )
         appendLine()
     }
@@ -1368,83 +1362,49 @@ class ThesisReportWriter(
             "**Równe budżety, różne polityki.** Limity cgroup całych aplikacji są równe, lecz " +
                 "konfiguracja warstwy bazodanowej nie jest symetryczna: Neo4j ma jawnie ustawiony " +
                 "heap i page cache, a PostgreSQL działa z konfiguracją dostarczoną przez REFERENCE. " +
-                "Dokładne wartości zapisuje `environment.json`. Wynik opisuje obserwowany RSS w tej " +
-                "konfiguracji, nie minimalną pamięć wymaganą przez system.",
+                "Dokładne wartości zapisuje `environment.json`. Wynik opisuje metrykę pamięci " +
+                "kontenera raportowaną przez `docker stats` (na Linuksie usage pomniejszone o " +
+                "inactive file cache), a nie procesowy RSS ani minimalną pamięć wymaganą przez system.",
         )
         appendLine()
     }
 
-    /**
-     * Marks hoisted trace-variant mismatches as candidates for a previously verified
-     * source-order deviation. The generator deliberately does not diagnose a fresh
-     * mismatch from query shape alone.
-     */
-    private fun StringBuilder.appendSourceOrderFinding(model: ThesisReportModel) {
-        val pairs = model.sourceOrderCandidatePairs
+    /** Explains the candidate signature without diagnosing it from query text alone. */
+    private fun StringBuilder.appendBoundaryTieFinding(model: ThesisReportModel) {
+        val pairs = model.boundaryTieCandidatePairs
         if (pairs.isEmpty()) return
 
-        appendLine("## $SOURCE_ORDER_FINDING_HEADING")
+        appendLine("## $BOUNDARY_TIE_FINDING_HEADING")
         appendLine()
         appendLine(
-            "**Wcześniej potwierdzone ustalenie.** Dla zapytań `group by ^e:name` na wskazanych " +
-                "logach niezależna analiza pliku XES i powtarzanych odpowiedzi wykazała, że LOCAL " +
-                "zachowuje kolejność źródłową, a REFERENCE porządkuje po `time:timestamp`. Pary z " +
-                "bieżącego przebiegu są niżej oznaczone wyłącznie jako **kandydaci o tej samej " +
-                "sygnaturze**; generator nie diagnozuje przyczyny tylko na podstawie tekstu PQL.",
-        )
-        appendLine()
-        appendLine("**Czego dotyczy.** Zapytania grupujące ślady po *hoistowanym* atrybucie zdarzenia")
-        appendLine("(`group by ^e:name`) dzielą ślady na warianty procesu według **sekwencji** wartości")
-        appendLine("tego atrybutu. Wynik zależy więc wprost od kolejności zdarzeń wewnątrz śladu.")
-        appendLine()
-        appendLine("**Co mówi specyfikacja.** Specyfikacja PQL ustala domyślną kolejność komponentów:")
-        appendLine()
-        appendLine("> $PQL_SPEC_QUOTE")
-        appendLine()
-        appendLine(
-            "(*ProcessM PQL specification*, `docs/pql.md`; dostępna pod adresem $PQL_SPEC_URL). " +
-                "Domyślną kolejnością jest zatem **kolejność ze źródła danych** — czyli kolejność " +
-                "zapisu zdarzeń w pliku XES — a nie kolejność chronologiczna według `time:timestamp`.",
+            "**Klasyfikacja kandydata, nie automatyczna diagnoza.** Zapytanie `group by ^e:name " +
+                "order by count(t:name) desc` porządkuje grupy wariantów wyłącznie po liczności. " +
+                "Przy limicie 30 grup remis na granicy może wprowadzić do odpowiedzi różne, ale " +
+                "równorzędne warianty. Generator oznacza niżej tylko sygnaturę; rozstrzygnięcie " +
+                "wymaga audytu surowych XES i odpowiedzi wszystkich bloków.",
         )
         appendLine()
         appendLine(
-            "**Zachowanie obu systemów.** Niniejsza implementacja (LOCAL) zachowuje kolejność " +
-                "źródłową: porządek zdarzeń odpowiada kolejności ich wystąpienia w pliku XES " +
-                "(pole `importOrder` nadawane przy imporcie), co jest zgodne z przytoczoną regułą. " +
-                "System REFERENCE porządkuje zdarzenia według znacznika czasu, a przy **równych " +
-                "znacznikach** — w kolejności wynikającej z planu zapytania relacyjnej bazy danych. " +
-                "Realne logi zawierają zdarzenia o identycznych znacznikach czasu w obrębie jednego " +
-                "śladu, więc obie strony budują wówczas różne sekwencje wariantów, co zmienia podział " +
-                "śladów na grupy i łączną liczbę zwracanych zdarzeń.",
+            "**Wynik niezależnego audytu finalnej serii.** Dla Hospital, JournalReview i Sepsis " +
+                "obie obserwowane liczby zdarzeń powstają z tej samej części grup liczniejszych od " +
+                "progu oraz z różnych podzbiorów grup remisujących na 30. pozycji. Hipoteza, że " +
+                "REFERENCE sortuje tu zdarzenia po `time:timestamp`, została odrzucona przez kod " +
+                "REFERENCE i surowe XES. Mismatch nie dowodzi więc błędu REFERENCE ani poprawki LOCAL.",
         )
         appendLine()
         appendLine(
-            "**Dlaczego to nie jest niedeterminizm.** Oba systemy są w tej klasie zapytań " +
-                "powtarzalne — wielokrotne wykonanie tego samego zapytania daje po każdej stronie " +
-                "identyczne liczności. Różnica jest więc systematyczna i wynika z odmiennej " +
-                "interpretacji domyślnego porządku, a nie z losowości wykonania.",
+            "Pełny, powtarzalny dowód zapisuje `hoisted-group-evidence.json` generowany przez " +
+                "`scripts/benchmarks/verify-hoisted-group-mismatches.py`. Raport pojedynczego bloku " +
+                "nie ma samodzielnie danych potrzebnych do wyliczenia rozkładu granicznego.",
         )
         appendLine()
-        appendLine(
-            "**Zakres ustalenia historycznego.** Zjawisko dotyczyło logów rzeczywistych, zawierających zdarzenia " +
-                "o równych znacznikach czasu; na zbiorach syntetycznych (o ściśle rosnących " +
-                "znacznikach) obie implementacje zwracają identyczne wyniki. Poprawność samego " +
-                "przechowywania danych potwierdza niezależnie test roundtrip XES (sekcja " +
-                "„Poprawność (Q4)”). " +
-                if (model.roundtripAllMatch) {
-                    "W tym przebiegu wszystkie wykonane testy roundtrip raportują `MATCH` bez różnic."
-                } else {
-                    "W tym przebiegu nie wszystkie testy roundtrip mają status `MATCH`, więc nie stanowią pełnego potwierdzenia."
-                },
-        )
-        appendLine()
-        appendLine("Pary-kandydaci unieważnione w niniejszym przebiegu:")
+        appendLine("Pary-kandydaci unieważnione w tym przebiegu:")
         appendLine()
         pairs.forEach { appendLine("- ${it.datasetName} / ${it.queryLabel}: ${it.reason}") }
         appendLine()
         appendLine(
-            "Pary te wykluczono z tabel czasów (sekcja „Zapytania (Q2)”), aby nie porównywać " +
-                "czasów wykonania dla różniących się semantycznie odpowiedzi.",
+            "Pary pozostają wykluczone z tabel czasów, ponieważ materializują różne odpowiedzi. " +
+                "Nie są jednak zaliczane jako wada poprawności żadnej implementacji.",
         )
         appendLine()
     }

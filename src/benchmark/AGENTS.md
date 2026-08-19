@@ -75,8 +75,8 @@ Before collecting thesis results:
 
 METODOLOGIA §5 requires **at least three** valid FULL runs on one clean Git
 commit, with declared/reversed/random dataset order; the random block uses the
-preregistered seed `20260728`. Final evidence uses
-`benchmarkProtocolVersion=10`; versions before 2 have a weaker collection-time
+preregistered seed `20260728`. The preserved final series uses
+`benchmarkProtocolVersion=10`; new collections use version 11. Versions before 2 have a weaker collection-time
 parity check, while version 2 also accumulated every dataset in both databases
 and can exhaust a shared Docker VM. Version 3 keeps only one measured dataset
 pair live at a time. Version 4 additionally performs an unrecorded activation
@@ -97,7 +97,12 @@ the first complete v8 block had broad LOCAL drift (Q3 ×1.36) because the first
 replicate dataset remained slower after the 60-second idle window.
 Version 10 builds LOCAL once for a final series and requires every later
 fresh-volume block and isolated storage point to reuse that exact image ID.
-Rebuilding a report never upgrades a run's protocol.
+Version 11 replaces the historical materializing `hoistedGroup` query with an
+aggregate-only form. The former non-total ordering could select different valid
+subsets at the default trace-limit boundary and invalidate timing comparison.
+Do not rewrite version 10 evidence; its mismatches stay excluded and audited.
+Rebuilding a report never upgrades a run's protocol. `compare-runs.py` accepts
+version 10 and newer but never combines different versions.
 A thesis-grade memory run
 must contain `processm-interpreter`, `processm-neo4j`, and `processm-server`
 from the same `docker stats` probe plus the per-timestamp aggregates
@@ -191,15 +196,20 @@ only the generator scripts are version-controlled.
 After three FULL blocks, validate and combine them before rendering HTML:
 
 ```bash
-python3 scripts/benchmarks/compare-runs.py <declared-run> <reversed-run> <random-run>
+python3 scripts/benchmarks/compare-runs.py <declared-run> <reversed-run> <random-run> \
+  --compatibility-report tmp/compatibility-reports/<reportId>
 # The first command prints <anchor-run>. Attach the isolated Q3 probe there:
 python3 scripts/benchmarks/measure-storage-scaling.py \
   --datasets-dir <anchor-run>/generated-datasets \
   --out-csv <anchor-run>/storage-scaling.csv \
   --confirm-destroy-volumes
 python3 scripts/benchmarks/plot-benchmark-results.py <anchor-run>
+# For historical protocol-10 runs with hoistedGroup mismatches, attach the audit:
+python3 scripts/benchmarks/verify-hoisted-group-mismatches.py \
+  <declared-run> <reversed-run> <random-run> --out-dir <anchor-run>
 # Refresh the combined report after the base report acquired figures and Q3:
-python3 scripts/benchmarks/compare-runs.py <declared-run> <reversed-run> <random-run>
+python3 scripts/benchmarks/compare-runs.py <declared-run> <reversed-run> <random-run> \
+  --compatibility-report tmp/compatibility-reports/<reportId>
 python3 scripts/benchmarks/render-report-html.py <anchor-run>
 ```
 

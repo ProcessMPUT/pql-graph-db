@@ -58,9 +58,9 @@
   },
   {
     "label": "hoistedGroup",
-    "query": "group by ^e:name order by count(t:name) desc",
+    "query": "select count(t:name) group by ^e:name order by count(t:name) desc",
     "workload": "dataDependent",
-    "clause": "grupowanie śladów w warianty po hoistowanym atrybucie",
+    "clause": "grupowanie śladów w warianty bez materializacji arbitralnego podzbioru remisujących wariantów",
     "scalingSeries": ["trace-scaling", "event-scaling", "shape-scaling"]
   },
   {

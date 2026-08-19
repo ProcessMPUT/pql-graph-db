@@ -111,29 +111,35 @@ changes:
 If XML parsing or persistence representation changes, previously imported logs
 must be deleted and imported again before manual comparisons are meaningful.
 
-### Event Order Is Source Order — Do Not "Fix" It To Match ProcessM
+### Source Order And Hoisted-Variant Boundary Ties
 
 Events inside a trace are ordered by `importOrder`, i.e. the order they appear in
 the XES file. This is deliberate and spec-mandated: the PQL specification states
 that "[b]y omitting the `order by` clause, the components are returned in the same
 order as provided by the data source"
 (`docs/pql.md`, https://github.com/ProcessMPUT/processm/blob/master/docs/pql.md).
+Do not replace this with timestamp order.
 
-Reference ProcessM instead orders events by `time:timestamp`, breaking ties in
-whatever order its relational plan yields. Real logs contain events sharing a
-timestamp within one trace, so on hoisted trace-variant queries (`group by
-^e:name`) the two systems build different variant sequences and the benchmark
-reports a response-count MISMATCH. Investigated 2026-07-24 and confirmed:
+Do **not**, however, use that rule to diagnose the three real-log benchmark
+MISMATCHes for `group by ^e:name order by count(t:name) desc`. A source-and-data
+audit on 2026-08-16 disproved the earlier timestamp explanation:
 
-- our `importOrder` matches the raw XES file byte-for-byte;
-- both systems are deterministic (the difference is systematic, not flaky);
-- XES roundtrip is `MATCH` with zero differences on every real log.
+- Hospital, JournalReview and Sepsis are already nondecreasing by timestamp inside
+  every trace; stable timestamp sorting changes none of their event-name sequences;
+- the reference `TranslatedQuery` orders the hoisted event array by the event ID
+  when event-scope `order by` is absent, not by `time:timestamp`;
+- the REST trace limit is 30, while `count(t:name) desc` is not a total order. At
+  the 30th variant Hospital has 13 variants tied for 5 places, JournalReview 93
+  tied for 27 places, and Sepsis 35 tied for 3 places;
+- both observed event totals are exactly obtainable by selecting different members
+  of those tied sets. A targeted live replay reproduced the same selections.
 
-**This is a REFERENCE deviation from the specification, not a defect here. Do not
-change the engine's ordering to make the comparator agree** — that would break
-spec compliance and violate the rule above about normalizing mismatches. The
-finding is documented for the thesis in `src/benchmark/METODOLOGIA.md` (§Q4) and
-rendered automatically into `thesis-report.md`; `ThesisReportWriterTest` guards it.
+Consequently these pairs are genuine strict-response MISMATCHes and remain excluded
+from timing comparisons, but they prove neither a REFERENCE bug nor a LOCAL fix.
+The reproducible audit is `scripts/benchmarks/verify-hoisted-group-mismatches.py`;
+generated evidence is stored beside a final benchmark report. Future workloads
+should project only values invariant under the boundary tie (for example
+`select count(t:name) ...`) or otherwise define a total trace-group order.
 
 ## Platform And Commands
 
@@ -184,4 +190,3 @@ as proof of semantic equality.
 
 Generated outputs belong under `tmp/` and should not be committed unless a task
 explicitly requests a result snapshot.
-

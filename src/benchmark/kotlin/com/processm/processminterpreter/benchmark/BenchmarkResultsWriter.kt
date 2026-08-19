@@ -320,7 +320,7 @@ class BenchmarkResultsWriter(
                 appendLine("- Benchmark datastores use the `bench-` prefix and are deleted after the run unless `BENCHMARK_KEEP_DATASTORES=true`.")
                 appendLine("- Storage is measured as stabilized directory size before and after importing a dataset.")
                 appendLine("- Memory sampling targets a 1 s pause between probes; the raw timestamps in `memory-results.csv` are authoritative because `docker stats --no-stream` adds probe latency. Both applications and databases use the same Docker probe in thesis-grade runs; phases: `idle` (${settings.profile.idleBaselineSeconds} s baseline before imports) and `queries`. After the idle phase, a fresh throw-away import, ${settings.postIdleWarmupRounds} unrecorded activation round(s), and deletion restore the same datastore lifecycle that precedes later measured datasets.")
-                appendLine("- Each (dataset, query) pair runs one recorded `cold` execution per system before warmups; measured repetitions alternate between systems (local, reference, local, reference, ...).")
+                appendLine("- Each (dataset, query) pair runs one recorded first execution on a new datastore (`phase=cold`) per system before query-level warmups. The applications have already completed global and post-idle warmups, so this is not a process cold start. Measured repetitions alternate between systems (local, reference, local, reference, ...).")
                 appendLine("- Log/trace/event counts are compared in every measured warm repetition. The last warm responses are also checked with the strict XES-JSON semantic comparator; on divergence all samples of the pair are marked `MISMATCH` (Q4 parity).")
                 appendLine("- Per-dataset rows in `storage-results.csv` are protocol diagnostics. Thesis-grade Q3 disk evidence comes only from `measure-storage-scaling.py`, one fresh stack per dataset.")
                 appendLine("- Query charts use medians from `query-summary.csv`, not single samples. p95 is not interpreted below 200 repetitions.")
@@ -376,9 +376,18 @@ class BenchmarkResultsWriter(
     ) {
         val importErrors = imports.count { it.status != "OK" }
         val queryErrors = queries.count { it.status == "ERROR" }
-        val queryMismatches = queries.count { it.status == QUERY_STATUS_MISMATCH }
+        val queryMismatchSamples = queries.count { it.status == QUERY_STATUS_MISMATCH }
+        val queryMismatchPairs = queries
+            .asSequence()
+            .filter { it.status == QUERY_STATUS_MISMATCH }
+            .map { it.datasetName to it.queryLabel }
+            .toSet()
+            .size
         val roundtripErrors = roundtrips.count { it.status != "MATCH" }
-        val storageErrors = storage.count { it.status != "OK" }
+        val storageErrors = storage.count { it.status == STORAGE_STATUS_UNAVAILABLE || it.status == "ERROR" }
+        val storageDiagnostics = storage.count {
+            it.status != STORAGE_STATUS_OK && it.status != STORAGE_STATUS_UNAVAILABLE && it.status != "ERROR"
+        }
         val cleanupErrors = cleanup.count { it.status == "ERROR" }
         val markdown = buildString {
             appendLine("# ProcessM Benchmark Report")
@@ -387,10 +396,10 @@ class BenchmarkResultsWriter(
             appendLine("- Keep benchmark datastores: ${settings.keepBenchmarkDataStores}")
             appendLine("- Datasets: ${datasets.size}")
             appendLine("- Import results: ${imports.size}, errors: $importErrors")
-            appendLine("- Query samples: ${queries.size}, errors: $queryErrors, response mismatches: $queryMismatches")
+            appendLine("- Query samples: ${queries.size}, errors: $queryErrors, mismatch samples: $queryMismatchSamples across $queryMismatchPairs (dataset, query) pairs")
             appendLine("- Query summaries: ${querySummaries.size}")
             appendLine("- Memory samples: ${memorySamples.size}")
-            appendLine("- Storage measurements: ${storage.size}, errors: $storageErrors")
+            appendLine("- Storage measurements: ${storage.size}, errors: $storageErrors, non-OK diagnostics: $storageDiagnostics")
             appendLine("- Roundtrip checks: ${roundtrips.size}, errors: $roundtripErrors")
             appendLine("- Datastore cleanup results: ${cleanup.size}, errors: $cleanupErrors")
             appendLine()

@@ -130,7 +130,7 @@ const val WORKLOAD_FLOOR = "floor"
 const val WORKLOAD_WINDOW = "window"
 const val WORKLOAD_DATA_DEPENDENT = "dataDependent"
 const val BENCHMARK_SERIES_RANDOM_SEED = 20260728L
-const val CURRENT_BENCHMARK_PROTOCOL_VERSION = 10
+const val CURRENT_BENCHMARK_PROTOCOL_VERSION = 11
 const val POST_IDLE_WARMUP_MODE = "fresh-import-query-delete"
 const val REPLICATE_VALIDITY_STATISTIC = "query-spread-q3"
 
@@ -190,6 +190,10 @@ data class BenchmarkSettings(
      * Version 7 gives both complete applications the same finite system-level
      * cgroup budget, rejects OOM/restarted/missing-JVM containers, and extends the
      * global warm-up beyond the optimization horizon observed in a complete run.
+     * Version 11 replaces the historical `hoistedGroup` response-materialization
+     * workload with an aggregate-only variant. The old query used a non-total sort
+     * at the default trace-limit boundary, so two valid engines could return different
+     * tied subsets and make their latency samples semantically incomparable.
      */
     val protocolVersion: Int = CURRENT_BENCHMARK_PROTOCOL_VERSION,
     /**

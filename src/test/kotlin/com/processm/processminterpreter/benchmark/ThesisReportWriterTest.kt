@@ -27,43 +27,42 @@ class ThesisReportWriterTest {
     }
 
     /**
-     * The hoisted trace-variant difference is a REFERENCE deviation from the PQL
-     * spec's source-order rule, not a defect here — the report must say so, with the
-     * citation, or the invalidated rows read as our incompatibility. Guarded by a test
-     * so the argument cannot be dropped silently.
+     * The three real-log hoisted-group mismatches are caused by a non-total sort at
+     * the default trace-limit boundary. They invalidate latency comparison, but do
+     * not prove a REFERENCE defect or a LOCAL fix. Keep that distinction explicit.
      */
     @Test
-    fun `documents the source-order finding for hoisted trace-variant invalidations`(
+    fun `documents the boundary-tie finding for hoisted trace-variant invalidations`(
         @TempDir tempDir: Path,
     ) {
-        writeSyntheticRun(tempDir, sourceOrderCandidate = true)
+        writeSyntheticRun(tempDir, boundaryTieCandidate = true)
         val md = tempDir.resolve("thesis-report.md").readText()
 
         assertTrue(
-            md.contains("## Kolejność zdarzeń w wariantach śladu — zgodność ze specyfikacją PQL"),
-            "report must carry the dedicated spec-compliance section",
+            md.contains("## Hoistowane warianty śladu — remis na granicy limitu"),
+            "report must carry the dedicated boundary-tie section",
         )
         assertTrue(
-            md.contains("generator nie diagnozuje przyczyny"),
+            md.contains("Klasyfikacja kandydata, nie automatyczna diagnoza"),
             "the section must distinguish a candidate signature from an automatic diagnosis",
         )
         assertTrue(
-            md.contains("By omitting the `order by` clause, the components are returned in the same order"),
-            "the section must quote the PQL specification verbatim",
+            md.contains("Mismatch nie dowodzi więc błędu REFERENCE ani poprawki LOCAL"),
+            "the report must not turn a boundary tie into a correctness claim",
         )
         assertTrue(
-            md.contains("https://github.com/ProcessMPUT/processm/blob/master/docs/pql.md"),
-            "the quote must be attributed to a citable source",
+            md.contains("hoisted-group-evidence.json"),
+            "the finding must point at the machine-readable audit evidence",
         )
         // The hoisted pair is flagged in the invalidated list; the plain MISMATCH is not.
         assertTrue(
             md.contains("- ds-beta / hoistedGroup: MISMATCH") &&
                 md.substringAfter("- ds-beta / hoistedGroup:").substringBefore('\n').contains("kandydat"),
-            "the real hoisted pair must be marked only as a source-order candidate",
+            "the real hoisted pair must be marked only as a boundary-tie candidate",
         )
         assertFalse(
             md.substringAfter("- ds_alpha / custom_attr:").substringBefore('\n').contains("kandydat"),
-            "a plain count MISMATCH must NOT be attributed to the source-order deviation",
+            "a plain count MISMATCH must NOT be attributed to the boundary-tie class",
         )
     }
 
@@ -155,16 +154,17 @@ class ThesisReportWriterTest {
             "import row must preserve the two raw block measurements",
         )
 
-        // Global warm-up removes the special first-touch class; all single cold
-        // samples remain diagnostics and appear in one table.
+        // Global warm-up removes the special process-first-touch class; all single
+        // first executions on new datastores remain diagnostics in one table.
         assertFalse(md.contains("### Pierwsze dotknięcie"), "global warm-up makes a separate first-touch class obsolete")
+        assertTrue(md.contains("### Pierwsze wykonania na nowym datastore (diagnostyka)"))
         assertTrue(
             md.contains("| ds_alpha | hierarchyWindow | 100.0 | 200.0 |"),
             "the first dataset belongs in the common diagnostic cold table",
         )
         assertTrue(
             md.contains("| ds-beta | hierarchyWindow | 70.0 | 80.0 |"),
-            "cold row for a non-first dataset must carry the advantage",
+            "first-execution row for a non-first dataset must carry the advantage",
         )
 
         // Disk: a positive LOCAL delta stays behind the marker (METODOLOGIA §Q3), and a
@@ -208,7 +208,7 @@ class ThesisReportWriterTest {
 
     private fun writeSyntheticRun(
         tempDir: Path,
-        sourceOrderCandidate: Boolean = false,
+        boundaryTieCandidate: Boolean = false,
         protocolVersion: Int = CURRENT_BENCHMARK_PROTOCOL_VERSION,
     ) {
         val settings = BenchmarkSettings(
@@ -226,7 +226,7 @@ class ThesisReportWriterTest {
         )
         val datasets = listOf(
             dataset("ds_alpha", tempDir),
-            dataset("ds-beta", tempDir, if (sourceOrderCandidate) "real-validation" else "synthetic"),
+            dataset("ds-beta", tempDir, if (boundaryTieCandidate) "real-validation" else "synthetic"),
         )
         val imports = listOf(
             importResult("local", "ds_alpha", 2.0),
@@ -269,8 +269,8 @@ class ThesisReportWriterTest {
             addAll(spread("ds-beta", "custom_attr", "reference", 20.0))
             add(cold("local", "ds-beta", "custom_attr", 0.003))
             add(cold("reference", "ds-beta", "custom_attr", 0.004))
-            // Pair 5: ds-beta x hoistedGroup — invalidated on a hoisted trace-variant
-            // query, i.e. the REFERENCE source-order deviation class.
+            // Pair 5: ds-beta x hoistedGroup — invalidated on the audited hoisted
+            // trace-variant boundary-tie class.
             add(warm("local", "ds-beta", "hoistedGroup", 1, 0.010, status = QUERY_STATUS_MISMATCH, details = "Response count mismatch: events 714 vs 723"))
             add(warm("reference", "ds-beta", "hoistedGroup", 1, 0.011, status = QUERY_STATUS_MISMATCH, details = "Response count mismatch: events 714 vs 723"))
             add(cold("local", "ds-beta", "hoistedGroup", 0.050))
