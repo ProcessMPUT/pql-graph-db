@@ -10,7 +10,7 @@ class TestcontainersConfiguration {
     @Bean
     @ServiceConnection(name = "neo4j")
     fun neo4jContainer(): Neo4jContainer =
-        Neo4jContainer("neo4j:5.26.25-community-ubi10")
+        Neo4jContainer("neo4j:2026.07.1-community-ubi10")
             .withAdminPassword("password123")
             .withEnv("NEO4J_PLUGINS", "[\"apoc\"]")
             .withEnv("NEO4J_dbms_security_procedures_unrestricted", "apoc.*")

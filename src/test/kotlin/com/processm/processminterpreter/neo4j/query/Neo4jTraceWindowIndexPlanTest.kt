@@ -12,7 +12,7 @@ import kotlin.test.assertTrue
 class Neo4jTraceWindowIndexPlanTest {
     @Test
     fun `indexed trace window stops reading after the requested rows`() {
-        Neo4jContainer("neo4j:5.26.25-community-ubi10").withAdminPassword("password").use { neo4j ->
+        Neo4jContainer("neo4j:2026.07.1-community-ubi10").withAdminPassword("password").use { neo4j ->
             neo4j.start()
             GraphDatabase.driver(neo4j.boltUrl, AuthTokens.basic("neo4j", "password")).use { driver ->
                 driver.session().use { session ->

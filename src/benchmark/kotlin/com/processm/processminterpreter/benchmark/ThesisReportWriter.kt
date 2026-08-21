@@ -408,6 +408,17 @@ data class ThesisReportModel(
                 ?.joinToString("; ")
                 ?.ifBlank { MISSING }
                 ?: MISSING
+            val containerJvmVersions = (environment["containers"] as? Map<*, *>)
+                ?.entries
+                ?.sortedBy { it.key.toString() }
+                ?.mapNotNull { (name, details) ->
+                    (details as? Map<*, *>)?.get("jvmVersion")
+                        ?.takeUnless { it == "unavailable" }
+                        ?.let { "$name=$it" }
+                }
+                ?.joinToString("; ")
+                ?.ifBlank { MISSING }
+                ?: MISSING
             val resourceLimits = (environment["containers"] as? Map<*, *>)
                 ?.entries
                 ?.sortedBy { it.key.toString() }
@@ -452,7 +463,8 @@ data class ThesisReportModel(
                     ),
                     listOf("Pamięć hosta", bytes(nested("host", "totalPhysicalMemoryBytes"))),
                     listOf("Budżet pamięci Docker VM", bytes(nested("dockerEngine", "totalMemoryBytes"))),
-                    listOf("Java", environment["javaVersion"]?.toString() ?: System.getProperty("java.version")),
+                    listOf("Java klienta benchmarku", environment["javaVersion"]?.toString() ?: System.getProperty("java.version")),
+                    listOf("Wersje JVM kontenerów", containerJvmVersions),
                     listOf("Commit Git / dirty", "${nested("source", "gitCommit") ?: MISSING} / ${nested("source", "gitDirty") ?: MISSING}"),
                     listOf("Image ID kontenerów", containers),
                     listOf("Efektywne sterty JVM kontenerów", heaps),

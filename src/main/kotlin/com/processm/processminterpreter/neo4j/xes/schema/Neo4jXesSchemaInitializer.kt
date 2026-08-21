@@ -16,14 +16,18 @@ class Neo4jXesSchemaInitializer(
     fun ensureIndexes() {
         logger.info("Ensuring Neo4j XES schema constraints are created...")
         driver.session().use { session ->
+            // Neo4j refuses to drop an index and create a constraint backed by an
+            // equivalent index inside one transaction, so the legacy replacement
+            // runs as its own unit of work before the constraints are created.
             session.executeWrite { tx ->
                 val legacyIndexes = tx.run("SHOW INDEXES YIELD name RETURN collect(name) AS names")
                     .single()["names"]
                     .asList { it.asString() }
                     .toSet()
 
-                Neo4jXesSchemaDefinitions.uniqueConstraints.forEach { constraint ->
-                    if (constraint.legacyIndexName in legacyIndexes) {
+                Neo4jXesSchemaDefinitions.uniqueConstraints
+                    .filter { it.legacyIndexName in legacyIndexes }
+                    .forEach { constraint ->
                         val duplicateResult = tx.run(constraint.duplicateCheckCypher())
                         if (duplicateResult.hasNext()) {
                             val duplicate = duplicateResult.single()
@@ -35,6 +39,10 @@ class Neo4jXesSchemaInitializer(
                         }
                         tx.run("DROP INDEX ${constraint.legacyIndexName} IF EXISTS").consume()
                     }
+            }
+
+            session.executeWrite { tx ->
+                Neo4jXesSchemaDefinitions.uniqueConstraints.forEach { constraint ->
                     tx.run(constraint.createCypher()).consume()
                 }
                 Neo4jXesSchemaDefinitions.rangeIndexes.forEach { index ->

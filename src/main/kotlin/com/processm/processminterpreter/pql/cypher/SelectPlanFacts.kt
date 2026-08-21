@@ -31,7 +31,7 @@ internal class SelectPlanFacts(private val plan: LogicalPlan.Select) {
                 plan.filter?.let(::add)
                 plan.groupBy?.keys?.let(::addAll)
                 plan.orderBy.forEach { add(it.expression) }
-                plan.projection.columns.forEach { column -> column.expression?.let(::add) }
+                plan.projection.columns.forEach { column -> add(column.expression) }
             }
             val explicitEventColumn = plan.projection.columns.any { it.scope == Scope.EVENT }
             !explicitEventColumn && clauseExpressions.none { Scope.EVENT in scopesOf(it) }

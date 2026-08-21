@@ -10,7 +10,7 @@ class EnvironmentProbeTest {
             [
               {
                 "Config": {
-                  "Image": "neo4j:5.26-community",
+                  "Image": "neo4j:2026.07.1-community-ubi10",
                   "Env": [
                     "NEO4J_server_memory_heap_max__size=4G",
                     "NEO4J_server_memory_pagecache_size=2G",
@@ -34,7 +34,7 @@ class EnvironmentProbeTest {
         val info = EnvironmentProbe.parseContainerInfo(inspectJson)
 
         assertEquals("ok", info["status"])
-        assertEquals("neo4j:5.26-community", info["image"])
+        assertEquals("neo4j:2026.07.1-community-ubi10", info["image"])
         assertEquals("sha256:abc123", info["imageId"])
         assertEquals(8589934592L, info["memoryLimitBytes"])
         assertEquals(8589934592L, info["memorySwapLimitBytes"])
@@ -49,6 +49,20 @@ class EnvironmentProbeTest {
             ),
             info["memoryConfigEnv"],
             "credential-like keys must never reach environment.json",
+        )
+    }
+
+    @Test
+    fun `parses JVM version while ignoring launcher notices`() {
+        val output = """
+            Picked up JAVA_TOOL_OPTIONS: -XX:MaxRAMPercentage=50
+            openjdk version "26.0.2" 2026-07-21
+            OpenJDK Runtime Environment Temurin-26.0.2+7 (build 26.0.2+7)
+        """.trimIndent()
+
+        assertEquals(
+            "openjdk version \"26.0.2\" 2026-07-21",
+            EnvironmentProbe.parseJvmVersionOutput(output),
         )
     }
 

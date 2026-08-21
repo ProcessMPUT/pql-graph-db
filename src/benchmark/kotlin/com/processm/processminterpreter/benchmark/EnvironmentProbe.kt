@@ -9,9 +9,9 @@ import java.nio.file.Path
 /**
  * Collects the environment facts METODOLOGIA §2.4/§5.1 promises in every run's
  * `environment.json`: host hardware plus, per measured container, the Docker
- * resource limits and the database memory configuration exposed through the
- * container environment. Best-effort — a failed probe records `unavailable`
- * instead of failing the benchmark run.
+ * resource limits, JVM version, and the database memory configuration exposed
+ * through the container environment. Best-effort — a failed probe records
+ * `unavailable` instead of failing the benchmark run.
  */
 object EnvironmentProbe {
     private val mapper = jacksonObjectMapper()
@@ -52,11 +52,34 @@ object EnvironmentProbe {
     private fun containerInfo(name: String): Map<String, Any?> =
         dockerInspect(name)
             ?.let(::parseContainerInfo)
-            ?.plus("effectiveJvmHeap" to (effectiveJvmHeap(name) ?: "unavailable"))
+            ?.plus(
+                mapOf(
+                    "effectiveJvmHeap" to (effectiveJvmHeap(name) ?: "unavailable"),
+                    "jvmVersion" to (jvmVersion(name) ?: "unavailable"),
+                ),
+            )
             ?: mapOf("status" to "unavailable")
 
+    /** JVM distribution and version available inside the measured container. */
+    private fun jvmVersion(name: String): String? =
+        runCatching {
+            val process = ProcessBuilder("docker", "exec", name, "java", "-version")
+                .redirectErrorStream(true)
+                .start()
+            val output = process.inputStream.readAllBytes().toString(Charsets.UTF_8)
+            if (process.waitFor() != 0) return@runCatching null
+            parseJvmVersionOutput(output)
+        }.getOrNull()
+
+    /** Extracts the stable first version line while ignoring launcher notices. */
+    fun parseJvmVersionOutput(output: String): String? =
+        output.lineSequence()
+            .map(String::trim)
+            .firstOrNull { it.contains(" version ", ignoreCase = true) }
+            ?.takeIf(String::isNotBlank)
+
     /**
-     * The heap the JVM actually runs with, read from the container's main process.
+     * The heap the JVM actually runs with, read from the container's Java process.
      *
      * Both systems size their heap at startup rather than declaring it statically —
      * the reference computes it from the memory available to its container, and this

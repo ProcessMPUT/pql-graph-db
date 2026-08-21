@@ -309,7 +309,7 @@ class BenchmarkResultsWriter(
                 appendLine("- Reference ProcessM API: `${settings.referenceApi}`")
                 appendLine("- Local storage probe: logical file size of Neo4j `/data/databases` and `/data/transactions`; Neo4j community edition has no manual checkpoint procedure, so sizes reflect the naturally checkpointed state (stabilized by repeated reads)")
                 appendLine("- Reference storage probe: allocated directory size of ProcessM PostgreSQL `/var/lib/postgresql/data`, after an explicit `CHECKPOINT;`")
-                appendLine("- Host hardware, Docker container limits, and database memory configuration are recorded in `environment.json` (`host` / `containers` keys)")
+                appendLine("- Host hardware, Docker container limits, container JVM versions, and database memory configuration are recorded in `environment.json` (`host` / `containers` keys)")
                 appendLine("- Docker engine/VM budget, exact image IDs, Git commit/dirty state, and the workload fingerprint are recorded in `environment.json`")
                 appendLine()
                 appendLine("## Measurement Protocol")

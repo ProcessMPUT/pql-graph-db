@@ -8,7 +8,7 @@
 # app -> database (inside the VM).
 #
 # Build the jar first: ./gradlew bootJar
-FROM eclipse-temurin:25-jre
+FROM eclipse-temurin:26-jre
 
 # The benchmark setup verifies this revision before it reuses an already-built
 # image for another fresh-volume block.  Rebuilding the same source can still

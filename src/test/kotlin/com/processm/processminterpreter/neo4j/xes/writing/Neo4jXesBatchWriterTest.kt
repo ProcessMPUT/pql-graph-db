@@ -27,7 +27,7 @@ class Neo4jXesBatchWriterTest {
 
         @Container
         val neo4jContainer =
-            Neo4jContainer("neo4j:5.26.25-community-ubi10")
+            Neo4jContainer("neo4j:2026.07.1-community-ubi10")
                 .withAdminPassword("password")
     }
 

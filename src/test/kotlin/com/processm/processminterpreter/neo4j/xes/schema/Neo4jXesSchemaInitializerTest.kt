@@ -20,7 +20,7 @@ class Neo4jXesSchemaInitializerTest {
     companion object {
         @Container
         val neo4jContainer =
-            Neo4jContainer("neo4j:5.26.25-community-ubi10")
+            Neo4jContainer("neo4j:2026.07.1-community-ubi10")
                 .withAdminPassword("password")
     }
 
@@ -62,7 +62,9 @@ class Neo4jXesSchemaInitializerTest {
                 """.trimIndent(),
             ).list { record ->
                 record["name"].asString() to ConstraintSpec(
-                    type = record["type"].asString(),
+                    // Neo4j renamed the reported type from UNIQUENESS to
+                    // NODE_PROPERTY_UNIQUENESS; normalize so the assertion holds on both.
+                    type = record["type"].asString().removePrefix("NODE_PROPERTY_"),
                     label = record["labelsOrTypes"].asList { it.asString() }.single(),
                     property = record["properties"].asList { it.asString() }.single(),
                 )

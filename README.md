@@ -109,7 +109,7 @@ zapytania wielologowe (`select l:name limit l:10`) działają w obrębie datasto
 
 ## Wymagania
 
-- **JDK 25** — `build.gradle.kts` ustawia `jvmToolchain(25)`; Gradle pobierze
+- **JDK 26** — `build.gradle.kts` ustawia `jvmToolchain(26)`; Gradle pobierze
   odpowiedni toolchain, jeśli nie masz go lokalnie
 - Docker + Docker Compose (v2, `docker compose`)
 - Python 3 — skrypty operacyjne w `scripts/` (tylko biblioteka standardowa,
