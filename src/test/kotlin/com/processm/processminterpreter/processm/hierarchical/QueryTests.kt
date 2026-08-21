@@ -5,7 +5,6 @@ import com.processm.processminterpreter.xes.model.XesAttributeValue
 import com.processm.processminterpreter.xes.model.XesLog
 import com.processm.processminterpreter.xes.model.XesTrace
 import org.junit.jupiter.api.BeforeAll
-import org.junit.jupiter.api.Disabled
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
 import org.springframework.boot.test.context.SpringBootTest
@@ -1000,11 +999,7 @@ class QueryTests : HierarchicalTestsBase() {
     fun missingAttributes() {
         // ProcessM: select l:name, t:name, min(^e:timestamp), max(^e:timestamp), max(^e:timestamp)-min(^e:timestamp)
         //           where l:id=$hospital group by t:name limit l:1, t:10
-        val hospitalLogId = testDataLoader.loadHospitalLog()
-        if (hospitalLogId == null) {
-            println("Hospital dataset not available, skipping test")
-            return
-        }
+        val hospitalLogId = testDataLoader.loadHospitalLog() ?: error("Hospital dataset not available")
 
         val result =
             q(
@@ -1043,11 +1038,7 @@ class QueryTests : HierarchicalTestsBase() {
     fun orderByAggregationExpression() {
         // ProcessM: select max(^e:timestamp)-min(^e:timestamp) where l:id=$hospital
         //           group by t:name order by max(^e:timestamp)-min(^e:timestamp) desc
-        val hospitalLogId = testDataLoader.loadHospitalLog()
-        if (hospitalLogId == null) {
-            println("Hospital dataset not available, skipping test")
-            return
-        }
+        val hospitalLogId = testDataLoader.loadHospitalLog() ?: error("Hospital dataset not available")
 
         val result =
             q(
@@ -1268,19 +1259,6 @@ class QueryTests : HierarchicalTestsBase() {
             assertEquals(2, this["cortisol"])
             assertEquals(9, this["ammoniak"])
         }
-    }
-
-    @Test
-    @Disabled("Nested attribute skip flag not applicable — original uses nestedAttributes=false constructor param")
-    fun skipNestedAttributes() {
-        val hospitalLogId =
-            testDataLoader.loadHospitalLog() ?: run {
-                println("Hospital dataset not available, skipping")
-                return
-            }
-        val result = q("where l:logId='$hospitalLogId' limit l:1, t:1, e:1", hospitalLogId)
-        assertTrue(result.success, "Query should succeed: ${result.error}")
-        assertTrue(result.logs.isNotEmpty(), "Should have results")
     }
 
     @Test

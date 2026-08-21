@@ -13,6 +13,7 @@ import com.processm.processminterpreter.pql.catalog.UnaryOperator
 import com.processm.processminterpreter.pql.error.InvalidScopeHoistingException
 import com.processm.processminterpreter.pql.error.PQLSyntaxException
 import com.processm.processminterpreter.pql.error.Problem
+import com.processm.processminterpreter.xes.model.AttributeScope
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.OffsetDateTime
@@ -192,14 +193,21 @@ class Resolver {
                     )
                 }
                 val classifierName = raw.name.removePrefix("classifier:").removePrefix("c:")
-                if (classifierName in context.ambiguousClassifierNames) {
+                val classifierScope = when (baseScope) {
+                    Scope.TRACE -> AttributeScope.TRACE
+                    Scope.EVENT -> AttributeScope.EVENT
+                    Scope.LOG -> error("Log-scoped classifiers are rejected above")
+                }
+                if (classifierName in context.ambiguousClassifierNamesByScope[classifierScope].orEmpty()) {
                     throw PQLSyntaxException(
                         Problem.InvalidUseOfClassifiers,
                         raw.location,
                         "Classifier '$classifierName' has multiple definitions in the selected query scope",
                     )
                 }
-                val classifier = context.classifiers.firstOrNull { it.name == classifierName }
+                val classifier = context.classifiers.firstOrNull {
+                    it.name == classifierName && it.scope == classifierScope
+                }
                     ?: throw PQLSyntaxException(
                         Problem.InvalidUseOfClassifiers,
                         raw.location,

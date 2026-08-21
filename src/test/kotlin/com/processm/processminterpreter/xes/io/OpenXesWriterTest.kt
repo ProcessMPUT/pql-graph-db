@@ -1,5 +1,6 @@
 package com.processm.processminterpreter.xes.io
 
+import com.processm.processminterpreter.xes.model.AttributeScope
 import com.processm.processminterpreter.xes.model.Classifier
 import com.processm.processminterpreter.xes.model.XesEvent
 import com.processm.processminterpreter.xes.model.XesLog
@@ -148,7 +149,10 @@ class OpenXesWriterTest {
     fun `classifiers declared on the log are emitted`() {
         val log = XesLog(
             conceptName = "x",
-            classifiers = listOf(Classifier("Event Name", listOf("concept:name"))),
+            classifiers = listOf(
+                Classifier("Event Name", listOf("concept:name")),
+                Classifier("Department", listOf("org:group"), AttributeScope.TRACE),
+            ),
         )
         val out = ByteArrayOutputStream()
         writer.write(listOf(log), out)
@@ -156,6 +160,15 @@ class OpenXesWriterTest {
         assertTrue(xml.contains("classifier"))
         assertTrue(xml.contains("Event Name"))
         assertTrue(xml.contains("concept:name"))
+        assertTrue(xml.contains("scope=\"trace\" name=\"Department\""))
+
+        val reread = OpenXesReader().read(ByteArrayInputStream(out.toByteArray())).single()
+        assertTrue(reread.classifiers.contains(Classifier("Event Name", listOf("concept:name"))))
+        assertTrue(
+            reread.classifiers.contains(
+                Classifier("Department", listOf("org:group"), AttributeScope.TRACE),
+            ),
+        )
     }
 
     @Test

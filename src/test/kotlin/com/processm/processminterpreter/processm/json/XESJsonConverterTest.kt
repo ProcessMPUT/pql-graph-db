@@ -2,6 +2,7 @@ package com.processm.processminterpreter.processm.json
 
 import com.processm.processminterpreter.processm.json.QueryJsonProjection
 import com.processm.processminterpreter.xes.model.AttributeScope
+import com.processm.processminterpreter.xes.model.Classifier
 import com.processm.processminterpreter.xes.model.GlobalAttribute
 import com.processm.processminterpreter.xes.model.XesEvent
 import com.processm.processminterpreter.xes.model.XesLog
@@ -16,6 +17,22 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class XESJsonConverterTest {
+    @Test
+    fun `converter preserves classifier scopes`() {
+        val log = XesLog(
+            classifiers = listOf(
+                Classifier("Activity", listOf("concept:name")),
+                Classifier("Department", listOf("org:group"), AttributeScope.TRACE),
+            ),
+        )
+
+        val classifiers = XESJsonConverter.convertToXESJson(listOf(log))["log"]
+            .asMap()["classifier"] as List<*>
+
+        assertEquals("event", classifiers[0].asMap()["@scope"])
+        assertEquals("trace", classifiers[1].asMap()["@scope"])
+    }
+
     @Test
     fun `converter does not duplicate standard trace and event attributes`() {
         val log =

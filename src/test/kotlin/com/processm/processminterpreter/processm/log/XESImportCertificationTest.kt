@@ -1,11 +1,9 @@
 package com.processm.processminterpreter.processm.log
 
 import com.processm.processminterpreter.xes.io.XESParser
-import org.junit.jupiter.api.Disabled
 import org.junit.jupiter.api.Test
 import java.time.Instant
 import kotlin.test.assertEquals
-import kotlin.test.assertNotNull
 
 /**
  * XES Import Certification tests adapted from ProcessM XESImportCertificationFirstLevelTest.kt
@@ -62,6 +60,67 @@ class XESImportCertificationTest {
         assertEquals("Log concept:name", result.conceptName)
         assertEquals("bbf3f64f-2507-4f0b-a6f8-0113377d69e4", result.identityId?.toString())
 
+        assertEquals(2, result.traces.size)
+
+        val trace1 = result.traces[0]
+        assertEquals("Trace #001", trace1.conceptName)
+        assertEquals("ae1a2f41-2d01-479d-b6a3-84f18d790b20", trace1.identityId?.toString())
+        assertEquals(2, trace1.events.size)
+        assertEquals("Event #1 in Trace #001", trace1.events[0].conceptName)
+        assertEquals("1419fcd5-8fed-4272-8037-453213d8b0d1", trace1.events[0].identityId?.toString())
+        assertEquals("Event #2 in Trace #001", trace1.events[1].conceptName)
+        assertEquals("0e461b08-4f5e-4aa2-b0a2-b7779c82b119", trace1.events[1].identityId?.toString())
+
+        val trace2 = result.traces[1]
+        assertEquals("Trace #002", trace2.conceptName)
+        assertEquals("a192d6c5-683b-4188-8f73-222227dd4796", trace2.identityId?.toString())
+        assertEquals(2, trace2.events.size)
+        assertEquals("Event #1 in Trace #002", trace2.events[0].conceptName)
+        assertEquals("1a912b4d-6c78-4a4e-8e0f-219fcea53ea7", trace2.events[0].identityId?.toString())
+        assertEquals("Event #2 in Trace #002", trace2.events[1].conceptName)
+        assertEquals("8f14c2ec-83eb-4843-9cb4-c45456a5f3cb", trace2.events[1].identityId?.toString())
+    }
+
+    @Test
+    fun `A1 - parser handles standard attributes without declared extensions`() {
+        val xes =
+            """
+            <?xml version="1.0" encoding="UTF-8" ?>
+            <log xes.version="1.0" xes.features="nested-attributes" openxes.version="1.0RC7" xmlns="http://www.xes-standard.org/">
+                <string key="concept:name" value="Log concept:name"/>
+                <id key="identity:id" value="bbf3f64f-2507-4f0b-a6f8-0113377d69e4"/>
+                <trace>
+                    <string key="concept:name" value="Trace #001"/>
+                    <id key="identity:id" value="ae1a2f41-2d01-479d-b6a3-84f18d790b20"/>
+                    <event>
+                        <string key="concept:name" value="Event #1 in Trace #001"/>
+                        <id key="identity:id" value="1419fcd5-8fed-4272-8037-453213d8b0d1"/>
+                    </event>
+                    <event>
+                        <string key="concept:name" value="Event #2 in Trace #001"/>
+                        <id key="identity:id" value="0e461b08-4f5e-4aa2-b0a2-b7779c82b119"/>
+                    </event>
+                </trace>
+                <trace>
+                    <string key="concept:name" value="Trace #002"/>
+                    <id key="identity:id" value="a192d6c5-683b-4188-8f73-222227dd4796"/>
+                    <event>
+                        <string key="concept:name" value="Event #1 in Trace #002"/>
+                        <id key="identity:id" value="1a912b4d-6c78-4a4e-8e0f-219fcea53ea7"/>
+                    </event>
+                    <event>
+                        <string key="concept:name" value="Event #2 in Trace #002"/>
+                        <id key="identity:id" value="8f14c2ec-83eb-4843-9cb4-c45456a5f3cb"/>
+                    </event>
+                </trace>
+            </log>
+            """.trimIndent()
+
+        val result = parse(xes)
+
+        assertEquals(0, result.extensions.size)
+        assertEquals("Log concept:name", result.conceptName)
+        assertEquals("bbf3f64f-2507-4f0b-a6f8-0113377d69e4", result.identityId?.toString())
         assertEquals(2, result.traces.size)
 
         val trace1 = result.traces[0]
@@ -498,101 +557,6 @@ class XESImportCertificationTest {
         assertEquals(5.00, trace2Event2.costTotal)
         assertEquals("USD", trace2Event2.costCurrency)
         assertEquals(1, trace2Event2.customAttributes["cost:level"])
-    }
-
-    @Test
-    @Disabled("Local broad parser scenario, not present in ProcessM XESImportCertificationFirstLevelTest; keep disabled until moved out of processm compatibility package or rewritten as exact port.")
-    fun `full certification - parser handles all standard and custom attributes together`() {
-        val xes =
-            """
-            <?xml version="1.0" encoding="UTF-8" ?>
-            <log xes.version="1.0" xes.features="nested-attributes" xmlns="http://www.xes-standard.org/">
-                <extension name="Concept" prefix="concept" uri="http://www.xes-standard.org/concept.xesext"/>
-                <extension name="Identity" prefix="identity" uri="http://www.xes-standard.org/identity.xesext"/>
-                <extension name="Lifecycle" prefix="lifecycle" uri="http://www.xes-standard.org/lifecycle.xesext"/>
-                <extension name="Time" prefix="time" uri="http://www.xes-standard.org/time.xesext"/>
-                <extension name="Organizational" prefix="org" uri="http://www.xes-standard.org/org.xesext"/>
-                <extension name="Cost" prefix="cost" uri="http://www.xes-standard.org/cost.xesext"/>
-                <global scope="trace">
-                    <string key="concept:name" value="__INVALID__"/>
-                </global>
-                <global scope="event">
-                    <string key="concept:name" value="__INVALID__"/>
-                    <string key="lifecycle:transition" value="complete"/>
-                    <date key="time:timestamp" value="1970-01-01T00:00:00.000+00:00"/>
-                </global>
-                <classifier name="Event Name" keys="concept:name"/>
-                <classifier name="Activity+Lifecycle" keys="concept:name lifecycle:transition"/>
-                <string key="concept:name" value="Full Certification Log"/>
-                <id key="identity:id" value="aaaa-bbbb-cccc-dddd"/>
-                <string key="lifecycle:model" value="standard"/>
-                <string key="source" value="Test"/>
-                <int key="version" value="1"/>
-                <trace>
-                    <string key="concept:name" value="Case-Full-001"/>
-                    <id key="identity:id" value="trace-id-001"/>
-                    <float key="cost:total" value="1234.56"/>
-                    <string key="cost:currency" value="USD"/>
-                    <string key="department" value="HR"/>
-                    <event>
-                        <string key="concept:name" value="Submit Request"/>
-                        <id key="identity:id" value="event-id-001"/>
-                        <string key="lifecycle:transition" value="complete"/>
-                        <date key="time:timestamp" value="2023-06-01T09:00:00.000+02:00"/>
-                        <string key="org:resource" value="Alice"/>
-                        <string key="org:role" value="Employee"/>
-                        <string key="org:group" value="HR"/>
-                        <float key="cost:total" value="10.00"/>
-                        <string key="cost:currency" value="USD"/>
-                        <string key="channel" value="web"/>
-                        <int key="retries" value="0"/>
-                    </event>
-                    <event>
-                        <string key="concept:name" value="Approve"/>
-                        <id key="identity:id" value="event-id-002"/>
-                        <string key="lifecycle:transition" value="complete"/>
-                        <date key="time:timestamp" value="2023-06-01T14:00:00.000+02:00"/>
-                        <string key="org:resource" value="Bob"/>
-                        <string key="org:role" value="Manager"/>
-                        <string key="org:group" value="HR"/>
-                        <float key="cost:total" value="0.00"/>
-                        <string key="cost:currency" value="USD"/>
-                        <boolean key="overridden" value="false"/>
-                    </event>
-                </trace>
-            </log>
-            """.trimIndent()
-
-        val result = parse(xes)
-
-        assertEquals("Full Certification Log", result.conceptName)
-        assertEquals("aaaa-bbbb-cccc-dddd", result.customAttributes["identity:id"])
-        assertEquals("standard", result.lifecycleModel)
-
-        val trace = result.traces[0]
-        assertEquals("Case-Full-001", trace.conceptName)
-        assertEquals("trace-id-001", trace.customAttributes["identity:id"])
-        assertEquals(1234.56, trace.costTotal)
-        assertEquals("USD", trace.costCurrency)
-        assertEquals("HR", trace.customAttributes["department"])
-
-        val event1 = trace.events[0]
-        assertEquals("Submit Request", event1.conceptName)
-        assertEquals("event-id-001", event1.customAttributes["identity:id"])
-        assertEquals("complete", event1.lifecycleTransition)
-        assertNotNull(event1.timeTimestamp)
-        assertEquals("Alice", event1.orgResource)
-        assertEquals("Employee", event1.orgRole)
-        assertEquals("HR", event1.orgGroup)
-        assertEquals(10.00, event1.costTotal)
-        assertEquals("web", event1.customAttributes["channel"])
-        assertEquals(0, event1.customAttributes["retries"])
-
-        val event2 = trace.events[1]
-        assertEquals("Approve", event2.conceptName)
-        assertEquals("Bob", event2.orgResource)
-        assertEquals(0.00, event2.costTotal)
-        assertEquals(false, event2.customAttributes["overridden"])
     }
 
     private fun parse(xml: String) = parser.parseXesLog(xml.byteInputStream())

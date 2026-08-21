@@ -206,7 +206,7 @@ object XESJsonConverter {
             log.classifiers.map { classifier ->
                 mapOf(
                     "@name" to classifier.name,
-                    "@scope" to "event",
+                    "@scope" to classifier.scope.name.lowercase(),
                     "@keys" to classifier.keys.joinToString(" "),
                 )
             }

@@ -4,7 +4,6 @@ import com.processm.processminterpreter.xes.model.AttributeScope
 import com.processm.processminterpreter.xes.model.XesAttributeValue
 import com.processm.processminterpreter.xes.io.XESParseException
 import com.processm.processminterpreter.xes.io.XESParser
-import org.junit.jupiter.api.Disabled
 import org.junit.jupiter.api.Test
 import java.time.Instant
 import kotlin.test.assertEquals
@@ -145,7 +144,9 @@ class XESParserTests {
 
         assertEquals(2, result.classifiers.size)
         assertEquals(listOf("conceptowy:name"), classifiers.getValue("Event Name").keys)
+        assertEquals(AttributeScope.EVENT, classifiers.getValue("Event Name").scope)
         assertEquals(listOf("org:group"), classifiers.getValue("Department Classifier").keys)
+        assertEquals(AttributeScope.TRACE, classifiers.getValue("Department Classifier").scope)
     }
 
     @Test

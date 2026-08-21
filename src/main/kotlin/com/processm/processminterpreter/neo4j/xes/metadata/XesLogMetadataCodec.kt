@@ -23,13 +23,20 @@ object XesLogMetadataCodec {
 
     fun serializeClassifiers(classifiers: List<Classifier>): String? {
         if (classifiers.isEmpty()) return null
-        return json.writeValueAsString(classifiers.associate { it.name to it.keys })
+        return json.writeValueAsString(classifiers)
     }
 
     fun deserializeClassifiers(jsonString: String): List<Classifier> {
         if (jsonString.isBlank()) return emptyList()
+        val root = json.readTree(jsonString)
+        if (root.isArray) {
+            return json.convertValue(root, object : TypeReference<List<Classifier>>() {})
+        }
+
+        // Logs imported before classifier scope was persisted used a name-to-keys
+        // object. XES defines an omitted classifier scope as event.
         val asMap: Map<String, List<String>> =
-            json.readValue(jsonString, object : TypeReference<Map<String, List<String>>>() {})
+            json.convertValue(root, object : TypeReference<Map<String, List<String>>>() {})
         return asMap.map { (name, keys) -> Classifier(name, keys) }
     }
 

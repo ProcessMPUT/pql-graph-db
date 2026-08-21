@@ -4,7 +4,6 @@ import com.processm.processminterpreter.xes.io.XesWriteOptions
 import com.processm.processminterpreter.xes.model.XesLog
 import com.processm.processminterpreter.xes.io.OpenXesWriter
 import com.processm.processminterpreter.xes.io.XESParser
-import org.junit.jupiter.api.Disabled
 import org.junit.jupiter.api.Test
 import java.io.ByteArrayOutputStream
 import java.nio.charset.StandardCharsets
@@ -89,16 +88,6 @@ class XESWriterTests {
         """.trimIndent()
 
     @Test
-    @Disabled("Not applicable to OpenXesWriter: stream abort lifecycle belongs to ProcessM XMLXESOutputStream API.")
-    fun `Abort will close the stream and user can close it again without any exception`() {
-    }
-
-    @Test
-    @Disabled("Not applicable to OpenXesWriter: this adapter writes a full document per call instead of exposing close-only stream lifecycle.")
-    fun `Close XML without passing any XML Element`() {
-    }
-
-    @Test
     fun `Write log without any events and attributes`() {
         val xml = write(XesLog())
         val output = parser.parseXesLog(xml.byteInputStream())
@@ -106,11 +95,6 @@ class XESWriterTests {
         assertTrue(xml.contains("<log xes.version=\"1.0\" xes.features=\"nested-attributes\""))
         assertEquals("Query Result Log", output.conceptName)
         assertEquals(0, output.traces.size)
-    }
-
-    @Test
-    @Disabled("Not applicable to XesLog tree writer: event stream traces are a ProcessM streaming writer feature.")
-    fun `Event stream as input - ignore trace element`() {
     }
 
     @Test

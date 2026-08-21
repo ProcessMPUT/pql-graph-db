@@ -20,14 +20,26 @@ class XesLogMetadataCodecTest {
     }
 
     @Test
-    fun `classifiers round-trip preserves name and keys in order`() {
+    fun `classifiers round-trip preserves name keys scope and order`() {
         val classifiers = listOf(
             Classifier("Activity", listOf("concept:name", "lifecycle:transition")),
-            Classifier("Resource", listOf("org:resource")),
+            Classifier("Department", listOf("org:group"), AttributeScope.TRACE),
         )
         val encoded = XesLogMetadataCodec.serializeClassifiers(classifiers)!!
         val decoded = XesLogMetadataCodec.deserializeClassifiers(encoded)
         assertEquals(classifiers, decoded)
+    }
+
+    @Test
+    fun `legacy classifier map remains readable as event classifiers`() {
+        val decoded = XesLogMetadataCodec.deserializeClassifiers(
+            """{"Activity":["concept:name","lifecycle:transition"]}""",
+        )
+
+        assertEquals(
+            listOf(Classifier("Activity", listOf("concept:name", "lifecycle:transition"))),
+            decoded,
+        )
     }
 
     @Test

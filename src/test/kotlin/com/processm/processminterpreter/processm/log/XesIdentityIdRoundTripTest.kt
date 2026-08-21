@@ -7,6 +7,8 @@ import com.processm.processminterpreter.xes.io.OpenXesReader
 import com.processm.processminterpreter.xes.io.OpenXesWriter
 import com.processm.processminterpreter.xes.io.XESLoader
 import com.processm.processminterpreter.xes.io.XesWriteOptions
+import com.processm.processminterpreter.xes.model.AttributeScope
+import com.processm.processminterpreter.xes.model.Classifier
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -210,6 +212,47 @@ class XesIdentityIdRoundTripTest {
         )
     }
 
+    @Test
+    fun `classifier scope survives import storage query resolution and export`() {
+        importFixture()
+
+        val traceProjection = executeQuery.execute(
+            ExecutePqlQueryRequest(query = "select [t:classifier:Shared]", logId = LOG_ID),
+        )
+        assertEquals(
+            "custom case id",
+            traceProjection.logs.single().traces.single().customAttributes["caseId"],
+        )
+
+        val eventProjection = executeQuery.execute(
+            ExecutePqlQueryRequest(query = "select [e:classifier:Shared]", logId = LOG_ID),
+        )
+        assertEquals(
+            listOf("A", "B"),
+            eventProjection.logs.single().traces.single().events.map { it.conceptName },
+        )
+
+        val complete = executeQuery.execute(
+            ExecutePqlQueryRequest(query = "limit l:1, t:1, e:2", logId = LOG_ID),
+        )
+        assertEquals(
+            listOf(
+                Classifier("Shared", listOf("concept:name")),
+                Classifier("Shared", listOf("caseId"), AttributeScope.TRACE),
+            ),
+            complete.logs.single().classifiers,
+        )
+
+        val exported = ByteArrayOutputStream()
+        writer.write(complete.logs, exported)
+        val xml = exported.toString(Charsets.UTF_8)
+        assertTrue(xml.contains("<classifier scope=\"trace\" name=\"Shared\" keys=\"caseId\"/>"))
+        assertEquals(
+            complete.logs.single().classifiers,
+            reader.read(ByteArrayInputStream(exported.toByteArray())).single().classifiers,
+        )
+    }
+
     private fun String.occurrencesOf(needle: String): Int =
         windowed(needle.length).count { it == needle }
 
@@ -233,6 +276,8 @@ class XesIdentityIdRoundTripTest {
                 <extension name="Concept" prefix="concept" uri="http://www.xes-standard.org/concept.xesext"/>
                 <extension name="Time" prefix="time" uri="http://www.xes-standard.org/time.xesext"/>
                 <extension name="Identity" prefix="identity" uri="http://www.xes-standard.org/identity.xesext"/>
+                <classifier name="Shared" keys="concept:name"/>
+                <classifier scope="trace" name="Shared" keys="caseId"/>
                 <string key="concept:name" value="IdentityRoundTrip"/>
                 <id key="identity:id" value="bbf3f64f-2507-4f0b-a6f8-0113377d69e4"/>
                 <string key="logId" value="custom log id"/>

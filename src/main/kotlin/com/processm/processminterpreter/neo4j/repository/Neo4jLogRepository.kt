@@ -20,7 +20,7 @@ import org.springframework.stereotype.Repository
  *   name:         String,
  *   createdAt:    LocalDateTime,
  *   updatedAt:    LocalDateTime,
- *   classifiers:  String?   // JSON — Map<String, List<String>>
+ *   classifiers:  String?   // JSON — List<Classifier>; legacy name-to-keys maps remain readable
  *   extensions:   String?   // JSON — List<{name,prefix,uri}>
  *   traceGlobals: String?   // JSON — Map<String, Any>
  *   eventGlobals: String?   // JSON — Map<String, Any>

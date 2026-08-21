@@ -1,5 +1,6 @@
 package com.processm.processminterpreter.pql.semantics
 
+import com.processm.processminterpreter.xes.model.AttributeScope
 import com.processm.processminterpreter.xes.model.Classifier
 
 /**
@@ -13,5 +14,5 @@ import com.processm.processminterpreter.xes.model.Classifier
 data class ResolutionContext(
     val logId: String? = null,
     val classifiers: List<Classifier> = emptyList(),
-    val ambiguousClassifierNames: Set<String> = emptySet(),
+    val ambiguousClassifierNamesByScope: Map<AttributeScope, Set<String>> = emptyMap(),
 )

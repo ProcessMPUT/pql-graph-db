@@ -1,6 +1,7 @@
 package com.processm.processminterpreter.pql.semantics
 
 import com.processm.processminterpreter.xes.model.Classifier
+import com.processm.processminterpreter.xes.model.AttributeScope
 import com.processm.processminterpreter.pql.catalog.BinaryOperator
 import com.processm.processminterpreter.pql.ast.PqlExpression
 import com.processm.processminterpreter.pql.ast.PqlQuery
@@ -258,6 +259,22 @@ class ResolverTest {
         )
         assertEquals(AttributeKind.CLASSIFIER, r.kind)
         assertEquals("Resource", r.classifierName)
+    }
+
+    @Test
+    fun `classifier resolution respects trace and event scope`() {
+        val context = ResolutionContext(
+            classifiers = listOf(
+                Classifier("Shared", listOf("concept:name")),
+                Classifier("Shared", listOf("org:group"), AttributeScope.TRACE),
+            ),
+        )
+
+        val event = resolveAttr(ref("c:Shared", scopeHint = "e"), from = Scope.EVENT, context = context)
+        val trace = resolveAttr(ref("c:Shared", scopeHint = "t"), from = Scope.TRACE, context = context)
+
+        assertEquals(listOf("concept:name"), event.classifierKeys)
+        assertEquals(listOf("org:group"), trace.classifierKeys)
     }
 
     // --- Hoisting (folded from HoistingResolverTest) ---

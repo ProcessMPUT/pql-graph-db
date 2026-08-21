@@ -105,7 +105,11 @@ class XESParser {
         if (name.isNotEmpty() && keys.isNotEmpty()) {
             val keyList = keys.trim().split("\\s+".toRegex())
             logger.debug("Parsed classifier: $name -> $keyList")
-            log.classifiers += Classifier(name, keyList)
+            log.classifiers += Classifier(
+                name = name,
+                keys = keyList,
+                scope = if (scope == "trace") AttributeScope.TRACE else AttributeScope.EVENT,
+            )
         }
         forEachChildElement(reader, parent = "classifier") { }
     }

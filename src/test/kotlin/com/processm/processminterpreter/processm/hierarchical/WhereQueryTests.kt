@@ -2,7 +2,6 @@ package com.processm.processminterpreter.processm.hierarchical
 
 import com.processm.processminterpreter.TestcontainersConfiguration
 import org.junit.jupiter.api.BeforeAll
-import org.junit.jupiter.api.Disabled
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
 import org.springframework.boot.test.context.SpringBootTest
@@ -411,11 +410,7 @@ class WhereQueryTests : HierarchicalTestsBase() {
     @Test
     fun whereNotNull2() {
         // ProcessM: where l:id=$hospital and [t:Diagnosis] is not null
-        val hospitalLogId =
-            testDataLoader.loadHospitalLog() ?: run {
-                println("Hospital dataset not available, skipping")
-                return
-            }
+        val hospitalLogId = testDataLoader.loadHospitalLog() ?: error("Hospital dataset not available")
         val result = q("where l:logId='$hospitalLogId' and [t:Diagnosis] is not null", hospitalLogId)
         assertTrue(result.success, "Query should succeed: ${result.error}")
         assertEquals(1, result.count(), "Should have exactly 1 log")

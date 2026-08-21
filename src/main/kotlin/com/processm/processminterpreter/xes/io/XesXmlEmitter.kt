@@ -1,5 +1,6 @@
 package com.processm.processminterpreter.xes.io
 
+import com.processm.processminterpreter.xes.model.AttributeScope
 import com.processm.processminterpreter.xes.model.Classifier
 import com.processm.processminterpreter.xes.model.Extension
 import com.processm.processminterpreter.xes.model.GlobalAttribute
@@ -164,8 +165,9 @@ internal class XesXmlEmitter(private val writer: OutputStreamWriter) {
 
     fun classifier(classifier: Classifier) {
         val keys = classifier.keys.joinToString(" ")
+        val scope = if (classifier.scope == AttributeScope.TRACE) " scope=\"trace\"" else ""
         writer.write(
-            "\t<classifier name=\"${escape(classifier.name)}\" keys=\"${escape(keys)}\"/>\n",
+            "\t<classifier$scope name=\"${escape(classifier.name)}\" keys=\"${escape(keys)}\"/>\n",
         )
     }
 

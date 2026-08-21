@@ -3,6 +3,7 @@ package com.processm.processminterpreter.pql
 import com.processm.processminterpreter.xes.DataStoreRepository
 import com.processm.processminterpreter.xes.LogRepository
 import com.processm.processminterpreter.xes.datastore.DataStoreNotFoundException
+import com.processm.processminterpreter.xes.model.AttributeScope
 import com.processm.processminterpreter.xes.model.Classifier
 import com.processm.processminterpreter.xes.model.Log
 import com.processm.processminterpreter.pql.common.HierarchicalLimits
@@ -150,27 +151,28 @@ class PqlCompiler(
         return ResolutionContext(
             logId = logId,
             classifiers = classifierCatalog.unambiguous,
-            ambiguousClassifierNames = classifierCatalog.ambiguousNames,
+            ambiguousClassifierNamesByScope = classifierCatalog.ambiguousNamesByScope,
         )
     }
 
     private fun buildClassifierCatalog(scopedLogs: List<Log>): ClassifierCatalog {
         val classifiers = mutableListOf<Classifier>()
-        val ambiguousNames = mutableSetOf<String>()
+        val ambiguousNamesByScope = mutableMapOf<AttributeScope, MutableSet<String>>()
         scopedLogs
             .flatMap { it.classifiers }
-            .groupBy { it.name }
-            .forEach { (name, definitions) ->
+            .groupBy { it.scope to it.name }
+            .forEach { (identity, definitions) ->
+                val (scope, name) = identity
                 val distinctKeys = definitions.map { it.keys }.distinct()
                 if (distinctKeys.size == 1) {
-                    classifiers += Classifier(name, distinctKeys.single())
+                    classifiers += Classifier(name, distinctKeys.single(), scope)
                 } else {
-                    ambiguousNames += name
+                    ambiguousNamesByScope.getOrPut(scope, ::mutableSetOf) += name
                 }
             }
         return ClassifierCatalog(
             unambiguous = classifiers,
-            ambiguousNames = ambiguousNames,
+            ambiguousNamesByScope = ambiguousNamesByScope,
         )
     }
 
@@ -247,7 +249,7 @@ class PqlCompiler(
 
     private data class ClassifierCatalog(
         val unambiguous: List<Classifier>,
-        val ambiguousNames: Set<String>,
+        val ambiguousNamesByScope: Map<AttributeScope, Set<String>>,
     )
 }
 
