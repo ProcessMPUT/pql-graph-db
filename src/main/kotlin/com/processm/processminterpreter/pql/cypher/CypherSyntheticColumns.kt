@@ -24,8 +24,8 @@ internal fun logMetadataProjection(): String =
         ".${Neo4jXesSchema.LOG_EVENT_GLOBALS_PROPERTY}" +
         " } AS $SYNTHETIC_LOG_METADATA_ALIAS"
 
-internal fun logNodeProjection(): String =
-    "properties(log) AS $SYNTHETIC_LOG_NODE_ALIAS"
+internal fun logNodeProjection(s: CypherBuildState): String =
+    "${s.logProperties()} AS $SYNTHETIC_LOG_NODE_ALIAS"
 
 internal fun conditionalLogMetadataProjection(predicate: String): String =
     "CASE WHEN $predicate THEN log { " +
@@ -35,5 +35,5 @@ internal fun conditionalLogMetadataProjection(predicate: String): String =
         ".${Neo4jXesSchema.LOG_EVENT_GLOBALS_PROPERTY}" +
         " } ELSE null END AS $SYNTHETIC_LOG_METADATA_ALIAS"
 
-internal fun conditionalLogNodeProjection(predicate: String): String =
-    "CASE WHEN $predicate THEN properties(log) ELSE null END AS $SYNTHETIC_LOG_NODE_ALIAS"
+internal fun conditionalLogNodeProjection(s: CypherBuildState, predicate: String): String =
+    "CASE WHEN $predicate THEN ${s.logProperties()} ELSE null END AS $SYNTHETIC_LOG_NODE_ALIAS"

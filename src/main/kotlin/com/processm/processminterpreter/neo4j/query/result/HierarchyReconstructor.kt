@@ -47,6 +47,9 @@ class HierarchyReconstructor {
 
     private fun Map<String, Any?>.isNodeShape(): Boolean =
         this["log"] is Map<*, *> ||
+            this["log"] is List<*> ||
             this["trace"] is Map<*, *> ||
-            this["event"] is Map<*, *>
+            this["trace"] is List<*> ||
+            this["event"] is Map<*, *> ||
+            this["event"] is List<*>
 }

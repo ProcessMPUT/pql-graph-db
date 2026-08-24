@@ -1,6 +1,7 @@
 package com.processm.processminterpreter.pql.cypher
 
 import com.processm.processminterpreter.pql.catalog.BinaryOperator
+import com.processm.processminterpreter.pql.catalog.AttributeKind
 import com.processm.processminterpreter.pql.catalog.Scope
 import com.processm.processminterpreter.pql.plan.ProjectedColumn
 import com.processm.processminterpreter.pql.ast.PqlExpression
@@ -8,6 +9,79 @@ import com.processm.processminterpreter.pql.ast.PqlExpression
 internal class CypherAggregationRenderer(
     private val expressions: CypherExpressionRenderer,
 ) {
+    /**
+     * Counts hierarchy cardinalities without expanding the hierarchy into one
+     * row per event. This targets queries such as
+     * `count(l:name), count(^t:name), count(^^e:name)`: each lower-scope count is
+     * an independent COUNT subquery anchored at the log.
+     */
+    fun emitHierarchyCardinalityIfNeeded(s: CypherBuildState): Boolean {
+        val columns = hierarchyCardinalityColumns(s) ?: return false
+        registerLogAggregatePlaceholderAliases(s, LogAggregatePlaceholderCase(columns))
+
+        CypherMatchEmitter.emitLog(s)
+        val countColumns = columns.map { column ->
+            val aggregation = column.expression as PqlExpression.Aggregation
+            "${hierarchyCardinalityExpression(aggregation)} AS ${column.alias}"
+        }
+        s.cypher.append(" WITH log, ").append(countColumns.joinToString(", "))
+        emitLogAggregatePlaceholderTraceMatch(s)
+        s.cypher.append(" WITH log, ")
+            .append(columns.joinToString(", ") { it.alias })
+            .append(", _placeholder_trace, $PLACEHOLDER_EVENT_COUNT AS $PLACEHOLDER_EVENT_COUNT_ALIAS")
+
+        val returnColumns = buildList {
+            add("log.logId AS $SYNTHETIC_LOG_ID_ALIAS")
+            add(logMetadataProjection())
+            add("_placeholder_trace.traceId AS $SYNTHETIC_TRACE_ID_ALIAS")
+            add("_placeholder_trace.importOrder AS $SYNTHETIC_TRACE_ORDER_ALIAS")
+            add(
+                "CASE WHEN $PLACEHOLDER_EVENT_COUNT_ALIAS < 1 THEN 1 ELSE $PLACEHOLDER_EVENT_COUNT_ALIAS END" +
+                    " AS $SYNTHETIC_NULL_EVENT_COUNT_ALIAS",
+            )
+            addAll(columns.map { it.alias })
+        }
+        s.cypher.append(" RETURN ").append(returnColumns.joinToString(", "))
+        s.cypher.append(" ORDER BY $SYNTHETIC_LOG_ID_ALIAS, $SYNTHETIC_TRACE_ORDER_ALIAS")
+        return true
+    }
+
+    private fun hierarchyCardinalityColumns(s: CypherBuildState): List<ProjectedColumn>? {
+        if (s.plan.filter != null) return null
+        if (s.plan.groupBy?.keys?.isNotEmpty() == true || s.plan.orderBy.isNotEmpty()) return null
+        if (s.plan.projection.columns.isEmpty() || s.plan.projection.selectAll.any { it.value }) return null
+        return s.plan.projection.columns.takeIf { columns ->
+            columns.all { column ->
+                val aggregation = column.expression as? PqlExpression.Aggregation ?: return@all false
+                val attribute = aggregation.argument as? PqlExpression.Attribute ?: return@all false
+                column.scope == Scope.LOG &&
+                    aggregation.name.equals("count", ignoreCase = true) &&
+                    (aggregation.scope ?: attribute.effectiveScope) == Scope.LOG &&
+                    attribute.effectiveScope == Scope.LOG &&
+                    attribute.kind != AttributeKind.CLASSIFIER
+            }
+        }
+    }
+
+    private fun hierarchyCardinalityExpression(aggregation: PqlExpression.Aggregation): String {
+        val attribute = aggregation.argument as PqlExpression.Attribute
+        val nodeVar = when (attribute.baseScope) {
+            Scope.LOG -> "log"
+            Scope.TRACE -> CARDINALITY_TRACE_ALIAS
+            Scope.EVENT -> CARDINALITY_EVENT_ALIAS
+        }
+        val property = expressions.propertyRef(attribute).copy(nodeVar = nodeVar).toCypher()
+        return when (attribute.baseScope) {
+            Scope.LOG -> "CASE WHEN $property IS NULL THEN 0 ELSE 1 END"
+            Scope.TRACE ->
+                "COUNT { (log)-[:CONTAINS]->($CARDINALITY_TRACE_ALIAS:Trace)" +
+                    " WHERE $property IS NOT NULL }"
+            Scope.EVENT ->
+                "COUNT { (log)-[:CONTAINS]->(:Trace)-[:HAS_EVENT]->($CARDINALITY_EVENT_ALIAS:Event)" +
+                    " WHERE $property IS NOT NULL }"
+        }
+    }
+
     /**
      * Handles trace-level grouped aggregates, e.g.
      * `SELECT max(^e:timestamp)-min(^e:timestamp) GROUP BY t:name`.
@@ -507,7 +581,7 @@ internal class CypherAggregationRenderer(
         s.cypher.append(
             " RETURN 0 AS _kind, log.logId AS _logKey, null AS _traceKey," +
                 " 0 AS _traceOrder, log.name AS _logName," +
-                " properties(log) AS _log_node_, null AS _trace_node_, null AS _event_node_",
+                " ${s.logProperties()} AS _log_node_, null AS _trace_node_, null AS _event_node_",
         )
         s.cypher.append(" UNION ALL")
         s.cypher.append(" WITH $passThrough")
@@ -515,7 +589,7 @@ internal class CypherAggregationRenderer(
         s.cypher.append(
             " RETURN 1 AS _kind, log.logId AS _logKey, trace.traceId AS _traceKey," +
                 " trace.importOrder AS _traceOrder, log.name AS _logName," +
-                " null AS _log_node_, properties(trace) AS _trace_node_, {} AS _event_node_",
+                " null AS _log_node_, ${s.xesProperties("trace")} AS _trace_node_, {} AS _event_node_",
         )
         s.cypher.append(" }")
         s.cypher.append(
@@ -605,7 +679,7 @@ internal class CypherAggregationRenderer(
             "${expressions.render(col.expression, s)} AS ${col.alias}"
         }
         s.cypher.append(" WITH log, ").append(aggregateColumns.joinToString(", "))
-        s.cypher.append(" MATCH (log)-[:CONTAINS]->(_placeholder_trace:Trace)")
+        emitLogAggregatePlaceholderTraceMatch(s)
         // One row per trace with the event count, not one row per event: the
         // reconstructor only needs how many null placeholder events each trace
         // shows, so shipping O(events) rows (each repeating the log metadata and
@@ -625,6 +699,48 @@ internal class CypherAggregationRenderer(
         }
         s.cypher.append(" RETURN ").append(returnColumns.joinToString(", "))
         s.cypher.append(" ORDER BY $SYNTHETIC_LOG_ID_ALIAS, $SYNTHETIC_TRACE_ORDER_ALIAS")
+    }
+
+    /**
+     * Aggregate values above this point were computed over the complete hierarchy.
+     * Only the placeholder hierarchy is windowed here: returning every trace and
+     * trimming it in [HierarchicalWindowing] wastes driver/network work while each
+     * row repeats the log metadata and every aggregate.
+     *
+     * [HierarchicalWindowing] still applies the actual offset and limit. Therefore
+     * Cypher returns the prefix `offset + limit`, rather than applying `SKIP`, so the
+     * window is not shifted twice. An unbounded or zero-sized window uses the generic
+     * relationship match; `LIMIT 0` would otherwise remove the aggregate log itself.
+     */
+    private fun emitLogAggregatePlaceholderTraceMatch(s: CypherBuildState) {
+        val tracePrefixLimit = placeholderTracePrefixLimit(s)
+        if (tracePrefixLimit == null) {
+            s.cypher.append(" MATCH (log)-[:CONTAINS]->(_placeholder_trace:Trace)")
+            return
+        }
+
+        s.bindNamedParam(PLACEHOLDER_TRACE_PREFIX_LIMIT_PARAM, tracePrefixLimit)
+        s.cypher.append(
+            " CALL (log) {" +
+                " MATCH (_placeholder_trace:Trace {parentLogId: log.logId})" +
+                " WHERE _placeholder_trace.importOrder IS NOT NULL" +
+                " WITH _placeholder_trace" +
+                " ORDER BY _placeholder_trace.parentLogId, _placeholder_trace.importOrder" +
+                " LIMIT ${'$'}$PLACEHOLDER_TRACE_PREFIX_LIMIT_PARAM" +
+                " RETURN _placeholder_trace }",
+        )
+    }
+
+    private fun placeholderTracePrefixLimit(s: CypherBuildState): Long? {
+        val traceLimit = CypherEffectiveLimits.trace(s)
+            ?.coerceAtMost(Int.MAX_VALUE.toLong())
+            ?.takeIf { it > 0 }
+            ?: return null
+        val traceOffset = s.plan.offsets.trace
+            ?.takeIf { it > 0 }
+            ?.coerceAtMost(Int.MAX_VALUE.toLong())
+            ?: 0L
+        return (traceOffset + traceLimit).coerceAtMost(Int.MAX_VALUE.toLong())
     }
 
     private fun emitTraceAggregatePlaceholderHierarchyIfNeeded(s: CypherBuildState): Boolean {
@@ -704,3 +820,11 @@ internal class CypherAggregationRenderer(
 private const val TRACE_AGG_EVENT_ALIAS = "_trace_agg_event"
 
 private const val PLACEHOLDER_EVENT_COUNT = "COUNT { (_placeholder_trace)-[:HAS_EVENT]->(:Event) }"
+
+private const val PLACEHOLDER_EVENT_COUNT_ALIAS = "_placeholder_event_count_"
+
+private const val CARDINALITY_TRACE_ALIAS = "_count_trace"
+
+private const val CARDINALITY_EVENT_ALIAS = "_count_event"
+
+private const val PLACEHOLDER_TRACE_PREFIX_LIMIT_PARAM = "placeholderTracePrefixLimit"

@@ -2,6 +2,10 @@ package com.processm.processminterpreter.neo4j.repository
 
 import com.processm.processminterpreter.neo4j.xes.schema.Neo4jXesCustomAttributeCodec
 import com.processm.processminterpreter.pql.catalog.Scope
+import com.processm.processminterpreter.neo4j.property.NestedAttributePathCodec
+import com.processm.processminterpreter.neo4j.xes.metadata.XesLogMetadataCodec
+import com.processm.processminterpreter.neo4j.xes.schema.Neo4jXesSchema
+import com.processm.processminterpreter.xes.model.XesAttributeValue
 import org.junit.jupiter.api.Test
 import org.mockito.Mockito
 import org.mockito.Mockito.`when`
@@ -17,6 +21,7 @@ class Neo4jLogNodeMapperTest {
         val updatedAt = createdAt.plusMinutes(1)
         val encodedName = Neo4jXesCustomAttributeCodec.physicalName(Scope.LOG, "name")
         val encodedCreatedAt = Neo4jXesCustomAttributeCodec.physicalName(Scope.LOG, "createdAt")
+        val nested = XesAttributeValue(value = 7, children = mapOf("child" to "secret"))
         val values = mapOf(
             "logId" to Values.value("log-1"),
             "name" to Values.value("Display name"),
@@ -24,6 +29,11 @@ class Neo4jLogNodeMapperTest {
             "updatedAt" to Values.value(updatedAt),
             encodedName to Values.value("custom name"),
             encodedCreatedAt to Values.value("custom created at"),
+            "outer" to Values.value(7),
+            NestedAttributePathCodec.encodedChildKey("outer", "child") to Values.value("secret"),
+            Neo4jXesSchema.NESTED_ATTRIBUTE_PAYLOAD_PROPERTY to Values.value(
+                XesLogMetadataCodec.serializeArbitrary(mapOf("outer" to nested)),
+            ),
         )
         val node = Mockito.mock(Node::class.java)
         `when`(node.keys()).thenReturn(values.keys)
@@ -39,7 +49,7 @@ class Neo4jLogNodeMapperTest {
         assertEquals(createdAt, log.createdAt)
         assertEquals(updatedAt, log.updatedAt)
         assertEquals(
-            mapOf("name" to "custom name", "createdAt" to "custom created at"),
+            mapOf("name" to "custom name", "createdAt" to "custom created at", "outer" to nested),
             log.customAttributes,
         )
     }

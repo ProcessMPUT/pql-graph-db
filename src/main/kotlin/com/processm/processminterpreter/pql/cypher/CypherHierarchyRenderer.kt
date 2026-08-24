@@ -1,6 +1,8 @@
 package com.processm.processminterpreter.pql.cypher
 
 import com.processm.processminterpreter.pql.catalog.Scope
+import com.processm.processminterpreter.pql.catalog.BinaryOperator
+import com.processm.processminterpreter.pql.catalog.AttributeKind
 import com.processm.processminterpreter.pql.ast.PqlExpression
 
 internal class CypherHierarchyRenderer(
@@ -18,11 +20,11 @@ internal class CypherHierarchyRenderer(
 
         emitFilteredTraceMatch(s, filter)
         s.cypher.append(" WITH DISTINCT log")
-        s.cypher.append(" RETURN 0 AS _kind, log.logId AS _logKey, 0 AS _traceOrder, properties(log) AS log, null AS trace")
+        s.cypher.append(" RETURN 0 AS _kind, log.logId AS _logKey, 0 AS _traceOrder, ${s.logProperties()} AS log, null AS trace")
         s.cypher.append(" UNION ALL ")
         emitFilteredTraceMatch(s, filter)
         s.cypher.append(
-            " RETURN 1 AS _kind, log.logId AS _logKey, trace.importOrder AS _traceOrder, null AS log, properties(trace) AS trace",
+            " RETURN 1 AS _kind, log.logId AS _logKey, trace.importOrder AS _traceOrder, null AS log, ${s.xesProperties("trace")} AS trace",
         )
         return true
     }
@@ -45,14 +47,14 @@ internal class CypherHierarchyRenderer(
             " WITH DISTINCT log" +
                 " RETURN 0 AS _kind, log.logId AS _logKey, null AS _traceKey," +
                 " 0 AS _traceOrder, 0 AS _eventOrder," +
-                " properties(log) AS log, null AS trace, null AS event" +
+                " ${s.logProperties()} AS log, null AS trace, null AS event" +
                 " UNION ALL ",
         )
         emitFilteredTraceMatch(s, filter)
         s.cypher.append(
             " RETURN 1 AS _kind, log.logId AS _logKey, trace.traceId AS _traceKey," +
                 " trace.importOrder AS _traceOrder, 0 AS _eventOrder," +
-                " null AS log, properties(trace) AS trace, null AS event" +
+                " null AS log, ${s.xesProperties("trace")} AS trace, null AS event" +
                 " UNION ALL ",
         )
         emitFilteredTraceMatch(s, filter)
@@ -60,10 +62,9 @@ internal class CypherHierarchyRenderer(
             " MATCH (trace)-[:HAS_EVENT]->(event:Event)" +
                 " RETURN 2 AS _kind, log.logId AS _logKey, trace.traceId AS _traceKey," +
                 " trace.importOrder AS _traceOrder, event.importOrder AS _eventOrder," +
-                " null AS log, null AS trace, properties(event) AS event" +
+                " null AS log, null AS trace, ${s.xesProperties("event")} AS event" +
                 " }" +
-                " RETURN _kind, _logKey, _traceKey, _traceOrder, _eventOrder, log, trace, event" +
-                " ORDER BY _kind, _logKey, _traceOrder, _eventOrder",
+                " RETURN _kind, _logKey, _traceKey, _traceOrder, _eventOrder, log, trace, event",
         )
         return true
     }
@@ -78,12 +79,203 @@ internal class CypherHierarchyRenderer(
     private fun emitSimpleLimitedNodeHierarchyIfNeeded(s: CypherBuildState): Boolean {
         if (s.plan.projection.columns.isNotEmpty()) return false
         if (s.facts.hasAnyAggregation) return false
+        if (emitEventNameLikeIndexRowsIfNeeded(s)) return true
+        if (emitCompactLimitedRowsIfNeeded(s)) return true
         if (emitSplitRowsIfNeeded(s)) return true
         if (!emitLimitedHierarchyIfNeeded(s)) return false
         s.deferLogProperties()
         s.cypher.append(" RETURN log.logId AS $SYNTHETIC_LOG_KEY_ALIAS, trace, event ORDER BY ")
             .append(returnOrder(s))
         return true
+    }
+
+    /**
+     * Starts selective `e:name LIKE '%literal%'` reads at Event so Neo4j can use
+     * the TEXT index, then walks back to the selected log. Datastore queries are
+     * supported for the common `l:1` window by ranking each matching log from its
+     * first ordered matching event, using the same index-backed predicate.
+     */
+    private fun emitEventNameLikeIndexRowsIfNeeded(s: CypherBuildState): Boolean {
+        val filter = simplePositiveEventNameContains(s) ?: return false
+        if (s.plan.source.logId == null && s.plan.source.dataStoreId == null) return false
+        if (s.plan.groupBy != null) return false
+        if (s.plan.offsets.log != null || s.plan.offsets.trace != null || s.plan.offsets.event != null) return false
+        if (s.plan.orderBy.any { key ->
+                val scopes = s.facts.scopesOf(key.expression)
+                scopes.isNotEmpty() && scopes.any { it != Scope.EVENT }
+            }
+        ) {
+            return false
+        }
+        val traceLimit = CypherEffectiveLimits.trace(s)?.takeIf { it > 0 } ?: return false
+        val eventLimit = CypherEffectiveLimits.event(s)?.takeIf { it > 0 } ?: return false
+        val logLimit = CypherEffectiveLimits.log(s)
+        if (s.plan.source.dataStoreId != null && logLimit != 1L) return false
+        s.bindHierarchyLimitParams(logLimit, traceLimit, eventLimit)
+
+        CypherMatchEmitter.emitLog(s)
+        if (s.plan.source.dataStoreId != null) {
+            emitIndexedLikeLogSelection(s, filter)
+        } else {
+            logLimit?.let { emitLogLimit(s) }
+        }
+        s.cypher.append(" CALL (log) {")
+        s.cypher.append(" MATCH (event:Event) WHERE ")
+            .append(filterRenderer.renderWithHoisting(filter, s))
+        s.cypher.append(" MATCH (trace:Trace)-[:HAS_EVENT]->(event)")
+        s.cypher.append(" WHERE trace.parentLogId = log.logId")
+        s.cypher.append(" WITH trace, event ORDER BY trace.traceId, ${eventOrder(s)}")
+        s.cypher.append(
+            " WITH trace, collect(${s.xesProperties("event")})[..${'$'}eventLimit] AS events" +
+                " WITH trace, events ORDER BY ${indexedTraceOrder(s)} LIMIT ${'$'}traceLimit" +
+                " RETURN trace, events }",
+        )
+        s.cypher.append(
+            " RETURN 1 AS _kind, log.logId AS _logKey, trace.traceId AS _traceKey," +
+                " trace.importOrder AS _traceOrder, 0 AS _eventOrder," +
+                " null AS log, ${s.xesProperties("trace")} AS trace, null AS event, events" +
+                " ORDER BY _kind, _logKey, _traceOrder, _eventOrder",
+        )
+        s.deferLogProperties()
+        return true
+    }
+
+    /**
+     * Selects the one datastore log that owns the first matching event under the
+     * requested event order. Keeping the predicate event-first is essential: the
+     * generic child-order ranking probe starts from each log and scans its events.
+     */
+    private fun emitIndexedLikeLogSelection(
+        s: CypherBuildState,
+        filter: PqlExpression.Binary,
+    ) {
+        val aliases = s.plan.orderBy.mapIndexed { index, _ -> "_indexedLogOrder$index" }
+        s.cypher.append(" CALL (log) {")
+        s.cypher.append(" MATCH (event:Event) WHERE ")
+            .append(filterRenderer.renderWithHoisting(filter, s))
+        s.cypher.append(" MATCH (trace:Trace)-[:HAS_EVENT]->(event)")
+        s.cypher.append(" WHERE trace.parentLogId = log.logId")
+        s.cypher.append(" WITH trace, event ORDER BY ").append(logSelectionOrder(s, usesEventOrder = true))
+        s.cypher.append(" LIMIT 1 RETURN ")
+        val returnTerms = s.plan.orderBy.mapIndexed { index, key ->
+                "${expressions.render(key.expression, s)} AS ${aliases[index]}"
+            }
+        s.cypher.append(returnTerms.ifEmpty { listOf("true AS _indexedLogMatch") }.joinToString(", "))
+        s.cypher.append(" } WITH log")
+        aliases.forEach { alias -> s.cypher.append(", $alias") }
+        s.cypher.append(" ORDER BY ")
+        s.cypher.append(
+            s.plan.orderBy.mapIndexed { index, key -> "${aliases[index]} ${key.direction.name}" }
+                .plus(defaultLogOrder(s))
+                .joinToString(", "),
+        )
+        s.cypher.append(" LIMIT ${'$'}logLimit")
+    }
+
+    private fun simplePositiveEventNameContains(s: CypherBuildState): PqlExpression.Binary? {
+        val binary = s.plan.filter as? PqlExpression.Binary ?: return null
+        if (binary.op != BinaryOperator.LIKE) return null
+        val attribute = binary.left as? PqlExpression.Attribute ?: return null
+        if (attribute.baseScope != Scope.EVENT || attribute.effectiveScope != Scope.EVENT) return null
+        if (attribute.kind != AttributeKind.STANDARD || attribute.xesStandardName != "concept:name") return null
+        val literal = binary.right as? PqlExpression.Literal ?: return null
+        val pattern = literal.value as? String ?: return null
+        if (pattern.length < 3 || !pattern.startsWith('%') || !pattern.endsWith('%')) return null
+        val content = pattern.substring(1, pattern.lastIndex)
+        if (content.isEmpty() || content.any { it == '%' || it == '_' || it == '\\' }) return null
+        return binary
+    }
+
+    /**
+     * Returns one bounded row per selected trace, with its already-bounded events
+     * collected in source order. The former three-branch UNION qualified the same
+     * trace set independently for log, trace and event rows; on real logs a
+     * hoisted event predicate therefore scanned the hierarchy three times.
+     *
+     * This fast path is intentionally limited to finite, positive trace/event
+     * windows without ordering or offsets. The streaming split-row renderer stays
+     * as the fallback for unbounded and more complex shapes.
+     */
+    private fun emitCompactLimitedRowsIfNeeded(s: CypherBuildState): Boolean {
+        if (!canEmitCompactLimitedRows(s)) return false
+
+        val filter = s.plan.filter
+        val filterScopes = filter?.let(s.facts::scopesOf).orEmpty()
+        val logLimit = CypherEffectiveLimits.log(s).takeIf { filterScopes.all { scope -> scope == Scope.LOG } }
+        val traceLimit = checkNotNull(CypherEffectiveLimits.trace(s))
+        val eventLimit = checkNotNull(CypherEffectiveLimits.event(s))
+        s.bindHierarchyLimitParams(logLimit, traceLimit, eventLimit)
+
+        emitLimitedLogMatch(s, filter, filterScopes, logLimit)
+        s.cypher.append(" CALL (log) {")
+        if (Scope.EVENT in filterScopes) {
+            emitCompactDirectEventFilter(s, checkNotNull(filter))
+        } else {
+            emitCompactTraceSelection(s, filter, filterScopes)
+        }
+        s.cypher.append(
+            " RETURN CASE WHEN trace IS NULL THEN 0 ELSE 1 END AS _kind," +
+                " log.logId AS _logKey, trace.traceId AS _traceKey," +
+                " trace.importOrder AS _traceOrder, 0 AS _eventOrder," +
+                " null AS log, ${s.xesProperties("trace")} AS trace, null AS event," +
+                " CASE WHEN trace IS NULL THEN null ELSE events END AS events" +
+                " ORDER BY _kind, _logKey, _traceOrder, _eventOrder",
+        )
+        s.deferLogProperties()
+        return true
+    }
+
+    private fun emitCompactTraceSelection(
+        s: CypherBuildState,
+        filter: PqlExpression?,
+        filterScopes: Set<Scope>,
+    ) {
+        val hasChildFilter = filter != null && filterScopes.any { it != Scope.LOG }
+        if (hasChildFilter) {
+            emitIndexedTraceMatch(s)
+            s.cypher.append(" AND (").append(filterRenderer.renderWithHoisting(checkNotNull(filter), s)).append(')')
+        } else {
+            s.cypher.append(
+                " OPTIONAL MATCH (trace:Trace {parentLogId: log.logId})" +
+                    " WHERE trace.importOrder IS NOT NULL",
+            )
+        }
+        s.cypher.append(" WITH trace ORDER BY ${indexedTraceOrder(s)} LIMIT ${'$'}traceLimit")
+        s.cypher.append(" CALL (trace) {")
+        s.cypher.append(
+            " OPTIONAL MATCH (event:Event {parentTraceId: trace.traceId})" +
+                " WHERE event.importOrder IS NOT NULL" +
+                " WITH event ORDER BY event.parentTraceId, event.importOrder" +
+                " LIMIT ${'$'}eventLimit RETURN collect(${s.xesProperties("event")}) AS events }" +
+                " RETURN trace, events }",
+        )
+    }
+
+    private fun emitCompactDirectEventFilter(
+        s: CypherBuildState,
+        filter: PqlExpression,
+    ) {
+        emitIndexedTraceMatch(s)
+        s.cypher.append(" CALL (log, trace) {")
+        emitEventMatch(s, indexed = true)
+        s.cypher.append(" AND (").append(filterRenderer.renderWithHoisting(filter, s)).append(')')
+        s.cypher.append(
+            " WITH event ORDER BY event.parentTraceId, event.importOrder" +
+                " LIMIT ${'$'}eventLimit RETURN collect(${s.xesProperties("event")}) AS events }" +
+                " WITH trace, events WHERE size(events) > 0" +
+                " WITH trace, events ORDER BY ${indexedTraceOrder(s)} LIMIT ${'$'}traceLimit" +
+                " RETURN trace, events }",
+        )
+    }
+
+    private fun canEmitCompactLimitedRows(s: CypherBuildState): Boolean {
+        if (!canEmit(s)) return false
+        if (s.plan.groupBy != null || s.plan.orderBy.isNotEmpty()) return false
+        if (s.plan.offsets.log != null || s.plan.offsets.trace != null || s.plan.offsets.event != null) return false
+        if (filterRenderer.classifierNullFilters(s).isNotEmpty()) return false
+        val traceLimit = CypherEffectiveLimits.trace(s) ?: return false
+        val eventLimit = CypherEffectiveLimits.event(s) ?: return false
+        return traceLimit > 0 && eventLimit > 0
     }
 
     private fun emitFilteredTraceMatch(
@@ -205,7 +397,7 @@ internal class CypherHierarchyRenderer(
         s.cypher.append(
             " RETURN 0 AS _kind, log.logId AS _logKey, null AS _traceKey," +
                 " 0 AS _traceOrder, 0 AS _eventOrder," +
-                " properties(log) AS log, null AS trace, null AS event",
+                " ${s.logProperties()} AS log, null AS trace, null AS event",
         )
     }
 
@@ -221,7 +413,7 @@ internal class CypherHierarchyRenderer(
         s.cypher.append(
             " RETURN 1 AS _kind, log.logId AS _logKey, trace.traceId AS _traceKey," +
                 " trace.importOrder AS _traceOrder, 0 AS _eventOrder," +
-                " null AS log, properties(trace) AS trace, null AS event",
+                " null AS log, ${s.xesProperties("trace")} AS trace, null AS event",
         )
     }
 
@@ -238,7 +430,7 @@ internal class CypherHierarchyRenderer(
         s.cypher.append(
             " RETURN 2 AS _kind, log.logId AS _logKey, trace.traceId AS _traceKey," +
                 " trace.importOrder AS _traceOrder, event.importOrder AS _eventOrder," +
-                " null AS log, null AS trace, properties(event) AS event",
+                " null AS log, null AS trace, ${s.xesProperties("event")} AS event",
         )
     }
 

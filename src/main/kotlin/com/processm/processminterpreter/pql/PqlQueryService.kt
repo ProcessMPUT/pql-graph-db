@@ -61,6 +61,7 @@ open class PqlQueryService(
                         ExecutionOptions(
                             defaultLimits = request.defaultLimits,
                             materializedScopes = request.materializedScopes,
+                            attributeReadMode = request.attributeReadMode,
                         ),
                     )
                     result.toQueryResult(plan.projection)
@@ -85,6 +86,7 @@ open class PqlQueryService(
                         ExecutionOptions(
                             defaultLimits = request.defaultLimits,
                             materializedScopes = request.materializedScopes,
+                            attributeReadMode = request.attributeReadMode,
                         ),
                     )
                 }

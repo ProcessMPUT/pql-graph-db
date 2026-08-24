@@ -171,6 +171,26 @@ class XESJsonComparatorTest {
     }
 
     @Test
+    fun `equivalent timestamp fractions identify the same event`() {
+        val local = xesLogWithEventTimestamp("2011-09-30T22:38:44.880Z")
+        val remote = xesLogWithEventTimestamp("2011-09-30T22:38:44.88Z")
+
+        val result = XESJsonComparator.compare(local, remote)
+
+        assertTrue(result.match, result.differences.joinToString("\n"))
+    }
+
+    @Test
+    fun `different timestamp instants remain mismatches`() {
+        val local = xesLogWithEventTimestamp("2011-09-30T22:38:44.880Z")
+        val remote = xesLogWithEventTimestamp("2011-09-30T22:38:44.881Z")
+
+        val result = XESJsonComparator.compare(local, remote)
+
+        assertFalse(result.match)
+    }
+
+    @Test
     fun `trace aggregate attributes are part of the comparison contract`() {
         val local = xesLog(traceAttrs = attrs("concept:name" to "0", "count(trace:concept:name)" to "2"))
         val remote = xesLog(traceAttrs = attrs("concept:name" to "0", "count(trace:concept:name)" to "1"))
@@ -634,6 +654,21 @@ class XESJsonComparatorTest {
 
     private fun xesLogWithIntLogAttrs(logAttrs: List<Map<String, Any?>>): List<Map<String, Any?>> =
         listOf(mapOf("log" to mapOf("int" to logAttrs)))
+
+    private fun xesLogWithEventTimestamp(timestamp: String): List<Map<String, Any?>> =
+        listOf(
+            mapOf(
+                "log" to mapOf(
+                    "trace" to mapOf(
+                        "string" to attr("concept:name", "case-1"),
+                        "event" to mapOf(
+                            "string" to attr("concept:name", "A"),
+                            "date" to attr("time:timestamp", timestamp),
+                        ),
+                    ),
+                ),
+            ),
+        )
 
     private fun trace(
         eventNames: List<String>,

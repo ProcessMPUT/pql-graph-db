@@ -16,6 +16,10 @@ internal object Neo4jXesSchemaDefinitions {
         RangeIndexSpec("trace_parent_import_order", "Trace", listOf("parentLogId", "importOrder")),
         RangeIndexSpec("event_parent_import_order", "Event", listOf("parentTraceId", "importOrder")),
     )
+
+    val textIndexes = listOf(
+        TextIndexSpec("event_activity_text", "Event", "activity"),
+    )
 }
 
 internal data class UniqueConstraintSpec(

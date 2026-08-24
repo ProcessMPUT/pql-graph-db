@@ -9,6 +9,9 @@ import com.processm.processminterpreter.pql.cypher.ColumnAlias
 import com.processm.processminterpreter.xes.model.XesEvent
 import com.processm.processminterpreter.xes.model.XesLog
 import com.processm.processminterpreter.xes.model.XesTrace
+import com.processm.processminterpreter.xes.model.XesAttributeValue
+import com.processm.processminterpreter.neo4j.xes.metadata.XesLogMetadataCodec
+import com.processm.processminterpreter.neo4j.xes.schema.Neo4jXesSchema
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertSame
@@ -92,6 +95,68 @@ class HierarchyReconstructorTest {
         assertEquals(1, logs[0].traces.size)
         assertEquals("Case", logs[0].traces[0].conceptName)
         assertEquals(listOf("A", "B"), logs[0].traces[0].events.map { it.conceptName })
+    }
+
+    @Test
+    fun `full hierarchy merges cold nested payload while ProcessM pairs keep scalar parents`() {
+        val logNested = XesAttributeValue(value = 7, children = mapOf("child" to "log-secret"))
+        val traceNested = XesAttributeValue(value = 8, children = mapOf("child" to "trace-secret"))
+        val eventNested = XesAttributeValue(value = 9, children = mapOf("child" to "event-secret"))
+        val fullLogProperties = mapOf(
+            "logId" to "L",
+            "name" to "Log",
+            "outer" to 7,
+            Neo4jXesSchema.NESTED_ATTRIBUTE_PAYLOAD_PROPERTY to
+                XesLogMetadataCodec.serializeArbitrary(mapOf("outer" to logNested)),
+        )
+
+        val full = reconstructor.reconstruct(
+            rows = listOf(
+                mapOf(
+                    "log" to fullLogProperties,
+                    "trace" to mapOf(
+                        "traceId" to "T",
+                        "trace-outer" to 8,
+                        Neo4jXesSchema.NESTED_ATTRIBUTE_PAYLOAD_PROPERTY to
+                            XesLogMetadataCodec.serializeArbitrary(mapOf("trace-outer" to traceNested)),
+                    ),
+                    "event" to mapOf(
+                        "eventId" to "E",
+                        "event-outer" to 9,
+                        Neo4jXesSchema.NESTED_ATTRIBUTE_PAYLOAD_PROPERTY to
+                            XesLogMetadataCodec.serializeArbitrary(mapOf("event-outer" to eventNested)),
+                    ),
+                ),
+            ),
+            columnAliases = emptyMap(),
+        ).single()
+        assertEquals(logNested, full.customAttributes["outer"])
+        assertEquals(traceNested, full.traces.single().customAttributes["trace-outer"])
+        assertEquals(eventNested, full.traces.single().events.single().customAttributes["event-outer"])
+
+        val compact = reconstructor.reconstruct(
+            rows = listOf(
+                mapOf(
+                    "log" to listOf(
+                        mapOf("key" to "logId", "value" to "L"),
+                        mapOf("key" to "name", "value" to "Log"),
+                        mapOf("key" to "outer", "value" to 7),
+                    ),
+                    "trace" to listOf(
+                        mapOf("key" to "traceId", "value" to "T"),
+                        mapOf("key" to "trace-outer", "value" to 8),
+                    ),
+                    "event" to listOf(
+                        mapOf("key" to "eventId", "value" to "E"),
+                        mapOf("key" to "event-outer", "value" to 9),
+                    ),
+                ),
+            ),
+            columnAliases = emptyMap(),
+        ).single()
+        assertEquals(7, compact.customAttributes["outer"])
+        assertEquals(8, compact.traces.single().customAttributes["trace-outer"])
+        assertEquals(9, compact.traces.single().events.single().customAttributes["event-outer"])
     }
 
     @Test
@@ -201,6 +266,69 @@ class HierarchyReconstructorTest {
         assertEquals("Log", logs.single().conceptName)
         assertEquals("Case", logs.single().traces.single().conceptName)
         assertEquals(listOf("A", "B"), logs.single().traces.single().events.map { it.conceptName })
+    }
+
+    @Test
+    fun `node-shaped split rows restore source order after unordered streaming`() {
+        val rows = listOf(
+            mapOf(
+                "_kind" to 2,
+                "_logKey" to "L",
+                "_traceKey" to "T2",
+                "_traceOrder" to 2,
+                "_eventOrder" to 1,
+                "event" to mapOf("activity" to "D"),
+            ),
+            mapOf(
+                "_kind" to 2,
+                "_logKey" to "L",
+                "_traceKey" to "T1",
+                "_traceOrder" to 1,
+                "_eventOrder" to 1,
+                "event" to mapOf("activity" to "B"),
+            ),
+            mapOf(
+                "_kind" to 1,
+                "_logKey" to "L",
+                "_traceKey" to "T2",
+                "_traceOrder" to 2,
+                "trace" to mapOf("traceId" to "T2", "caseId" to "Case 2"),
+            ),
+            mapOf(
+                "_kind" to 0,
+                "_logKey" to "L",
+                "log" to mapOf("logId" to "L", "name" to "Log"),
+            ),
+            mapOf(
+                "_kind" to 2,
+                "_logKey" to "L",
+                "_traceKey" to "T1",
+                "_traceOrder" to 1,
+                "_eventOrder" to 0,
+                "event" to mapOf("activity" to "A"),
+            ),
+            mapOf(
+                "_kind" to 1,
+                "_logKey" to "L",
+                "_traceKey" to "T1",
+                "_traceOrder" to 1,
+                "trace" to mapOf("traceId" to "T1", "caseId" to "Case 1"),
+            ),
+            mapOf(
+                "_kind" to 2,
+                "_logKey" to "L",
+                "_traceKey" to "T2",
+                "_traceOrder" to 2,
+                "_eventOrder" to 0,
+                "event" to mapOf("activity" to "C"),
+            ),
+        )
+
+        val log = reconstructor.reconstruct(rows = rows, columnAliases = emptyMap()).single()
+
+        assertEquals(listOf("Case 1", "Case 2"), log.traces.map { it.conceptName })
+        assertEquals(listOf("A", "B"), log.traces[0].events.map { it.conceptName })
+        assertEquals(listOf("C", "D"), log.traces[1].events.map { it.conceptName })
     }
 
     @Test

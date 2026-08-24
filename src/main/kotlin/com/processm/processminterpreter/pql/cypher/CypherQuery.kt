@@ -1,6 +1,7 @@
 package com.processm.processminterpreter.pql.cypher
 
 import com.processm.processminterpreter.pql.catalog.Scope
+import com.processm.processminterpreter.pql.XesAttributeReadMode
 
 /**
  * A parameterized Cypher query ready for dispatch to Neo4j.
@@ -20,6 +21,7 @@ data class CypherQuery(
     val parameters: Map<String, Any?>,
     val columnAliases: Map<String, ColumnAlias>,
     val hydrateLogProperties: Boolean = false,
+    val attributeReadMode: XesAttributeReadMode = XesAttributeReadMode.FULL_XES,
 )
 
 /** Metadata about a single projected column — carries just enough context for row→XES reconstruction.

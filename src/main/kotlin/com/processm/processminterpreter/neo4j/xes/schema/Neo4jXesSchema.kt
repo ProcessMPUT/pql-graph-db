@@ -14,6 +14,7 @@ object Neo4jXesSchema {
     const val LOG_EXTENSIONS_PROPERTY = "extensions"
     const val LOG_TRACE_GLOBALS_PROPERTY = "traceGlobals"
     const val LOG_EVENT_GLOBALS_PROPERTY = "eventGlobals"
+    const val NESTED_ATTRIBUTE_PAYLOAD_PROPERTY = "processmNestedAttributePayload"
 
     /**
      * Generated structural node keys used by the writer's MATCH joins and by the
@@ -23,6 +24,8 @@ object Neo4jXesSchema {
      */
     const val TRACE_ID_PROPERTY = "traceId"
     const val TRACE_PARENT_LOG_ID_PROPERTY = "parentLogId"
+    const val TRACE_ACTIVITY_VARIANT_ID_PROPERTY = "processmActivityVariantId"
+    const val TRACE_ACTIVITY_NON_NULL_COUNT_PROPERTY = "processmActivityNonNullCount"
     const val EVENT_ID_PROPERTY = "eventId"
     const val EVENT_PARENT_TRACE_ID_PROPERTY = "parentTraceId"
 
@@ -114,7 +117,15 @@ object Neo4jXesSchema {
     }
 
     private val traceWriterManaged: Set<String> =
-        setOf(TRACE_ID_PROPERTY, TRACE_PARENT_LOG_ID_PROPERTY, "caseId", "createdAt", "importOrder")
+        setOf(
+            TRACE_ID_PROPERTY,
+            TRACE_PARENT_LOG_ID_PROPERTY,
+            TRACE_ACTIVITY_VARIANT_ID_PROPERTY,
+            TRACE_ACTIVITY_NON_NULL_COUNT_PROPERTY,
+            "caseId",
+            "createdAt",
+            "importOrder",
+        )
     private val eventWriterManaged: Set<String> =
         setOf(
             EVENT_ID_PROPERTY,
@@ -151,7 +162,15 @@ object Neo4jXesSchema {
      * attributes named `traceId`/`eventId`.
      */
     private val traceStorageMetadataKeys: Set<String> =
-        setOf(TRACE_ID_PROPERTY, TRACE_PARENT_LOG_ID_PROPERTY, "createdAt", "updatedAt", "importOrder")
+        setOf(
+            TRACE_ID_PROPERTY,
+            TRACE_PARENT_LOG_ID_PROPERTY,
+            TRACE_ACTIVITY_VARIANT_ID_PROPERTY,
+            TRACE_ACTIVITY_NON_NULL_COUNT_PROPERTY,
+            "createdAt",
+            "updatedAt",
+            "importOrder",
+        )
     private val eventStorageMetadataKeys: Set<String> =
         setOf(EVENT_ID_PROPERTY, EVENT_PARENT_TRACE_ID_PROPERTY, "createdAt", "updatedAt", "importOrder")
 

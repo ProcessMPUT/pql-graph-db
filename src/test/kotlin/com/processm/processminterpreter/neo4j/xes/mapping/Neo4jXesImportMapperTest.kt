@@ -6,9 +6,12 @@ import com.processm.processminterpreter.xes.model.XesEvent
 import com.processm.processminterpreter.xes.model.XesLog
 import com.processm.processminterpreter.xes.model.XesTrace
 import com.processm.processminterpreter.neo4j.xes.schema.Neo4jXesCustomAttributeCodec
+import com.processm.processminterpreter.neo4j.xes.schema.Neo4jXesSchema
+import com.processm.processminterpreter.neo4j.xes.metadata.XesLogMetadataCodec
 import com.processm.processminterpreter.pql.catalog.Scope
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Test
 import java.time.Instant
 import java.time.LocalDateTime
@@ -75,6 +78,8 @@ class Neo4jXesImportMapperTest {
         val trace = traceBatch.traces.single()
         assertEquals("log-1-trace-1-Case_1", trace["traceId"])
         assertEquals("Case 1", trace["caseId"])
+        assertEquals(0L, trace[Neo4jXesSchema.TRACE_ACTIVITY_VARIANT_ID_PROPERTY])
+        assertEquals(2, trace[Neo4jXesSchema.TRACE_ACTIVITY_NON_NULL_COUNT_PROPERTY])
         assertEquals(importedAt, trace["createdAt"])
         assertNotNull(trace["attributes"])
 
@@ -110,8 +115,51 @@ class Neo4jXesImportMapperTest {
         val event = batch.traceBatches.single().events.single()
 
         assertEquals(null, trace["caseId"])
+        assertEquals(0L, trace[Neo4jXesSchema.TRACE_ACTIVITY_VARIANT_ID_PROPERTY])
+        assertEquals(0, trace[Neo4jXesSchema.TRACE_ACTIVITY_NON_NULL_COUNT_PROPERTY])
         assertEquals(null, event["activity"])
         assertEquals(null, event["timestamp"])
+    }
+
+    @Test
+    fun `activity variant ids come from collision-free keys and follow Cypher collect null semantics`() {
+        val importedAt = LocalDateTime.parse("2026-04-24T09:00:00")
+        val log = XesLog(
+            traces = listOf(
+                XesTrace(
+                    events = listOf(
+                        XesEvent(conceptName = "A:B"),
+                        XesEvent(conceptName = null),
+                        XesEvent(conceptName = "C"),
+                    ),
+                ),
+                XesTrace(
+                    events = listOf(
+                        XesEvent(conceptName = "A"),
+                        XesEvent(conceptName = "B:C"),
+                    ),
+                ),
+                XesTrace(
+                    events = listOf(
+                        XesEvent(conceptName = "A:B"),
+                        XesEvent(conceptName = null),
+                        XesEvent(conceptName = "C"),
+                    ),
+                ),
+            ),
+        )
+
+        val traces = mapper.toImportBatch(log, requestedLogId = "log-1", importedAt = importedAt)
+            .traceBatches.single().traces
+        val firstId = traces[0][Neo4jXesSchema.TRACE_ACTIVITY_VARIANT_ID_PROPERTY]
+        val secondId = traces[1][Neo4jXesSchema.TRACE_ACTIVITY_VARIANT_ID_PROPERTY]
+        val repeatedFirstId = traces[2][Neo4jXesSchema.TRACE_ACTIVITY_VARIANT_ID_PROPERTY]
+
+        assertNotEquals(firstId, secondId)
+        assertEquals(firstId, repeatedFirstId)
+        assertEquals(2, traces[0][Neo4jXesSchema.TRACE_ACTIVITY_NON_NULL_COUNT_PROPERTY])
+        assertEquals(2, traces[1][Neo4jXesSchema.TRACE_ACTIVITY_NON_NULL_COUNT_PROPERTY])
+        assertEquals(2, traces[2][Neo4jXesSchema.TRACE_ACTIVITY_NON_NULL_COUNT_PROPERTY])
     }
 
     @Test
@@ -251,22 +299,60 @@ class Neo4jXesImportMapperTest {
     }
 
     @Test
-    fun `flattens nested XES attributes for query filtering while preserving parent value`() {
+    fun `flattens nested XES attributes at every scope while preserving full payload`() {
         val importedAt = LocalDateTime.parse("2026-04-24T09:00:00")
-        val nestedAttribute = XesAttributeValue(
+        val logNested = XesAttributeValue(
             value = 150291,
             children = mapOf("haptoglobine" to 23),
         )
+        val traceNested = XesAttributeValue(value = "trace-parent", children = mapOf("child" to "trace-child"))
+        val eventNested = XesAttributeValue(value = "event-parent", children = mapOf("child" to "event-child"))
         val log = XesLog(
             conceptName = "Hospital",
-            customAttributes = mapOf("meta_concept:named_events_total" to nestedAttribute),
+            customAttributes = mapOf("meta_concept:named_events_total" to logNested),
+            traces = listOf(
+                XesTrace(
+                    customAttributes = mapOf("trace-payload" to traceNested),
+                    events = listOf(XesEvent(customAttributes = mapOf("event-payload" to eventNested))),
+                ),
+            ),
         )
 
         val batch = mapper.toImportBatch(log, requestedLogId = "log-1", importedAt = importedAt)
         val nestedKey = NestedAttributePathCodec.encodedChildKey("meta_concept:named_events_total", "haptoglobine")
 
         assertEquals(23, batch.logAttributes[nestedKey])
-        assertNotNull(batch.logAttributes["meta_concept:named_events_total"])
+        assertEquals(150291, batch.logAttributes["meta_concept:named_events_total"])
+
+        @Suppress("UNCHECKED_CAST")
+        val payload = XesLogMetadataCodec.deserializeArbitrary(
+            batch.logAttributes[Neo4jXesSchema.NESTED_ATTRIBUTE_PAYLOAD_PROPERTY] as String,
+        ) as Map<String, Any?>
+        assertEquals(logNested, payload["meta_concept:named_events_total"])
+
+        @Suppress("UNCHECKED_CAST")
+        val traceAttributes = batch.traceBatches.single().traces.single()["attributes"] as Map<String, Any?>
+        @Suppress("UNCHECKED_CAST")
+        val eventAttributes = batch.traceBatches.single().events.single()["attributes"] as Map<String, Any?>
+        assertNestedPayload(traceAttributes, "trace-payload", traceNested)
+        assertNestedPayload(eventAttributes, "event-payload", eventNested)
+    }
+
+    private fun assertNestedPayload(
+        attributes: Map<String, Any?>,
+        parentKey: String,
+        expected: XesAttributeValue,
+    ) {
+        assertEquals(expected.value, attributes[parentKey])
+        assertEquals(
+            expected.children["child"],
+            attributes[NestedAttributePathCodec.encodedChildKey(parentKey, "child")],
+        )
+        @Suppress("UNCHECKED_CAST")
+        val payload = XesLogMetadataCodec.deserializeArbitrary(
+            attributes[Neo4jXesSchema.NESTED_ATTRIBUTE_PAYLOAD_PROPERTY] as String,
+        ) as Map<String, Any?>
+        assertEquals(expected, payload[parentKey])
     }
 
     @Test

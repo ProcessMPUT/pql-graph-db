@@ -3,6 +3,7 @@ package com.processm.processminterpreter.neo4j.query.result
 import com.processm.processminterpreter.xes.model.XesLog
 import com.processm.processminterpreter.pql.catalog.Scope
 import com.processm.processminterpreter.pql.cypher.SYNTHETIC_GROUPED_EVENT_ALIAS
+import java.util.IdentityHashMap
 
 internal class NodeRowHierarchyBuilder {
     fun reconstruct(
@@ -22,8 +23,12 @@ internal class NodeRowHierarchyBuilder {
                 setOf(Scope.LOG, Scope.TRACE, Scope.EVENT)
             }
         private val logs = linkedMapOf<Any?, LogBuilder>()
+        private val traceOrders = IdentityHashMap<TraceBuilder, Long>()
+        private val eventOrders = IdentityHashMap<EventBuilder, Long>()
+        private var sawSplitRow = false
 
         fun absorb(row: Map<String, Any?>) {
+            sawSplitRow = sawSplitRow || row.containsKey("_kind")
             val eventList = row.nodePropertyList("events")
 
             val logBuilder = absorbLog(row)
@@ -48,6 +53,7 @@ internal class NodeRowHierarchyBuilder {
             val traceProps = row.nodeProperties("trace")
             val traceKey = row["_traceKey"] ?: traceProps["traceId"] ?: SyntheticHierarchyKey
             val traceBuilder = logBuilder.traces.getOrPut(traceKey) { TraceBuilder() }
+            (row["_traceOrder"] as? Number)?.toLong()?.let { traceOrders.putIfAbsent(traceBuilder, it) }
             if (Scope.TRACE in selectedScopes && traceProps.isNotEmpty()) {
                 traceBuilder.absorbNode(traceProps)
             }
@@ -60,19 +66,46 @@ internal class NodeRowHierarchyBuilder {
         ) {
             val groupedEvent = row[SYNTHETIC_GROUPED_EVENT_ALIAS] == true
             when {
-                eventList != null -> eventList.forEach { addEvent(it, groupedEvent) }
-                row.hasNodeColumn("event") -> addEvent(row.nodeProperties("event"), groupedEvent)
+                eventList != null -> eventList.forEach { addEvent(it, groupedEvent, order = null) }
+                row.hasNodeColumn("event") -> addEvent(
+                    row.nodeProperties("event"),
+                    groupedEvent,
+                    order = (row["_eventOrder"] as? Number)?.toLong(),
+                )
             }
         }
 
-        private fun TraceBuilder.addEvent(props: Map<String, Any?>, groupedEvent: Boolean) {
+        private fun TraceBuilder.addEvent(
+            props: Map<String, Any?>,
+            groupedEvent: Boolean,
+            order: Long?,
+        ) {
             val eventBuilder = EventBuilder()
             if (Scope.EVENT in selectedScopes || groupedEvent) {
                 eventBuilder.absorbNode(props)
             }
             events.add(eventBuilder)
+            if (order != null) eventOrders[eventBuilder] = order
         }
 
-        fun build(): List<XesLog> = logs.values.map { it.build() }
+        fun build(): List<XesLog> {
+            if (!sawSplitRow) return logs.values.map { it.build() }
+
+            logs.values.forEach { log ->
+                val orderedTraces = log.traces.entries.sortedWith(
+                    compareBy<Map.Entry<Any?, TraceBuilder>> { traceOrders[it.value] ?: Long.MAX_VALUE }
+                        .thenBy { it.key.toString() },
+                )
+                log.traces.clear()
+                orderedTraces.forEach { (key, trace) -> log.traces[key] = trace }
+                log.traces.values.forEach { trace ->
+                    trace.events.sortWith(compareBy { eventOrders[it] ?: Long.MAX_VALUE })
+                }
+            }
+
+            return logs.entries
+                .sortedBy { it.key.toString() }
+                .map { it.value.build() }
+        }
     }
 }

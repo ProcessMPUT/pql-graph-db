@@ -5,6 +5,7 @@ import com.processm.processminterpreter.processm.json.requestedScopes
 import com.processm.processminterpreter.processm.RemoteQueryExecutionResult
 import com.processm.processminterpreter.processm.RemoteProcessMGateway
 import com.processm.processminterpreter.pql.ExecutePqlQueryRequest
+import com.processm.processminterpreter.pql.XesAttributeReadMode
 import com.processm.processminterpreter.pql.PqlQueryService
 import com.processm.processminterpreter.pql.QueryResult
 import com.processm.processminterpreter.processm.json.ProcessMXesJsonFormatter
@@ -112,6 +113,7 @@ class VerificationService(
                     dataStoreId = request.dataStoreId,
                     defaultLimits = request.defaultLimits,
                     materializedScopes = requestedScopes(request.includeTraces, request.includeEvents),
+                    attributeReadMode = XesAttributeReadMode.PROCESSM_JSON,
                 ),
             ).toLocalVerificationResult(request.query)
         } catch (e: PQLCompileError) {

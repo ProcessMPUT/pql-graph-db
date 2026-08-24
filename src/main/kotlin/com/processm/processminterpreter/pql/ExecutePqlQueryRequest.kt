@@ -9,6 +9,7 @@ data class ExecutePqlQueryRequest(
     val dataStoreId: String? = null,
     val defaultLimits: HierarchicalLimits = HierarchicalLimits(),
     val materializedScopes: Set<Scope> = FULL_HIERARCHY_SCOPES,
+    val attributeReadMode: XesAttributeReadMode = XesAttributeReadMode.FULL_XES,
 )
 
 private val FULL_HIERARCHY_SCOPES: Set<Scope> =

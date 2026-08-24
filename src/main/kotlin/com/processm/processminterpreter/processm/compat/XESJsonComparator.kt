@@ -730,6 +730,7 @@ object XESJsonComparator {
                     )
                 key == ATTR_IDENTITY_ID -> Unit
                 localAttribute.value != remoteAttribute.value &&
+                    !equivalentDates(localAttribute, remoteAttribute) &&
                     !equivalentNumbers(localAttribute, remoteAttribute) &&
                     !equivalentVolatileNow(key, localAttribute.value, remoteAttribute.value) ->
                     diffs.add(
@@ -1034,8 +1035,8 @@ object XESJsonComparator {
     ): String =
         attributes
             .filter { it.key !in ignoredKeys }
-            .sortedWith(compareBy<XesJsonAttribute> { it.key }.thenBy { it.type }.thenBy { it.value })
-            .joinToString("|") { "${it.key}=${it.type}:${it.value}" }
+            .sortedWith(compareBy<XesJsonAttribute> { it.key }.thenBy { it.type }.thenBy { canonicalValue(it) })
+            .joinToString("|") { "${it.key}=${it.type}:${canonicalValue(it)}" }
 
     private fun metadataFingerprint(metadata: Map<String, String>): String =
         metadata.entries
@@ -1053,7 +1054,7 @@ object XESJsonComparator {
     ): Map<String, List<XesJsonNode>> =
         events.groupBy { event ->
             val attrs = event.attributeValuesByKey()
-            val timestamp = attrs["time:timestamp"] ?: "?"
+            val timestamp = attrs[ATTR_TIME_TIMESTAMP]?.let(::canonicalDate) ?: "?"
             if (timestampOnly) {
                 timestamp
             } else {
@@ -1079,6 +1080,26 @@ object XESJsonComparator {
             type,
             value,
         ).joinToString(":")
+
+    private fun canonicalValue(attribute: XesJsonAttribute): String =
+        if (attribute.type == "date") canonicalDate(attribute.value) else attribute.value
+
+    private fun canonicalDate(value: String): String =
+        parseInstant(value)?.toString() ?: value
+
+    private fun parseInstant(value: String): Instant? =
+        runCatching { Instant.parse(value) }.getOrNull()
+            ?: runCatching { ZonedDateTime.parse(value).toInstant() }.getOrNull()
+
+    private fun equivalentDates(
+        localAttribute: XesJsonAttribute,
+        remoteAttribute: XesJsonAttribute,
+    ): Boolean {
+        if (localAttribute.type != "date" || remoteAttribute.type != "date") return false
+        val local = parseInstant(localAttribute.value) ?: return false
+        val remote = parseInstant(remoteAttribute.value) ?: return false
+        return local == remote
+    }
 
     private fun describeEventCount(trace: XesJsonNode): String =
         if (trace.events.size != trace.rawEventCount) {

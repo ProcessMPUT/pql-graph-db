@@ -7,6 +7,7 @@ import com.processm.processminterpreter.pql.catalog.Scope
 import com.processm.processminterpreter.neo4j.xes.schema.Neo4jXesCustomAttributeCodec
 import com.processm.processminterpreter.neo4j.xes.schema.Neo4jXesSchema
 import com.processm.processminterpreter.neo4j.xes.metadata.XesLogMetadataCodec
+import com.processm.processminterpreter.neo4j.property.NestedAttributePathCodec
 import org.neo4j.driver.types.Node
 
 object Neo4jLogNodeMapper {
@@ -45,11 +46,17 @@ object Neo4jLogNodeMapper {
             null
         }
 
-        val customAttributes = node.keys()
-            .filter { it !in Neo4jXesSchema.logNonAttributeKeys }
+        val nestedPayload = node.nestedAttributePayload()
+        val customAttributes = (node.keys() + nestedPayload.keys)
+            .distinct()
+            .filter {
+                it !in Neo4jXesSchema.logNonAttributeKeys &&
+                    !Neo4jXesSchema.isStorageMetadata(Scope.LOG, it) &&
+                    !NestedAttributePathCodec.isEncoded(it)
+            }
             .associate { physicalName ->
                 val xesName = Neo4jXesCustomAttributeCodec.xesName(Scope.LOG, physicalName) ?: physicalName
-                xesName to node[physicalName].asObject()
+                xesName to (nestedPayload[physicalName] ?: node[physicalName].asObject())
             }
 
         return Log(
@@ -68,4 +75,15 @@ object Neo4jLogNodeMapper {
 
     private fun Node.hasNonNull(key: String): Boolean =
         containsKey(key) && !this[key].isNull
+
+    private fun Node.nestedAttributePayload(): Map<String, Any?> {
+        val key = Neo4jXesSchema.NESTED_ATTRIBUTE_PAYLOAD_PROPERTY
+        if (!hasNonNull(key)) return emptyMap()
+        val decoded = runCatching { XesLogMetadataCodec.deserializeArbitrary(this[key].asString()) as? Map<*, *> }
+            .getOrNull()
+            ?: return emptyMap()
+        return decoded.entries.mapNotNull { (physicalName, value) ->
+            (physicalName as? String)?.let { it to value }
+        }.toMap()
+    }
 }

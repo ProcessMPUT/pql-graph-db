@@ -148,9 +148,9 @@ class XESParser {
     }
 
     /**
-     * Reads one attribute element (and its whole subtree). A blank `key` skips
-     * the attribute like the XES reference reader, but the subtree is still
-     * consumed and validated. Duplicate keys keep last-write-wins semantics.
+     * Reads one attribute element (and its whole subtree). An absent `key`
+     * skips the attribute, while an explicitly empty `key=""` is preserved as
+     * XES data. Duplicate keys keep last-write-wins semantics.
      */
     private fun readAttributeInto(
         reader: XMLStreamReader,
@@ -162,12 +162,13 @@ class XESParser {
     }
 
     private fun readAttributeElement(reader: XMLStreamReader, tag: String): Pair<String, Any>? {
-        val key = reader.attributeValue("key")
+        val declaredKey = reader.getAttributeValue(null, "key")
+        val key = declaredKey.orEmpty()
         val value = reader.attributeValue("value")
 
         if (tag == "list") {
             val list = readListValue(reader)
-            return if (key.isEmpty()) null else key to list
+            return if (declaredKey == null) null else key to list
         }
 
         val scalar = attributes.scalarValue(tag, key, value)
@@ -175,7 +176,7 @@ class XESParser {
         forEachChildElement(reader, parent = tag) { childTag ->
             readAttributeInto(reader, childTag, children)
         }
-        if (key.isEmpty() || scalar == null) return null
+        if (declaredKey == null || scalar == null) return null
         return if (children.isEmpty()) {
             key to scalar
         } else {

@@ -48,6 +48,9 @@ class Neo4jXesSchemaInitializer(
                 Neo4jXesSchemaDefinitions.rangeIndexes.forEach { index ->
                     tx.run(index.createCypher()).consume()
                 }
+                Neo4jXesSchemaDefinitions.textIndexes.forEach { index ->
+                    tx.run(index.createCypher()).consume()
+                }
             }
         }
         logger.info("Neo4j XES schema constraints and indexes are in place.")

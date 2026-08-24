@@ -5,6 +5,7 @@ import com.processm.processminterpreter.xes.DataStoreRepository
 import com.processm.processminterpreter.xes.LogRepository
 import com.processm.processminterpreter.xes.LogStatistics
 import com.processm.processminterpreter.pql.PqlCompiler
+import com.processm.processminterpreter.pql.XesAttributeReadMode
 import com.processm.processminterpreter.xes.datastore.DataStore
 import com.processm.processminterpreter.xes.model.Log
 import com.processm.processminterpreter.neo4j.property.NestedAttributePathCodec
@@ -35,6 +36,25 @@ import java.time.ZonedDateTime
 class CypherCodegenTest {
     private val loc = SourceLocation(1, 0)
     private val codegen = CypherCodegen(PhysicalAttributeMapper())
+
+    @Test
+    fun `ProcessM JSON log hydration excludes nested and internal properties before transfer`() {
+        val q = codegen.generate(
+            selectPlanFull(
+                columns = emptyList(),
+                limits = HierarchicalLimits(log = 1, trace = 1, event = 1),
+                logId = "log-1",
+            ),
+            XesAttributeReadMode.PROCESSM_JSON,
+        )
+
+        assertFalse(q.cypher.contains("properties(log) AS log"), q.cypher)
+        assertFalse(q.cypher.contains("properties(trace)"), q.cypher)
+        assertFalse(q.cypher.contains("properties(event)"), q.cypher)
+        assertTrue(q.cypher.contains("NOT key STARTS WITH '\u001f'"), q.cypher)
+        assertTrue(q.hydrateLogProperties)
+        assertEquals(XesAttributeReadMode.PROCESSM_JSON, q.attributeReadMode)
+    }
 
     private fun stdAttr(scope: Scope, xesName: String, type: Type = Type.STRING) = PqlExpression.Attribute(
         name = xesName, baseScope = scope, effectiveScope = scope,
@@ -156,6 +176,87 @@ class CypherCodegenTest {
             assertTrue(query.cypher.contains(expected), query.cypher)
             assertTrue(!query.cypher.contains("=~"), query.cypher)
         }
+    }
+
+    @Test
+    fun `datastore event name contains ranks and reads logs from indexed events`() {
+        val eventName = stdAttr(Scope.EVENT, "concept:name")
+        val timestamp = stdAttr(Scope.EVENT, "time:timestamp", Type.DATETIME)
+        val filter = PqlExpression.Binary(
+            op = BinaryOperator.LIKE,
+            left = eventName,
+            right = PqlExpression.Literal(
+                rawText = "'%zzq%'",
+                kind = PqlExpression.LiteralKind.STRING,
+                value = "%zzq%",
+                pqlText = "%zzq%",
+                type = Type.STRING,
+                location = loc,
+            ),
+            type = Type.BOOLEAN,
+            location = loc,
+        )
+
+        val q = codegen.generate(
+            selectPlanFull(
+                columns = emptyList(),
+                filter = filter,
+                orderBy = listOf(
+                    PqlQuery.OrderKey(eventName, OrderDirection.ASC),
+                    PqlQuery.OrderKey(timestamp, OrderDirection.ASC),
+                ),
+                limits = HierarchicalLimits(log = 1, trace = 10, event = 20),
+                dataStoreId = "store-42",
+            ),
+        )
+
+        assertTrue(q.cypher.contains("MATCH (:DataStore {dataStoreId: \$dataStoreId})"), q.cypher)
+        assertTrue(q.cypher.contains("MATCH (event:Event) WHERE event.activity CONTAINS"), q.cypher)
+        assertTrue(q.cypher.contains("MATCH (trace:Trace)-[:HAS_EVENT]->(event)"), q.cypher)
+        assertTrue(q.cypher.indexOf("MATCH (event:Event)") < q.cypher.indexOf("MATCH (trace:Trace)"), q.cypher)
+        assertTrue(q.cypher.contains("event.activity AS _indexedLogOrder0"), q.cypher)
+        assertTrue(q.cypher.contains("LIMIT \$logLimit CALL (log)"), q.cypher)
+        assertTrue(
+            q.cypher.contains(
+                "ORDER BY trace.traceId, event.activity ASC, event.timestamp ASC, event.importOrder",
+            ),
+            q.cypher,
+        )
+        assertTrue(q.cypher.contains("collect(properties(event))[..\$eventLimit] AS events"), q.cypher)
+        assertTrue(q.cypher.contains("LIMIT \$traceLimit"), q.cypher)
+        assertTrue(q.hydrateLogProperties)
+        assertEquals(2, q.parameters.values.count { it == "zzq" })
+    }
+
+    @Test
+    fun `event name NOT LIKE keeps generic hierarchy plan`() {
+        val eventName = stdAttr(Scope.EVENT, "concept:name")
+        val filter = PqlExpression.Binary(
+            op = BinaryOperator.NOT_LIKE,
+            left = eventName,
+            right = PqlExpression.Literal(
+                rawText = "'%zzq%'",
+                kind = PqlExpression.LiteralKind.STRING,
+                value = "%zzq%",
+                pqlText = "%zzq%",
+                type = Type.STRING,
+                location = loc,
+            ),
+            type = Type.BOOLEAN,
+            location = loc,
+        )
+
+        val q = codegen.generate(
+            selectPlanFull(
+                columns = emptyList(),
+                filter = filter,
+                limits = HierarchicalLimits(log = 1, trace = 10, event = 20),
+                logId = "Road",
+            ),
+        )
+
+        assertFalse(q.cypher.contains("MATCH (event:Event) WHERE event.activity CONTAINS"), q.cypher)
+        assertTrue(q.cypher.contains("MATCH (trace:Trace {parentLogId: log.logId})"), q.cypher)
     }
 
     @Test
@@ -355,6 +456,7 @@ class CypherCodegenTest {
         assertTrue(q.cypher.contains("RETURN 1 AS _kind"), q.cypher)
         assertTrue(q.cypher.contains("RETURN 2 AS _kind"), q.cypher)
         assertTrue(q.cypher.contains("properties(event) AS event"), q.cypher)
+        assertTrue(!q.cypher.contains("ORDER BY _kind, _logKey, _traceOrder, _eventOrder"), q.cypher)
     }
 
     @Test
@@ -385,8 +487,11 @@ class CypherCodegenTest {
             ),
         )
 
-        assertTrue(q.cypher.contains("MATCH (log)-[:CONTAINS]->(trace:Trace) WHERE trace.Diagnosis IS NOT null WITH DISTINCT log"), q.cypher)
-        assertTrue(q.cypher.indexOf("WITH DISTINCT log") < q.cypher.indexOf("RETURN 0 AS _kind"), q.cypher)
+        assertFalse(q.cypher.contains("UNION ALL"), q.cypher)
+        assertEquals(1, "trace.Diagnosis IS NOT null".toRegex().findAll(q.cypher).count(), q.cypher)
+        assertTrue(q.cypher.contains("AND (trace.Diagnosis IS NOT null)"), q.cypher)
+        assertTrue(q.cypher.contains("collect(properties(event)) AS events"), q.cypher)
+        assertTrue(q.hydrateLogProperties)
     }
 
     @Test
@@ -771,6 +876,63 @@ class CypherCodegenTest {
     }
 
     @Test
+    fun `log hierarchy cardinality uses count subqueries without flat event expansion`() {
+        val logName = stdAttr(Scope.LOG, "concept:name")
+        val traceName = hoistedAttr(Scope.TRACE, Scope.LOG, "concept:name")
+        val eventName = hoistedAttr(Scope.EVENT, Scope.LOG, "concept:name")
+        fun count(attribute: PqlExpression.Attribute) =
+            PqlExpression.Aggregation("count", attribute, scope = Scope.LOG, type = Type.NUMBER, location = loc)
+
+        val q = codegen.generate(
+            selectPlanFull(
+                columns = listOf(
+                    ProjectedColumn(count(logName), alias = "log_count", scope = Scope.LOG),
+                    ProjectedColumn(count(traceName), alias = "trace_count", scope = Scope.LOG),
+                    ProjectedColumn(count(eventName), alias = "event_count", scope = Scope.LOG),
+                ),
+                limits = HierarchicalLimits(log = 1, trace = 10, event = 20),
+                logId = "Road",
+            ),
+        )
+
+        assertTrue(q.cypher.contains("CASE WHEN log.name IS NULL THEN 0 ELSE 1 END AS log_count"), q.cypher)
+        assertTrue(
+            q.cypher.contains(
+                "COUNT { (log)-[:CONTAINS]->(_count_trace:Trace)" +
+                    " WHERE _count_trace.caseId IS NOT NULL } AS trace_count",
+            ),
+            q.cypher,
+        )
+        assertTrue(
+            q.cypher.contains(
+                "COUNT { (log)-[:CONTAINS]->(:Trace)-[:HAS_EVENT]->(_count_event:Event)" +
+                    " WHERE _count_event.activity IS NOT NULL } AS event_count",
+            ),
+            q.cypher,
+        )
+        assertFalse(q.cypher.contains("count(DISTINCT CASE"), q.cypher)
+        assertFalse(q.cypher.contains("MATCH (log)-[:CONTAINS]->(trace:Trace)-[:HAS_EVENT]->(event:Event)"), q.cypher)
+        val placeholderCount = "COUNT { (_placeholder_trace)-[:HAS_EVENT]->(:Event) }"
+        assertEquals(1, q.cypher.split(placeholderCount).size - 1, q.cypher)
+    }
+
+    @Test
+    fun `compiled hierarchy cardinality uses count subqueries`() {
+        val compiler = PqlCompiler(AntlrPqlParser(), EmptyLogRepository, EmptyDataStoreRepository)
+        val plan = compiler.compile(
+            "select count(l:name), count(^t:name), count(^^e:name) limit l:1",
+            logId = "Road",
+            defaultLimits = HierarchicalLimits(trace = 30, event = 100),
+        ) as LogicalPlan.Select
+
+        val q = codegen.generate(plan)
+
+        assertTrue(q.cypher.contains("COUNT { (log)-[:CONTAINS]->(_count_trace:Trace)"), q.cypher)
+        assertTrue(q.cypher.contains("COUNT { (log)-[:CONTAINS]->(:Trace)-[:HAS_EVENT]->(_count_event:Event)"), q.cypher)
+        assertFalse(q.cypher.contains("count(DISTINCT CASE"), q.cypher)
+    }
+
+    @Test
     fun `scoped trace aggregation over log attribute preserves grouped event placeholder count`() {
         val logName = stdAttr(Scope.LOG, "concept:name")
         val traceMinLogName = PqlExpression.Aggregation("min", logName, scope = Scope.TRACE, type = Type.STRING, location = loc)
@@ -842,6 +1004,54 @@ class CypherCodegenTest {
         assertTrue(q.cypher.contains("_log_meta_"), q.cypher)
         assertTrue(q.columnAliases["_null_event_count_"]?.synthetic == true, q.columnAliases.toString())
         assertEquals(Scope.TRACE, q.columnAliases["_null_event_count_"]?.scope)
+    }
+
+    @Test
+    fun `log scoped aggregates return only the placeholder prefix needed by trace windowing`() {
+        val total = hoistedAttr(Scope.EVENT, Scope.LOG, "cost:total", Type.NUMBER)
+        val avgTotal = PqlExpression.Aggregation("avg", total, scope = Scope.LOG, type = Type.NUMBER, location = loc)
+
+        val q = codegen.generate(
+            selectPlanFull(
+                columns = listOf(ProjectedColumn(avgTotal, alias = "avg_total", scope = Scope.LOG)),
+                limits = HierarchicalLimits(trace = 10),
+                offsets = HierarchicalOffsets(trace = 3),
+            ).copy(defaultLimits = HierarchicalLimits(trace = 5)),
+        )
+
+        assertTrue(
+            q.cypher.contains(
+                "CALL (log) {" +
+                    " MATCH (_placeholder_trace:Trace {parentLogId: log.logId})" +
+                    " WHERE _placeholder_trace.importOrder IS NOT NULL" +
+                    " WITH _placeholder_trace" +
+                    " ORDER BY _placeholder_trace.parentLogId, _placeholder_trace.importOrder" +
+                    " LIMIT \$placeholderTracePrefixLimit" +
+                    " RETURN _placeholder_trace }",
+            ),
+            q.cypher,
+        )
+        // Kotlin applies OFFSET once after reconstruction, so Cypher returns the
+        // prefix offset + min(explicit limit, default limit) and never uses SKIP.
+        assertEquals(8L, q.parameters["placeholderTracePrefixLimit"])
+        assertTrue(!q.cypher.contains(" SKIP "), q.cypher)
+        assertTrue(!q.cypher.contains("MATCH (log)-[:CONTAINS]->(_placeholder_trace:Trace)"), q.cypher)
+    }
+
+    @Test
+    fun `zero trace limit keeps aggregate log while Kotlin removes its placeholders`() {
+        val total = hoistedAttr(Scope.EVENT, Scope.LOG, "cost:total", Type.NUMBER)
+        val avgTotal = PqlExpression.Aggregation("avg", total, scope = Scope.LOG, type = Type.NUMBER, location = loc)
+
+        val q = codegen.generate(
+            selectPlanFull(
+                columns = listOf(ProjectedColumn(avgTotal, alias = "avg_total", scope = Scope.LOG)),
+                limits = HierarchicalLimits(trace = 0),
+            ),
+        )
+
+        assertTrue(q.cypher.contains("MATCH (log)-[:CONTAINS]->(_placeholder_trace:Trace)"), q.cypher)
+        assertTrue("placeholderTracePrefixLimit" !in q.parameters)
     }
 
     @Test
@@ -967,6 +1177,48 @@ class CypherCodegenTest {
         assertTrue(c.contains("_log_meta_"), c)
         assertEquals(Scope.TRACE, q.columnAliases["_trace_variant_key_"]!!.scope)
         assertTrue(q.columnAliases["_trace_variant_key_"]!!.synthetic)
+    }
+
+    @Test
+    fun `compiled count-only activity variants use trace cache without reading events`() {
+        val compiler = PqlCompiler(AntlrPqlParser(), EmptyLogRepository, EmptyDataStoreRepository)
+        val plan = compiler.compile(
+            "select count(t:name), count(^e:name) group by ^e:name " +
+                "order by count(t:name) desc limit l:1, t:3",
+            logId = "Hospital-test",
+        ) as LogicalPlan.Select
+
+        val q = codegen.generate(plan)
+        val c = q.cypher
+
+        assertTrue(c.contains("MATCH (trace:Trace {parentLogId: log.logId})"), c)
+        assertTrue(c.contains("trace.processmActivityVariantId AS _trace_variant_"), c)
+        assertTrue(c.contains("trace.processmActivityNonNullCount AS _cached_variant_event_count_"), c)
+        assertTrue(c.contains("trace.caseId AS _cached_trace_name_"), c)
+        assertTrue(c.contains("count(_cached_trace_name_) AS _order_0"), c)
+        assertTrue(c.contains("count(*) AS _trace_group_size_"), c)
+        assertTrue(c.contains("_cached_variant_event_count_ * _trace_group_size_ AS count_1"), c)
+        assertTrue(c.contains("_trace_group_size_ AS _trace_count_"), c)
+        assertTrue(c.contains("ORDER BY _order_0 DESC, _trace_group_order_ LIMIT $"), c)
+        assertFalse(c.contains("HAS_EVENT"), c)
+        assertFalse(c.contains("event.activity"), c)
+        assertEquals(3L, q.parameters["param0"])
+    }
+
+    @Test
+    fun `activity variant cache falls back when grouped event values are selected`() {
+        val compiler = PqlCompiler(AntlrPqlParser(), EmptyLogRepository, EmptyDataStoreRepository)
+        val plan = compiler.compile(
+            "select count(t:name), count(^e:name), e:name group by ^e:name " +
+                "order by count(t:name) desc limit l:1, t:3",
+            logId = "Hospital-test",
+        ) as LogicalPlan.Select
+
+        val c = codegen.generate(plan).cypher
+
+        assertTrue(c.contains("HAS_EVENT"), c)
+        assertTrue(c.contains("collect(event.activity) AS _trace_variant_"), c)
+        assertFalse(c.contains("processmActivityVariantId"), c)
     }
 
     @Test
@@ -1458,15 +1710,16 @@ class CypherCodegenTest {
         )
 
         assertTrue(q.cypher.contains("MATCH (log:Log {logId: \$logId})"), q.cypher)
-        assertTrue(q.cypher.contains("properties(log) AS log, null AS trace, null AS event"), q.cypher)
+        assertFalse(q.cypher.contains("UNION ALL"), q.cypher)
         assertTrue(q.cypher.contains("null AS log, properties(trace) AS trace, null AS event"), q.cypher)
-        assertTrue(q.cypher.contains("null AS log, null AS trace, properties(event) AS event"), q.cypher)
+        assertTrue(q.cypher.contains("collect(properties(event)) AS events"), q.cypher)
+        assertTrue(q.hydrateLogProperties)
         assertTrue(!q.cypher.contains("RETURN log, trace, event"), q.cypher)
         assertTrue(q.cypher.contains("LIMIT \$traceLimit"), q.cypher)
         assertTrue(q.cypher.contains("LIMIT \$eventLimit"), q.cypher)
         assertTrue(
             q.cypher.contains(
-                "MATCH (event:Event {parentTraceId: trace.traceId})" +
+                "OPTIONAL MATCH (event:Event {parentTraceId: trace.traceId})" +
                     " WHERE event.importOrder IS NOT NULL" +
                     " WITH event ORDER BY event.parentTraceId, event.importOrder LIMIT \$eventLimit",
             ),
@@ -1656,11 +1909,11 @@ class CypherCodegenTest {
         )
 
         assertTrue(q.cypher.contains("CALL (log, trace)"), q.cypher)
-        assertTrue(q.cypher.contains("WHERE event.activity IS NOT null"), q.cypher)
-        assertTrue(q.cypher.contains("WITH trace, _events WHERE size(_events) > 0"), q.cypher)
-        assertTrue(q.cypher.indexOf("WHERE event.activity IS NOT null") < q.cypher.indexOf("LIMIT \$eventLimit"), q.cypher)
+        assertTrue(q.cypher.contains("AND (event.activity IS NOT null)"), q.cypher)
+        assertTrue(q.cypher.contains("WITH trace, events WHERE size(events) > 0"), q.cypher)
+        assertTrue(q.cypher.indexOf("event.activity IS NOT null") < q.cypher.indexOf("LIMIT \$eventLimit"), q.cypher)
         assertTrue(
-            q.cypher.indexOf("WITH event ORDER BY event.importOrder LIMIT \$eventLimit") <
+            q.cypher.indexOf("WITH event ORDER BY event.parentTraceId, event.importOrder LIMIT \$eventLimit") <
                 q.cypher.lastIndexOf("LIMIT \$traceLimit"),
             q.cypher,
         )

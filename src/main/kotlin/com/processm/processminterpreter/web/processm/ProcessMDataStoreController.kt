@@ -6,6 +6,7 @@ import com.processm.processminterpreter.xes.datastore.DataStoreNotFoundException
 import com.processm.processminterpreter.xes.ImportXesLogRequest
 import com.processm.processminterpreter.xes.LogService
 import com.processm.processminterpreter.pql.ExecutePqlQueryRequest
+import com.processm.processminterpreter.pql.XesAttributeReadMode
 import com.processm.processminterpreter.pql.ExportQueryAsXesRequest
 import com.processm.processminterpreter.pql.PqlQueryService
 import com.processm.processminterpreter.processm.json.QueryJsonProjection
@@ -122,6 +123,7 @@ class ProcessMDataStoreController(
                     dataStoreId = dataStoreId,
                     defaultLimits = processMConfig.defaultLimits.toHierarchicalLimits(),
                     materializedScopes = requestedScopes(resolvedIncludeTraces, resolvedIncludeEvents),
+                    attributeReadMode = XesAttributeReadMode.PROCESSM_JSON,
                 ),
             )
             val json = formatter.formatAsXesJson(

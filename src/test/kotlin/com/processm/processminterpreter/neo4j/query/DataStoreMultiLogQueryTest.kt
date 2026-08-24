@@ -101,6 +101,66 @@ class DataStoreMultiLogQueryTest : BaseInterpreterTest() {
     }
 
     @Test
+    fun `count-only activity variants execute from imported trace cache`() {
+        val result = executeDataStoreQuery(
+            "select count(t:name), count(^e:name) group by ^e:name " +
+                "order by count(t:name) desc limit l:1, t:3",
+            logId = ALPHA_LOG_ID,
+        )
+
+        assertTrue(result.success, "Query should succeed: ${result.error}")
+        assertEquals(1, result.logs.size)
+        val variants = result.first().traces
+        assertEquals(2, variants.size)
+        assertEquals(listOf(2, 1), variants.map { it.nullEventCount })
+        assertEquals(listOf(1L, 1L), variants.map { it.countAttribute("count(trace:concept:name)") })
+        assertEquals(listOf(2L, 1L), variants.map { it.countAttribute("count(^event:concept:name)") })
+        assertTrue(variants.all { it.events.isEmpty() })
+    }
+
+    @Test
+    fun `activity variants distinguish unnamed traces from total trace count`() {
+        clearDatabase()
+        writeAndAttach(
+            logId = UNNAMED_TRACE_LOG_ID,
+            log = XesLog(
+                conceptName = "Unnamed trace log",
+                traces = listOf(
+                    XesTrace(
+                        conceptName = null,
+                        events = listOf(XesEvent(conceptName = "A"), XesEvent(conceptName = "B")),
+                    ),
+                ),
+            ),
+        )
+
+        val result = executeDataStoreQuery(
+            "select count(t:name), count(^e:name) group by ^e:name " +
+                "order by count(t:name) desc limit l:1, t:3",
+            logId = UNNAMED_TRACE_LOG_ID,
+        )
+
+        assertTrue(result.success, "Query should succeed: ${result.error}")
+        val variant = result.first().traces.single()
+        assertEquals(0L, variant.countAttribute("count(trace:concept:name)"))
+        assertEquals(2L, variant.countAttribute("count(^event:concept:name)"))
+        assertEquals(2, variant.nullEventCount)
+        assertTrue(variant.events.isEmpty())
+
+        val expandedResult = executeDataStoreQuery(
+            "select count(t:name), count(^e:name), e:name group by ^e:name " +
+                "order by count(t:name) desc limit l:1, t:3",
+            logId = UNNAMED_TRACE_LOG_ID,
+        )
+
+        assertTrue(expandedResult.success, "Expanded query should succeed: ${expandedResult.error}")
+        val expandedVariant = expandedResult.first().traces.single()
+        assertEquals(0L, expandedVariant.countAttribute("count(trace:concept:name)"))
+        assertEquals(2L, expandedVariant.countAttribute("count(^event:concept:name)"))
+        assertEquals(listOf("A", "B"), expandedVariant.events.map { it.conceptName })
+    }
+
+    @Test
     fun `event order decides log window before technical log id`() {
         val result = executeDataStoreQuery("order by e:timestamp, e:name limit l:1, t:5, e:10")
 
@@ -110,6 +170,19 @@ class DataStoreMultiLogQueryTest : BaseInterpreterTest() {
         val log = result.first()
         assertEquals(BETA_LOG_NAME, log.conceptName)
         assertLogShape(log, mapOf("Beta-1" to listOf("Shared intake", "Beta rejection")))
+    }
+
+    @Test
+    fun `indexed event contains selects the matching datastore log`() {
+        val result = executeDataStoreQuery(
+            "where e:name like '%rejection%' order by e:name, e:timestamp limit l:1, t:5, e:10",
+        )
+
+        assertTrue(result.success, "Query should succeed: ${result.error}")
+        assertEquals(1, result.count())
+        val log = result.first()
+        assertEquals(BETA_LOG_NAME, log.conceptName)
+        assertLogShape(log, mapOf("Beta-1" to listOf("Beta rejection")))
     }
 
     @Test
@@ -130,6 +203,27 @@ class DataStoreMultiLogQueryTest : BaseInterpreterTest() {
                 "Alpha-2" to listOf(null),
             ),
         )
+    }
+
+    @Test
+    fun `aggregate placeholder trace window preserves full counts for every log`() {
+        val result = executeDataStoreQuery(
+            "select count(l:name), count(^t:name), count(^^e:name)" +
+                " limit l:10, t:1 offset t:1",
+            defaultTraceLimit = -1,
+        )
+
+        assertTrue(result.success, "Query should succeed: ${result.error}")
+        assertEquals(2, result.logs.size)
+
+        // l:name is aggregated rather than projected, so identify the otherwise
+        // anonymous logs by their full event counts.
+        val alpha = result.logs.single { it.aggregateCount("count(^^event:concept:name)") == 3L }
+        val beta = result.logs.single { it.aggregateCount("count(^^event:concept:name)") == 2L }
+        assertEquals(1, alpha.traces.size, "Alpha should retain its second placeholder trace")
+        assertEquals(0, beta.traces.size, "Beta has no second trace after applying the offset")
+        assertAggregateCounts(alpha, traces = 2L, events = 3L)
+        assertAggregateCounts(beta, traces = 1L, events = 2L)
     }
 
     private fun writeAndAttach(
@@ -173,6 +267,18 @@ class DataStoreMultiLogQueryTest : BaseInterpreterTest() {
             .flatMap { trace -> trace.events }
             .mapTo(mutableSetOf<String>()) { event -> assertNotNull(event.conceptName) }
 
+    private fun assertAggregateCounts(log: XesLog, traces: Long, events: Long) {
+        assertEquals(1L, log.aggregateCount("count(log:concept:name)"))
+        assertEquals(traces, log.aggregateCount("count(^trace:concept:name)"))
+        assertEquals(events, log.aggregateCount("count(^^event:concept:name)"))
+    }
+
+    private fun XesLog.aggregateCount(name: String): Long =
+        (customAttributes[name] as Number).toLong()
+
+    private fun XesTrace.countAttribute(name: String): Long =
+        (customAttributes[name] as Number).toLong()
+
     private fun logNames(logs: List<XesLog>): Set<String> =
         logs.mapTo(mutableSetOf<String>()) { log -> assertNotNull(log.conceptName) }
 
@@ -183,6 +289,7 @@ class DataStoreMultiLogQueryTest : BaseInterpreterTest() {
         const val BETA_LOG_NAME = "Beta Log"
         const val ORPHAN_LOG_ID = "multi-log-orphan"
         const val ORPHAN_LOG_NAME = "Orphan Log"
+        const val UNNAMED_TRACE_LOG_ID = "unnamed-trace-log"
 
         val BASE_TIME: Instant = Instant.parse("2026-01-01T00:00:00Z")
     }

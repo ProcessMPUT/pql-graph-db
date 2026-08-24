@@ -104,6 +104,18 @@ class Neo4jXesSchemaInitializerTest {
             assertEquals("RANGE", eventWindowIndex["type"].asString())
             assertEquals(listOf("Event"), eventWindowIndex["labelsOrTypes"].asList { it.asString() })
             assertEquals(listOf("parentTraceId", "importOrder"), eventWindowIndex["properties"].asList { it.asString() })
+
+            val eventActivityTextIndex = session.run(
+                """
+                SHOW INDEXES
+                YIELD name, type, labelsOrTypes, properties
+                WHERE name = 'event_activity_text'
+                RETURN type, labelsOrTypes, properties
+                """.trimIndent(),
+            ).single()
+            assertEquals("TEXT", eventActivityTextIndex["type"].asString())
+            assertEquals(listOf("Event"), eventActivityTextIndex["labelsOrTypes"].asList { it.asString() })
+            assertEquals(listOf("activity"), eventActivityTextIndex["properties"].asList { it.asString() })
         }
     }
 

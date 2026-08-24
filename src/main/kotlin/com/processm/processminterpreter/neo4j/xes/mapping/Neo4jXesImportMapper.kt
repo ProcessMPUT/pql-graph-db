@@ -31,8 +31,18 @@ class Neo4jXesImportMapper(
         importedAt: LocalDateTime,
     ): Neo4jXesImportBatch {
         val logId = logId(requestedLogId)
+        val activityVariantIds = linkedMapOf<String, Long>()
         val indexedTraces = log.traces.asSequence().mapIndexed { index, trace ->
-            IndexedTrace(trace, index, traceId(logId, trace, index))
+            val activityVariant = activityVariant(trace)
+            IndexedTrace(
+                trace = trace,
+                index = index,
+                traceId = traceId(logId, trace, index),
+                activityVariantId = activityVariantIds.getOrPut(activityVariant.key) {
+                    activityVariantIds.size.toLong()
+                },
+                activityNonNullCount = activityVariant.nonNullCount,
+            )
         }
 
         return Neo4jXesImportBatch(
@@ -64,11 +74,32 @@ class Neo4jXesImportMapper(
             mapOf(
                 TRACE_ID_PROPERTY to indexed.traceId,
                 TRACE_NAME_PROPERTY to indexed.trace.conceptName,
+                TRACE_ACTIVITY_VARIANT_ID_PROPERTY to indexed.activityVariantId,
+                TRACE_ACTIVITY_NON_NULL_COUNT_PROPERTY to indexed.activityNonNullCount,
                 "createdAt" to importedAt,
                 "importOrder" to indexed.index,
                 "attributes" to attributePayload(Scope.TRACE, attributes.traceAttributes(indexed.trace)),
             )
         }
+
+    /**
+     * Encodes the ordered, non-null activity sequence without delimiters that
+     * could collide with source values. Cypher's `collect(event.activity)` drops
+     * nulls, so omitting them here preserves the existing ProcessM-compatible
+     * variant grouping semantics exactly.
+     */
+    private fun activityVariant(trace: XesTrace): ActivityVariant {
+        var nonNullCount = 0
+        val key = buildString {
+            trace.events.forEach { event ->
+                event.conceptName?.let { activity ->
+                    append(activity.length).append(':').append(activity)
+                    nonNullCount++
+                }
+            }
+        }
+        return ActivityVariant(key, nonNullCount)
+    }
 
     private fun eventRows(
         traceBatch: List<IndexedTrace>,
@@ -99,7 +130,7 @@ class Neo4jXesImportMapper(
      * custom key into a reserved name.
      */
     private fun attributePayload(scope: Scope, raw: Map<String, Any?>): Map<String, Any> {
-        val sanitized = Neo4jPropertySanitizer.sanitizeAttributes(raw)
+        val sanitized = Neo4jPropertySanitizer.sanitizeAttributesWithNestedPayload(raw)
         val reserved = Neo4jXesSchema.writerManagedProperties(scope)
         return if (sanitized.keys.none { it in reserved }) {
             sanitized
@@ -128,6 +159,13 @@ class Neo4jXesImportMapper(
         val trace: XesTrace,
         val index: Int,
         val traceId: String,
+        val activityVariantId: Long,
+        val activityNonNullCount: Int,
+    )
+
+    private data class ActivityVariant(
+        val key: String,
+        val nonNullCount: Int,
     )
 
     private fun IndexedTrace.indexedEvents(): List<IndexedEvent> =
@@ -189,6 +227,10 @@ class Neo4jXesImportMapper(
 
         /* Generated storage keys, not the XES `identity:id` of the trace/event. */
         const val TRACE_ID_PROPERTY: String = Neo4jXesSchema.TRACE_ID_PROPERTY
+        const val TRACE_ACTIVITY_VARIANT_ID_PROPERTY: String =
+            Neo4jXesSchema.TRACE_ACTIVITY_VARIANT_ID_PROPERTY
+        const val TRACE_ACTIVITY_NON_NULL_COUNT_PROPERTY: String =
+            Neo4jXesSchema.TRACE_ACTIVITY_NON_NULL_COUNT_PROPERTY
         const val EVENT_ID_PROPERTY: String = Neo4jXesSchema.EVENT_ID_PROPERTY
 
         val TRACE_NAME_PROPERTY: String = Neo4jXesSchema.physicalName(Scope.TRACE, StandardAttributeCatalog.CONCEPT_NAME)

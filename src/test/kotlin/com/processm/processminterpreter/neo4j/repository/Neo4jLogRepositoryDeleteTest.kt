@@ -29,7 +29,7 @@ class Neo4jLogRepositoryDeleteTest {
             Neo4jContainer("neo4j:2026.07.1-community-ubi10")
                 .withAdminPassword("password")
 
-        /** More events than one 20k deletion batch, so the test exercises batching. */
+        /** More events than one 5k deletion batch, so the test exercises batching. */
         private const val TRACES = 30
         private const val EVENTS_PER_TRACE = 1000
     }

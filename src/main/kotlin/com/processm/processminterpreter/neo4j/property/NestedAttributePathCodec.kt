@@ -44,6 +44,6 @@ object NestedAttributePathCodec {
         if (childSeparator < 0) return null
         val parent = rawKey.substring(2, childSeparator)
         val child = rawKey.substring(childSeparator + 1)
-        return (parent to child).takeIf { parent.isNotEmpty() && child.isNotEmpty() }
+        return (parent to child).takeIf { parent.isNotEmpty() }
     }
 }

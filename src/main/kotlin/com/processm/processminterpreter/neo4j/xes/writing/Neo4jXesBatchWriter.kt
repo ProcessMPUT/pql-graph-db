@@ -4,6 +4,7 @@ import com.processm.processminterpreter.neo4j.repository.Neo4jLogNodeWrite
 import com.processm.processminterpreter.neo4j.repository.deleteLogSubtreesBatched
 import com.processm.processminterpreter.neo4j.xes.mapping.Neo4jXesImportBatch
 import com.processm.processminterpreter.neo4j.xes.mapping.Neo4jXesTraceBatch
+import com.processm.processminterpreter.neo4j.xes.schema.Neo4jXesSchema
 import org.neo4j.driver.Driver
 import org.neo4j.driver.TransactionContext
 import org.slf4j.LoggerFactory
@@ -157,6 +158,10 @@ class Neo4jXesBatchWriter(
                     traceId: traceProps.traceId,
                     parentLogId: ${'$'}logId,
                     caseId: traceProps.caseId,
+                    ${Neo4jXesSchema.TRACE_ACTIVITY_VARIANT_ID_PROPERTY}:
+                        traceProps.${Neo4jXesSchema.TRACE_ACTIVITY_VARIANT_ID_PROPERTY},
+                    ${Neo4jXesSchema.TRACE_ACTIVITY_NON_NULL_COUNT_PROPERTY}:
+                        traceProps.${Neo4jXesSchema.TRACE_ACTIVITY_NON_NULL_COUNT_PROPERTY},
                     createdAt: traceProps.createdAt,
                     importOrder: traceProps.importOrder
                 })

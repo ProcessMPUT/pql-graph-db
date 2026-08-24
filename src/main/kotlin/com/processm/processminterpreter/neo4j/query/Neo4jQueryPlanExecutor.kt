@@ -19,6 +19,7 @@ import com.processm.processminterpreter.neo4j.query.result.nodeProperties
 import com.processm.processminterpreter.neo4j.repository.deleteEventsBatched
 import com.processm.processminterpreter.neo4j.repository.deleteLogSubtreesBatched
 import com.processm.processminterpreter.neo4j.repository.deleteTraceSubtreesBatched
+import com.processm.processminterpreter.pql.XesAttributeReadMode
 import com.processm.processminterpreter.pql.catalog.Scope
 import org.neo4j.driver.Driver
 import org.neo4j.driver.Record
@@ -60,7 +61,7 @@ class Neo4jQueryPlanExecutor(
 
     fun execute(plan: LogicalPlan.Select, options: ExecutionOptions = ExecutionOptions()): QueryExecutionResult {
         val effectivePlan = plan.copy(materializedScopes = options.materializedScopes)
-        val cypher = codegen.generate(effectivePlan)
+        val cypher = codegen.generate(effectivePlan, options.attributeReadMode)
         logger.trace("Generated SELECT Cypher:\n{}\nparams={}", cypher.cypher, cypher.parameters)
         if (cypher.columnAliases.isEmpty()) {
             return executeNodeShaped(effectivePlan, cypher)
@@ -112,7 +113,7 @@ class Neo4jQueryPlanExecutor(
                     rowCount++
                 }
                 if (seenLogKeys.isNotEmpty()) {
-                    val hydration = logPropertiesQuery(seenLogKeys)
+                    val hydration = logPropertiesQuery(seenLogKeys, cypher.attributeReadMode)
                     val hydrationResult = tx.run(hydration.cypher, hydration.parameters)
                     while (hydrationResult.hasNext()) {
                         val hydrationRow = hydrationResult.next().toNodeRow()
@@ -192,11 +193,21 @@ class Neo4jQueryPlanExecutor(
      * row is the dominant cost of ordered/grouped reads on logs with large XES
      * metadata (Hospital_log: ~3.4k log attributes, ~8 MB per node copy).
      */
-    private fun logPropertiesQuery(logIds: Collection<String>): CypherQuery = CypherQuery(
+    private fun logPropertiesQuery(
+        logIds: Collection<String>,
+        attributeReadMode: XesAttributeReadMode,
+    ): CypherQuery = CypherQuery(
         cypher = "MATCH (log:Log) WHERE log.logId IN \$logIds" +
-            " RETURN log.logId AS $SYNTHETIC_LOG_KEY_ALIAS, properties(log) AS log",
+            " RETURN log.logId AS $SYNTHETIC_LOG_KEY_ALIAS, " +
+            if (attributeReadMode == XesAttributeReadMode.PROCESSM_JSON) {
+                "[key IN keys(log) WHERE NOT key STARTS WITH '\u001f' " +
+                    "AND NOT key STARTS WITH 'processm' | {key: key, value: log[key]}] AS log"
+            } else {
+                "properties(log) AS log"
+            },
         parameters = mapOf("logIds" to logIds.toList()),
         columnAliases = emptyMap(),
+        attributeReadMode = attributeReadMode,
     )
 
     /**
@@ -223,7 +234,7 @@ class Neo4jQueryPlanExecutor(
                     rowCount++
                 }
                 if (seenLogKeys.isNotEmpty()) {
-                    val hydration = logPropertiesQuery(seenLogKeys)
+                    val hydration = logPropertiesQuery(seenLogKeys, cypher.attributeReadMode)
                     val hydrationResult = tx.run(hydration.cypher, hydration.parameters)
                     while (hydrationResult.hasNext()) {
                         absorb(hydrationResult.next().toNodeRow())

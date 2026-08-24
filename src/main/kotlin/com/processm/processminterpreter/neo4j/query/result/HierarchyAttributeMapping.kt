@@ -5,6 +5,7 @@ import com.processm.processminterpreter.pql.catalog.Scope
 import com.processm.processminterpreter.pql.cypher.ColumnAlias
 import com.processm.processminterpreter.neo4j.xes.schema.Neo4jXesCustomAttributeCodec
 import com.processm.processminterpreter.neo4j.xes.schema.Neo4jXesSchema
+import com.processm.processminterpreter.neo4j.xes.metadata.XesLogMetadataCodec
 
 internal data class ProjectedAttributeValue(
     val xesName: String?,
@@ -64,13 +65,24 @@ internal fun Map<String, Any?>.nodeAttributes(
     }
 
 internal fun Map<String, Any?>.nodeProperties(column: String): Map<String, Any?> =
-    (this[column] as? Map<*, *>)?.stringKeyMap() ?: emptyMap()
+    when (val value = this[column]) {
+        is Map<*, *> -> value.stringKeyMap()
+        is List<*> -> value.attributePairsMap()
+        else -> emptyMap()
+    }.withNestedPayload()
 
 internal fun Map<String, Any?>.nodePropertyList(column: String): List<Map<String, Any?>>? =
-    (this[column] as? List<*>)?.mapNotNull { (it as? Map<*, *>)?.stringKeyMap() }
+    (this[column] as? List<*>)?.mapNotNull { value ->
+        val properties = when (value) {
+            is Map<*, *> -> value.stringKeyMap()
+            is List<*> -> value.attributePairsMap()
+            else -> null
+        } ?: return@mapNotNull null
+        properties.withNestedPayload()
+    }
 
 internal fun Map<String, Any?>.hasNodeColumn(column: String): Boolean =
-    this[column] is Map<*, *>
+    this[column] is Map<*, *> || this[column] is List<*>
 
 private fun xesNameOf(pqlExpression: String): String? {
     val stripped = stripScopePrefix(pqlExpression) ?: return null
@@ -90,6 +102,22 @@ private fun Map<*, *>.stringKeyMap(): Map<String, Any?> =
     entries.mapNotNull { (key, value) ->
         (key as? String)?.let { it to value }
     }.toMap()
+
+private fun List<*>.attributePairsMap(): Map<String, Any?> =
+    mapNotNull { pair ->
+        val pairMap = (pair as? Map<*, *>)?.stringKeyMap() ?: return@mapNotNull null
+        val key = pairMap["key"] as? String ?: return@mapNotNull null
+        key to pairMap["value"]
+    }.toMap()
+
+private fun Map<String, Any?>.withNestedPayload(): Map<String, Any?> {
+    val payload = this[Neo4jXesSchema.NESTED_ATTRIBUTE_PAYLOAD_PROPERTY] as? String ?: return this
+    val decoded = runCatching { XesLogMetadataCodec.deserializeArbitrary(payload) as? Map<*, *> }
+        .getOrNull()
+        ?.stringKeyMap()
+        ?: return this
+    return this + decoded
+}
 
 private fun stripScopePrefix(pql: String): String? {
     val idx = pql.indexOf(':')

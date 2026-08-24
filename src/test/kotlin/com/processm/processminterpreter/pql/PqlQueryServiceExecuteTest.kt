@@ -98,6 +98,7 @@ class PqlQueryServiceExecuteTest {
                 query = "select e:name",
                 logId = null,
                 defaultLimits = HierarchicalLimits(trace = 30),
+                attributeReadMode = XesAttributeReadMode.PROCESSM_JSON,
             ),
         )
 
@@ -112,6 +113,7 @@ class PqlQueryServiceExecuteTest {
         val (plan, options) = executor.selectCalls.single()
         assertEquals(Scope.EVENT, plan.source.fromScope)
         assertEquals(HierarchicalLimits(trace = 30), options.defaultLimits)
+        assertEquals(XesAttributeReadMode.PROCESSM_JSON, options.attributeReadMode)
         assertTrue(executor.deleteCalls.isEmpty(), "executeDelete should not be called for SELECT")
     }
 

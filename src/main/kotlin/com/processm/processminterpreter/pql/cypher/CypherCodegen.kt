@@ -6,6 +6,7 @@ import com.processm.processminterpreter.pql.common.HierarchicalOffsets
 import com.processm.processminterpreter.pql.plan.CandidateLogPlan
 import com.processm.processminterpreter.pql.plan.LogicalPlan
 import com.processm.processminterpreter.pql.plan.Projection
+import com.processm.processminterpreter.pql.XesAttributeReadMode
 import org.springframework.stereotype.Component
 
 /**
@@ -21,8 +22,11 @@ class CypherCodegen(propertyMapper: PhysicalAttributeMapper) {
     private val projectionRenderer = CypherProjectionRenderer(expressions)
     private val groupByRenderer = CypherGroupByRenderer(expressions)
 
-    fun generate(plan: LogicalPlan): CypherQuery = when (plan) {
-        is LogicalPlan.Select -> renderSelect(plan)
+    fun generate(
+        plan: LogicalPlan,
+        attributeReadMode: XesAttributeReadMode = XesAttributeReadMode.FULL_XES,
+    ): CypherQuery = when (plan) {
+        is LogicalPlan.Select -> renderSelect(plan, attributeReadMode)
         is LogicalPlan.Delete -> deleteRenderer.render(plan)
     }
 
@@ -73,7 +77,9 @@ class CypherCodegen(propertyMapper: PhysicalAttributeMapper) {
      * match/aggregate/project pipeline is used.
      */
     private fun emitPreMatchShapeIfNeeded(s: CypherBuildState): Boolean =
-        aggregationRenderer.emitPreMatchIfNeeded(s) ||
+        groupByRenderer.emitCachedActivityVariantCountIfNeeded(s) ||
+            aggregationRenderer.emitHierarchyCardinalityIfNeeded(s) ||
+            aggregationRenderer.emitPreMatchIfNeeded(s) ||
             groupByRenderer.emitLimitedBeforeMatchIfNeeded(s)
 
     private fun emitPostMatchShapeIfNeeded(s: CypherBuildState): Boolean =
@@ -86,8 +92,8 @@ class CypherCodegen(propertyMapper: PhysicalAttributeMapper) {
     /**
      * Renders SELECT plans into parameterized Cypher.
      */
-    private fun renderSelect(plan: LogicalPlan.Select): CypherQuery {
-        val s = CypherBuildState(plan)
+    private fun renderSelect(plan: LogicalPlan.Select, attributeReadMode: XesAttributeReadMode): CypherQuery {
+        val s = CypherBuildState(plan, attributeReadMode)
         if (hierarchyRenderer.emitNodeHierarchyIfNeeded(s)) return s.finish()
         if (plan.projection.columns.isNotEmpty() && hierarchyRenderer.emitLimitedHierarchyIfNeeded(s)) {
             projectionRenderer.emitReturnAndOrder(s)

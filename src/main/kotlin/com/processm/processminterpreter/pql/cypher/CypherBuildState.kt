@@ -2,6 +2,7 @@ package com.processm.processminterpreter.pql.cypher
 
 import com.processm.processminterpreter.pql.catalog.Scope
 import com.processm.processminterpreter.pql.plan.LogicalPlan
+import com.processm.processminterpreter.pql.XesAttributeReadMode
 import java.time.ZoneOffset
 import java.time.ZonedDateTime
 
@@ -10,7 +11,10 @@ import java.time.ZonedDateTime
  * external (rather than in the codegen itself) makes each emit step a pure function
  * of (plan, state) and keeps the codegen thread-safe per-invocation.
  */
-internal class CypherBuildState(val plan: LogicalPlan.Select) {
+internal class CypherBuildState(
+    val plan: LogicalPlan.Select,
+    val attributeReadMode: XesAttributeReadMode = XesAttributeReadMode.FULL_XES,
+) {
     val facts: SelectPlanFacts = SelectPlanFacts(plan)
 
     val cypher: StringBuilder = StringBuilder()
@@ -130,6 +134,22 @@ internal class CypherBuildState(val plan: LogicalPlan.Select) {
         hydrateLogProperties = true
     }
 
+    /**
+     * ProcessM JSON reads only top-level values. Returning key/value pairs lets
+     * Neo4j omit nested helper and cold-payload properties before Bolt transfer;
+     * full XES keeps the normal node-properties map.
+     */
+    fun xesProperties(nodeVar: String): String =
+        if (attributeReadMode == XesAttributeReadMode.PROCESSM_JSON) {
+            "[key IN keys($nodeVar) " +
+                "WHERE NOT key STARTS WITH '\u001f' AND NOT key STARTS WITH 'processm' " +
+                "| {key: key, value: $nodeVar[key]}]"
+        } else {
+            "properties($nodeVar)"
+        }
+
+    fun logProperties(nodeVar: String = "log"): String = xesProperties(nodeVar)
+
     /** See [CypherMatchEmitter.emit] — the event expansion must wait for the WHERE clause. */
     fun markPendingOptionalEventMatch() {
         pendingOptionalEventMatch = true
@@ -180,5 +200,6 @@ internal class CypherBuildState(val plan: LogicalPlan.Select) {
         parameters = parameters.toMap(),
         columnAliases = columnAliases.toMap(),
         hydrateLogProperties = hydrateLogProperties,
+        attributeReadMode = attributeReadMode,
     )
 }

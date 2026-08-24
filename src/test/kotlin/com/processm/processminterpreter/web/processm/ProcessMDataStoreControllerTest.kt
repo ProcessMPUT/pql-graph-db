@@ -7,6 +7,7 @@ import com.processm.processminterpreter.xes.ImportXesLogRequest
 import com.processm.processminterpreter.xes.LogService
 import com.processm.processminterpreter.pql.ExecutePqlQueryRequest
 import com.processm.processminterpreter.pql.PqlQueryService
+import com.processm.processminterpreter.pql.XesAttributeReadMode
 import com.processm.processminterpreter.pql.QueryResult
 import com.processm.processminterpreter.xes.datastore.DataStore
 import com.processm.processminterpreter.xes.LogImportResult
@@ -143,6 +144,7 @@ class ProcessMDataStoreControllerTest {
                     query = "select e:name",
                     dataStoreId = "ds-1",
                     defaultLimits = HierarchicalLimits(),
+                    attributeReadMode = XesAttributeReadMode.PROCESSM_JSON,
                 ),
             ),
         ).thenReturn(execution)
@@ -166,6 +168,7 @@ class ProcessMDataStoreControllerTest {
                 query = "select e:name",
                 dataStoreId = "ds-1",
                 defaultLimits = HierarchicalLimits(),
+                attributeReadMode = XesAttributeReadMode.PROCESSM_JSON,
             ),
         )
     }

@@ -71,7 +71,7 @@ internal object Neo4jLogNodeWrite {
      */
     private fun writableAttributes(attributes: Map<String, Any?>): Map<String, Any?> {
         val reserved = Neo4jXesSchema.writerManagedProperties(Scope.LOG)
-        return Neo4jPropertySanitizer.sanitizeCustomAttributes(attributes)
+        return Neo4jPropertySanitizer.sanitizeCustomAttributesWithNestedPayload(attributes)
             .filterKeys { it !in reserved }
     }
 
