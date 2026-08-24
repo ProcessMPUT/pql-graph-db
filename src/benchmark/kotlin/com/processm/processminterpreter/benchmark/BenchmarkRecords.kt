@@ -13,6 +13,23 @@ data class PreparedDataset(
     val totalAttributes: Int,
     val xesBytes: Long,
     val xesGzBytes: Long,
+    /** Exact mean plus robust/order statistics describing the trace-length distribution. */
+    val meanEventsPerTrace: Double = eventsPerTrace.toDouble(),
+    val medianEventsPerTrace: Double = eventsPerTrace.toDouble(),
+    val p95EventsPerTrace: Int = eventsPerTrace,
+    val maxEventsPerTrace: Int = eventsPerTrace,
+    /** Distinct event concept:name values and concept:name trace sequences. */
+    val activityCount: Int = 0,
+    val variantCount: Int = 0,
+    val sourceDoi: String? = null,
+    /** SHA-256 of the exact compressed or plain file submitted to both systems. */
+    val fileSha256: String = "",
+    /** Mean count of all direct and nested XES attributes belonging to an event. */
+    val meanEventAttributes: Double = attributesPerEvent.toDouble(),
+    /** Named published family, e.g. `bpi-challenge`; independent from the experimental series. */
+    val collection: String? = null,
+    /** Stable display order inside [collection]. */
+    val collectionOrder: Int? = null,
 )
 
 data class ImportBenchmarkResult(
@@ -88,6 +105,25 @@ data class StorageBenchmarkResult(
     val isAttributable: Boolean get() = status == STORAGE_STATUS_OK && (deltaBytes ?: 0L) > 0L
 }
 
+/** One row from the thesis-grade storage probe: a fresh Compose stack per dataset. */
+data class IsolatedStorageScalingResult(
+    val datasetName: String,
+    val system: String,
+    val measurementMode: String,
+    val stackPreparationId: String,
+    val gitCommit: String,
+    val localAppImageId: String,
+    val localDbImageId: String,
+    val referenceImageId: String,
+    val beforeBytes: Long,
+    val afterBytes: Long,
+    val deltaBytes: Long,
+    val xesBytes: Long,
+    val xesGzBytes: Long,
+    val deltaToXesRatio: Double,
+    val deltaToGzipRatio: Double,
+)
+
 data class RoundtripBenchmarkResult(
     val datasetName: String,
     val status: String,
@@ -136,6 +172,10 @@ data class MemorySample(
     /** Measured component, e.g. `processm-server`, `processm-neo4j`, `processm-interpreter`. */
     val component: String,
     val bytes: Long,
+    /** Empty only for historical artifacts which predate contextual resource samples. */
+    val datasetName: String = "",
+    /** Query label or another measured operation inside [datasetName]. */
+    val operationLabel: String = "",
 )
 
 data class MemorySummary(
@@ -143,4 +183,61 @@ data class MemorySummary(
     val phase: String,
     val medianBytes: Long,
     val peakBytes: Long,
+    val datasetName: String = "",
+    val operationLabel: String = "",
+)
+
+/**
+ * Counter deltas observed outside the timed interval for one import or one whole
+ * query-repetition block. Null operation counts mean that the host did not expose
+ * cgroup v2 `io.stat`; byte counters still remain usable in that case.
+ */
+data class ContainerIoBenchmarkResult(
+    val system: String,
+    val phase: String,
+    val datasetName: String,
+    val operationLabel: String,
+    val run: Int,
+    val component: String,
+    val blockReadBytes: Long?,
+    val blockWriteBytes: Long?,
+    val blockReadOperations: Long?,
+    val blockWriteOperations: Long?,
+    val networkReceiveBytes: Long?,
+    val networkTransmitBytes: Long?,
+    val status: String,
+    val details: String = "",
+)
+
+data class BenchmarkComparisonResult(
+    val metric: String,
+    val datasetName: String,
+    val series: String,
+    val operationLabel: String,
+    val displayName: String,
+    val role: String,
+    val pairs: Int,
+    val localMedianSeconds: Double?,
+    val referenceMedianSeconds: Double?,
+    /** Effect definition used by the current paired methodology: REFERENCE / LOCAL. */
+    val ratioReferenceToLocal: Double?,
+    val confidenceLow: Double?,
+    val confidenceHigh: Double?,
+    val rawPValue: Double?,
+    val holmPValue: Double?,
+    val verdict: String,
+    val status: String,
+    /** Size of each separated first/last window used by the temporal-stability gate. */
+    val stabilityWindowSamples: Int? = null,
+    val localEarlyMedianSeconds: Double? = null,
+    val localLateMedianSeconds: Double? = null,
+    val localEarlyLateRatio: Double? = null,
+    val referenceEarlyMedianSeconds: Double? = null,
+    val referenceLateMedianSeconds: Double? = null,
+    val referenceEarlyLateRatio: Double? = null,
+    /** REFERENCE/LOCAL ratios of medians in the separated paired chronological windows. */
+    val pairedEarlyMedianRatio: Double? = null,
+    val pairedLateMedianRatio: Double? = null,
+    val pairedEarlyLateRatio: Double? = null,
+    val details: String = "",
 )

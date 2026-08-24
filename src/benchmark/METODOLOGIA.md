@@ -1,663 +1,430 @@
-# Metodologia testów wydajnościowych
+# Metodologia porównania interpreterów PQL
 
-Dokument opisuje założenia, zakres i protokół pomiarowy porównania wydajności
-dwóch interpreterów PQL dla hierarchicznych logów zdarzeń XES:
+## 1. Cel badania
 
-- **LOCAL** — niniejsza implementacja (Kotlin/Spring Boot + **Neo4j**, model grafowy),
-- **REFERENCE** — oryginalny ProcessM (JVM + **PostgreSQL**, model relacyjny),
-  uruchamiany z oficjalnego obrazu `processm/processm-server-full`.
+Eksperyment porównuje dwa kompletne systemy dostępne przez HTTP:
 
-Wyniki generowane według tej metodologii trafiają bezpośrednio do pracy
-magisterskiej (artefakt `thesis-report.md` + tabele `thesis-tables.tex`).
+- **LOCAL** — interpreter PQL zbudowany w ramach projektu, wykorzystujący Neo4j;
+- **REFERENCE** — oryginalny ProcessM wykorzystujący PostgreSQL.
 
-## 1. Pytania badawcze
+Badanie nie porównuje Neo4j i PostgreSQL w izolacji. Obejmuje całą drogę żądania:
+przyjęcie PQL przez API, analizę i kompilację zapytania, wykonanie w bazie,
+rekonstrukcję hierarchii XES oraz serializację odpowiedzi. Wnioski dotyczą tych
+dwóch aplikacji, wersji i konfiguracji zapisanych w artefaktach przebiegu.
 
-1. **Q1 (import):** Jak skaluje się czas importu logu XES względem liczby
-   trace'ów, zdarzeń i atrybutów?
-2. **Q2 (zapytania):** Jak różnią się opóźnienia zapytań PQL w podziale na
-   klasy operacji (okno hierarchii, filtrowanie, sortowanie, grupowanie,
-   agregacje, hoisting, atrybuty niestandardowe)?
-3. **Q3 (zasobożerność):** Jaki przyrost trwałego miejsca na dysku oraz jaką
-   metrykę użycia pamięci kontenerów raportowaną przez `docker stats` obserwuje
-   się dla każdego systemu przy tych samych danych, obciążeniu i równym stałym
-   budżecie całej aplikacji? Na Linuksie wartość CLI odejmuje nieaktywny cache
-   plikowy od użycia cgroup, dlatego nie jest procesowym RSS. Opisuje stan tej
-   konfiguracji, nie minimalną pamięć potrzebną do uruchomienia systemu.
-4. **Q4 (poprawność):** Czy mierzone odpowiedzi obu systemów są semantycznie
-   równoważne? Pomiar szybkości błędnych odpowiedzi jest bezwartościowy.
+Główna hipoteza brzmi:
 
-## 2. Zasady uczciwości porównania (fair play)
+> W badanej konfiguracji LOCAL osiąga niższe czasy odpowiedzi dla zapytań,
+> które wymagają przechodzenia między poziomami hierarchii log–ślad–zdarzenie,
+> niż relacyjna implementacja REFERENCE.
 
-Te założenia są nadrzędne wobec wygody pomiaru; naruszenie któregokolwiek
-dyskwalifikuje przebieg:
+## 2. Pytania eksperymentalne
 
-1. **Zero modyfikacji systemów pod benchmark.** Testowany jest dokładnie ten
-   kod, który stanowi produkcyjną wersję każdego z systemów. W szczególności:
-   *usunięto* wcześniejszy cache metadanych datastore po stronie LOCAL
-   (`Neo4jDataStoreReadCache`), który — przy repetycjach zapytań strzelanych w
-   odstępach milisekund — omijał rundy do bazy nieobecne po stronie REFERENCE i
-   zawyżał wyniki LOCAL o oszacowane 10–30% na zapytaniach rzędu milisekund.
-2. **Czarna skrzynka przez HTTP.** Oba systemy odpytywane są wyłącznie przez
-   swoje publiczne API REST, tym samym klientem HTTP, z identycznymi
-   parametrami — żaden opcjonalny parametr (`includeTraces`, `includeEvents`)
-   nie jest wysyłany, więc oba systemy odpowiadają swoimi domyślnymi, pełnymi
-   hierarchiami. Mierzony jest pełny czas end-to-end (kompilacja zapytania +
-   wykonanie + serializacja odpowiedzi).
-3. **Identyczna polityka rozgrzewki.** Każde zapytanie poprzedzone jest tą samą
-   liczbą nierejestrowanych wykonań w obu systemach; wewnętrzne cache silników
-   baz (page cache PostgreSQL/Neo4j) traktujemy jako integralną część systemu.
-4. **Parytet środowiska.** Oba systemy działają na tej samej maszynie i **oba
-   w kontenerach**, więc droga żądania jest po obu stronach identyczna: klient
-   (host) → aplikacja (kontener, jedno przekroczenie granicy Dockera) → baza
-   (wewnątrz sieci kontenerów, bez przekroczenia hosta). Przebiegi obu systemów
-   nie nakładają się w czasie (pomiar naprzemienny, sekcja 5). Konfiguracja
-   pamięci obu baz oraz sterty interpretera jest udokumentowana
-   w `environment.json` każdego przebiegu.
+1. **Poprawność.** Czy oba systemy zwracają semantycznie równoważne odpowiedzi
+   dla mierzonych zapytań i czy LOCAL zachowuje dane w cyklu import–eksport?
+2. **Główna hipoteza.** Czy czasy zapytań korzystających z hierarchii XES różnią
+   się między LOCAL i REFERENCE?
+3. **Rozmiar i struktura.** Jak zmieniają się czasy, gdy rośnie liczba zdarzeń
+   albo — przy stałym rozmiarze i kształcie hierarchii — liczba wariantów śladów?
+4. **Koszt operacyjny.** Jak różnią się czas importu, pamięć, trwałe miejsce na
+   dysku oraz obserwowane I/O kontenerów?
 
-   **Pamięć jest limitowana na poziomie całej aplikacji**, nie pojedynczego JVM:
-   `docker-compose.benchmark.yml` przydziela LOCAL łącznie 3328 MiB
-   (interpreter 1280 MiB + Neo4j 2048 MiB) oraz REFERENCE 3328 MiB w jego
-   pojedynczym kontenerze aplikacja+PostgreSQL. `memswap_limit` jest równy
-   `mem_limit`, więc swap nie rozszerza żadnego budżetu. Przy zarejestrowanym
-   budżecie VM 7936 MiB pozostaje 1280 MiB (16,1%) dla systemu VM i Dockera.
-   Jest to jawna decyzja eksperymentalna: LOCAL musi podzielić swój równy budżet
-   między dwie usługi, bo taki jest koszt jego architektury. Konfiguracja
-   `unlimited` nie jest tu neutralna: przy trzech JVM reklamujących łącznie ponad
-   14 GiB sterty w VM o 7,75 GiB pomiar trafia w przepełnienie pamięci maszyny
-   wirtualnej zamiast w koszt workloadu. Każdy przebieg zapisuje faktyczne limity, efektywne sterty,
-   `OOMKilled`, `RestartCount` i obecność procesów JVM; OOM, restart lub brak JVM
-   unieważnia blok.
-5. **Świeży stan dla pomiarów storage.** Finalne pomiary rozmiaru bazy
-   wykonywane są na stacku postawionym od zera (`docker compose down -v`),
-   żeby uniknąć fragmentacji i pozostałości po wcześniejszych eksperymentach.
-6. **Równoważność odpowiedzi.** Dla każdej pary (dataset, zapytanie) ostatnie
-   odpowiedzi warm obu systemów są porównywane dwustopniowo: najpierw liczności
-   logów/trace'ów/zdarzeń, następnie pełna struktura XES-JSON tym samym ścisłym
-   komparatorem co raport kompatybilności. Dowolny rozjazd unieważnia wszystkie
-   próbki czasowe tej pary (status `MISMATCH`). Raport kompatybilności pozostaje
-   niezależnym, szerszym warunkiem publikacji (wymóg: zero problemów ścisłych).
+Poprawność jest bramką dla wydajności. Szybszy wynik nie jest dowodem przewagi,
+jeżeli systemy wykonały różne obliczenia albo zwróciły różne dane.
 
-   **Obie bramki nie są jednak równie surowe i trzeba to podać przy cytowaniu.**
-   Benchmark traktuje rozjazd jako twardy `MISMATCH`. Raport kompatybilności
-   dopuszcza dodatkowo klasę `NONDETERMINISTIC_MATCH`: dla wąsko zdefiniowanych
-   zapytań grupujących po hoistowanym atrybucie zdarzenia LOCAL jest wykonywany
-   ponownie z rozszerzonymi limitami, po czym akceptowane jest **zawieranie** wyniku
-   REFERENCE w rozszerzonym wyniku LOCAL. Reguła ta jest z konstrukcji
-   **jednostronna** — może wybaczyć wyłącznie stronie LOCAL. W pracy należy więc
-   raportować nie samo „zero problemów ścisłych”, lecz rozbicie: liczbę `MATCH`
-   oraz liczbę dopasowań zaakceptowanych przez zawieranie, wraz z informacją
-   o jednostronności tej reguły.
+## 3. Zapytania
 
-## 3. Zbiory danych
+Eksperyment nie wykonuje każdej konstrukcji PQL na każdym zbiorze. Każde
+zapytanie ma z góry określoną rolę.
 
-| Seria | Datasety | Co bada |
+| Rola | Nazwa w raporcie | Etykieta | Co pokazuje |
+|---|---|---|---|
+| główne | Pobranie hierarchii log–ślad–zdarzenie | `hierarchyWindow` | odczyt ograniczonego wyniku obejmującego wszystkie trzy poziomy XES |
+| główne | Filtrowanie śladów na podstawie zdarzeń | `hoistedWhere` | warunek w zakresie śladu zależny od atrybutu zdarzenia |
+| główne | Grupowanie wariantów procesu | `variantGroupCount` | grupowanie śladów według sekwencji zdarzeń i obliczenie liczności |
+| główne | Zliczanie elementów hierarchii log–ślad–zdarzenie | `hierarchyCardinality` | pełne zliczenie logów, śladów i zdarzeń przy stałym rozmiarze odpowiedzi |
+| kontrolne | Sortowanie po atrybutach standardowych | `standardAttributesOrder` | operację, dla której reprezentacja grafowa nie gwarantuje przewagi |
+| kontrolne | Skan nazw zdarzeń operatorem LIKE | `likeScan` | pełne sprawdzenie wartości właściwości przy braku dopasowań |
+| baseline | Minimalne okno odpowiedzi | `minimalWindow` | opisowy koszt najlżejszej pełnej odpowiedzi; nie testuje hipotezy |
+
+Zapytania główne wynikają bezpośrednio z hipotezy. Kontrolne ograniczają jej
+interpretację: eksperyment ma pokazać, gdzie graf pomaga, a nie udowodnić, że
+LOCAL jest szybszy dla każdej operacji. Baseline nie jest odejmowany od innych
+czasów, ponieważ poszczególne zapytania mogą przechodzić innymi ścieżkami kodu.
+
+`hierarchyCardinality` jest wykonywane na osi rozmiaru i logach rzeczywistych.
+Nie należy do osi wariantów, ponieważ przy stałej liczbie logów, śladów i zdarzeń
+zmiana samych sekwencji aktywności nie zmienia zliczanych liczności.
+
+Dokładny tekst PQL, nazwa dla czytelnika, rola i uzasadnienie są wersjonowane w
+`src/benchmark/resources/benchmark-queries.json` i zapisywane w `queries.csv`.
+
+## 4. Dane
+
+### 4.1 Skalowanie rozmiaru
+
+Siedem deterministycznych logów syntetycznych ma po 10 zdarzeń na ślad, 10
+aktywności, jeden wariant i 5 atrybutów niestandardowych na zdarzenie. Zmieniana
+jest liczba śladów, a więc łączna liczba zdarzeń: 1 tys., 5 tys., 20 tys.,
+100 tys., 200 tys., 500 tys. i 1 mln.
+
+Każdy z pięciu kluczy niestandardowych ma jedną stałą wartość w całej serii.
+Jest to celowe: oś nie dokłada wraz z liczbą zdarzeń rosnącej kardynalności
+wartości, która byłaby drugą zmienną. Unikatowe pozostają nazwy śladów i kolejne
+timestampy. Pliki są pakowane gzip z poziomem 9; kompresja zmienia tylko bajty
+transportowe, a oba systemy otrzymują tę samą treść XES po dekompresji.
+
+Seria odpowiada na pytanie o wzrost kosztu wraz z rozmiarem danych. Nie jest
+interpretowana jako czysty efekt liczby śladów, ponieważ równocześnie rośnie
+liczba zdarzeń i rozmiar XES.
+
+### 4.2 Różnorodność wariantów przy stałym rozmiarze
+
+Trzy logi mają dokładnie po 100 tys. zdarzeń, 2000 śladów po 50 zdarzeń,
+48 aktywności i 5 atrybutów niestandardowych na zdarzenie. Zmieniana jest tylko
+liczba różnych sekwencji `concept:name`:
+
+- 1 wariant, powtórzony w 2000 śladach;
+- 100 wariantów, każdy powtórzony 20 razy;
+- 2000 wariantów, każdy występujący raz.
+
+Generator koduje numer wariantu deterministycznie w pierwszych dwóch nazwach
+aktywności, a w pozostałych 48 pozycjach umieszcza cały wspólny alfabet.
+Dzięki temu rozmiar, długość śladu, liczba aktywności i liczba atrybutów nie są
+konfundowane z liczbą wariantów. Seria nie jest modelem kompletnego „naturalnego
+logu”; izoluje jedną konkretną cechę struktury. Wykonuje się na niej baseline i
+trzy zapytania główne, bez dwóch zapytań kontrolnych niezwiązanych z tą osią.
+
+### 4.3 Walidacja na logach rzeczywistych
+
+Dwanaście opublikowanych logów sprawdza, czy wynik z kontrolowanych danych
+syntetycznych utrzymuje się dla nierównych długości śladów, wielu wariantów,
+różnych alfabetów aktywności, timestampów i atrybutów:
+
+| Log | DOI źródła | Powód włączenia |
 |---|---|---|
-| trace-scaling | 100 / 500 / 2000 / 10 000 / 20 000 trace'ów (10 zdarzeń/trace, 5 atrybutów/zdarzenie) | skalowanie po liczbie trace'ów (Q1, Q2) |
-| event-scaling | 5 / 10 / 50 / 200 / 1000 zdarzeń/trace (100 trace'ów) | skalowanie po głębokości trace'a |
-| attribute-scaling | 1 / 2 / 5 / 10 / 20 / 50 atrybutów/zdarzenie (100×10) | koszt atrybutów niestandardowych |
-| **shape-scaling** | 1000×10, 500×20, 100×100, 20×500, 10×1000 — **zawsze 10 000 zdarzeń** | kształt logu przy stałej objętości |
-| real-validation | sample_process, JournalReview, Sepsis, Hospital_log | realne rozkłady atrybutów i długości trace'ów |
-
-Syntetyczne datasety generuje `XesDatasetGenerator` (deterministyczny seed —
-identyczne pliki XES dla obu systemów). Profil SMOKE (test dymny) używa
-podzbioru; wyniki do pracy pochodzą wyłącznie z profilu FULL.
-
-Górny punkt osi trace wynosi 20 000, ponieważ oficjalny obraz REFERENCE odrzuca
-plik 50 000×10×5 odpowiedzią HTTP 400 „The file is not a valid XES file” także
-w izolowanej próbie na pustym stosie, bez OOM. Plik przechodzi
-lokalny parser i ma poprawną strukturę XML, ale punkt spoza wspólnej dziedziny
-importu obu aplikacji nie może być użyty do porównania czasu. Ograniczenie jest
-cechą badanego zestawu aplikacja+wersja obrazu, a nie podstawą do przypisania
-REFERENCE czasu zerowego lub do ekstrapolacji wyniku LOCAL.
-
-**Dlaczego seria `shape-scaling`.** Trzy pierwsze serie nie są ortogonalne: każda
-z nich, zmieniając swój parametr, zmienia zarazem łączną objętość danych. Z samych
-tych serii nie da się więc oddzielić „kosztu śladu” od „kosztu zdarzenia”. Seria
-`shape-scaling` trzyma stałe liczbę zdarzeń (10 000) i liczbę atrybutów na
-zdarzenie, a zmienia proporcję ślady : zdarzenia. Nie jest to eksperyment przy
-identycznym rozmiarze bajtowym: liczba obiektów trace i rozmiar XES zmieniają się
-wraz z kształtem. Seria pozwala więc opisać zależność od kształtu przy stałej
-liczbie zdarzeń, ale nie daje podstaw do nazwania różnicy „czystym efektem
-modelu grafowego” bez dodatkowego eksperymentu.
-
-**Punkt przecięcia serii = kontrola replikacji.** `trace-100`, `event-10`
-i `attr-5` to **ten sam zbiór** (100×10×5) pod trzema nazwami; wygenerowane pliki
-różnią się wyłącznie wartością `concept:name` logu. Nie jest to redundancja, tylko
-celowy pomiar tej samej wielkości trzy razy w różnych pozycjach sekwencji — patrz
-warunek ważności przebiegu w §5.
-
-**Profil SCALING** (`./gradlew runBenchmarkScaling`) jest opcjonalną sondą
-diagnostyczną dla drabiny 10^4…2×10^5 zdarzeń wspieranej przez oba systemy. Nie
-zawiera pełnej macierzy FULL ani
-kontroli replikacyjnej, dlatego jego pojedynczego przebiegu nie wolno łączyć z
-serią FULL ani używać jako samodzielnego dowodu przewagi. Podstawowy raport pracy
-opiera się na trzech kontrbalansowanych przebiegach profilu FULL.
-
-## 4. Mierzone wielkości
-
-### Q1 — import
-Czas ściany (sekundy) importu XES przez HTTP, od wysłania pliku do chwili,
-w której zaimportowany log jest **widoczny na liście logów** datastore'u
-(odpowiedź 2xx + polling listy co 1 s). Samo 2xx nie wystarcza, bo REFERENCE
-importuje asynchronicznie. Polling dodaje nieujemne opóźnienie mniejsze niż 1 s;
-nie należy więc nazywać wyniku wyłącznie czasem uploadu ani traktować błędu jako
-symetrycznego ±1 s. Jeden import na świeży datastore w każdym przebiegu benchmarku
-(nowy datastore per przebieg, żeby uniknąć deduplikacji); wymagane ≥3 próbki
-per dataset pochodzą z ≥3 osobnych przebiegów całego eksperymentu (§5 pkt 6) —
-tabela importu pojedynczego przebiegu zawiera więc pojedyncze pomiary.
-
-### Q2 — zapytania
-Klasy zapytań (rozszerzone względem pierwotnych 6 o operacje obejmujące pełne
-przebiegi danych i dodatkowe konstrukcje PQL):
-
-| Etykieta | PQL (schemat) | Klasa operacji | Klasa obciążenia | Serie interpretowalne dla skalowania |
-|---|---|---|---|---|
-| minimalWindow | `limit l:1, t:1, e:1` | najmniejsze możliwe okno | punkt odniesienia | — |
-| hierarchyWindow | `limit l:1, t:10, e:20` | okno hierarchii | okno | — |
-| eventNameFilter | `where e:name is not null limit ...` | filtr po atrybucie standardowym | okno | — |
-| customAttrFilter | `where [e:attr_1] is not null limit ...` | filtr po atrybucie niestandardowym | okno | — |
-| standardAttributesOrder | `order by e:timestamp, e:name, e:org:group, e:org:resource limit ...` | sortowanie po standardowych atrybutach XES | okno | event, shape |
-| eventNameGroup | `group by e:name order by e:name limit ...` | grupowanie w obrębie trace'a | okno | event, shape |
-| hoistedWhere | `where ^e:name is not null limit ...` | filtr hoistowany (EXISTS/JOIN) | okno | — |
-| timestampAggregates | `select min(e:timestamp), max(e:timestamp), count(e:name)` | agregacje w obrębie śladu | okno | event, shape |
-| customAttributesProjection | `select [e:attr_1], [e:attr_5] limit ...` | projekcja atrybutów niestandardowych | okno | — |
-| hoistedGroup | `group by ^e:name order by count(t:name) desc` | warianty procesu | **zależne od danych** | trace, event, shape |
-| globalEventCount | `select l:name, count(t:name), count(^^e:name) group by l:name ...` | agregat globalny | **zależne od danych** | trace, event, shape |
-| variantGroupCount | `select count(t:name), count(^e:name) group by ^e:name ...` | warianty z licznościami | **zależne od danych** | trace, event, shape |
-| absentAttrScan | `where [e:attr_absent_benchmark_probe] is not null limit ...` | filtr bez dopasowań po atrybucie niestandardowym | **zależne od danych** | trace, event, attribute, shape |
-| likeScan | `where e:name like '%zzq%' order by ... limit ...` | filtr `like` bez dopasowań | **zależne od danych** | trace, event, shape |
-
-Zapytanie `standardAttributesOrder` używa czterech ogólnych kluczy zamiast tylko
-timestampu i nazwy. W logach rzeczywistych para `(timestamp, name)` nie zawsze
-jest unikatowa; pozostawienie takiego remisu powodowałoby, że ścisłe porównanie
-tablic odpowiedzi sprawdza techniczny tie-break planu bazy, a nie semantykę ani
-koszt zadeklarowanego sortowania. Dodatkowe klucze są standardowymi atrybutami
-XES, a nie polem dobranym do jednego fixture'u. Jeżeli również wszystkie cztery
-wartości będą równe i systemy zwrócą inny porządek, bramka Q4 nadal jawnie
-unieważni tę parę — harness nie normalizuje kolejności po pomiarze.
-
-Rejestrowane: czas ściany każdej próbki, rozmiar odpowiedzi (bajty), liczności
-(logi/trace'y/zdarzenia).
-
-> **Domyślne limity API i wynikający z nich podział na klasy obciążenia.**
-> Oba API stosują domyślne limity hierarchiczne **10 logów / 30 śladów /
-> 90 zdarzeń**, którymi ograniczany jest także jawny `limit`. Po stronie LOCAL
-> odwzorowuje to `processm.compatibility.default-limits`, wprost powielając
-> `LogsService.applyLimits()` systemu ProcessM — polityka okna jest więc
-> **symetryczna**. Równość faktycznych odpowiedzi nie jest założeniem: dla każdej
-> pary weryfikuje ją osobno bramka Q4, a rozjazd unieważnia pomiar czasu.
->
-> Konsekwencja dla planu eksperymentu jest jednak zasadnicza: **rozmiar odpowiedzi
-> nie zależy od rozmiaru zbioru**. Nie wynika z tego automatycznie stały koszt.
-> `ORDER BY`, `GROUP BY` i agregacja mogą przeczytać wszystkie elementy niższego
-> zakresu, zanim zostanie nałożony jego limit. Przykładowo agregaty timestampów są
-> ograniczone liczbą zwracanych śladów, ale wewnątrz każdego z nich obejmują wszystkie
-> zdarzenia. Skalowanie jest więc własnością pary **zapytanie–zmieniana oś**, a nie
-> jednej etykiety workloadu.
->
-> Klasa **zależne od danych** obejmuje zapytania, których wynik wymaga ustalenia
-> własności wykraczającej poza zwracane okno: agregaty globalne (`^^e:`), grupowanie
-> śladów w warianty (`group by ^e:`) oraz predykaty bez dopasowań. Nie przesądza to
-> fizycznego planu: indeks może pozwolić jednemu systemowi wykazać brak wzrostu czasu.
-> Nie oznacza też, że każda oś jest relewantna: zwiększenie liczby nieodczytywanych
-> atrybutów nie stanowi hipotezy skalowania dla zapytania operującego wyłącznie na
-> `e:name`.
->
-> Pole `scalingSeries` w `benchmark-queries.json` deklaruje te pary przed pomiarem.
-> Rysunki i wykładniki α powstają wyłącznie dla zadeklarowanych par. Dla serii
-> trace/event/attribute α dopasowuje się osobno w każdym pełnym bloku; finalny raport
-> nazywa wzrost stabilnym tylko przy dodatnim nachyleniu i R² ≥ 0,30 we wszystkich
-> blokach oraz zmianie między końcami osi większej niż błąd replikacyjny zapytania.
-> Seria shape
-> ma stałą liczbę zdarzeń i jest interpretowana punktowo, bez wymuszania modelu
-> potęgowego. Trzy bloki nie wystarczają do testu różnicy wykładników między systemami.
-
-> **Najmniejsze obserwowane okno.** `minimalWindow` jest opisowym punktem
-> odniesienia end-to-end. Nadal odczytuje i serializuje metadane logu, a jego
-> ścieżka wykonania nie musi być wspólna z innymi zapytaniami. Nie jest zatem
-> estymatą stałego narzutu transportu/planowania i nie wolno odejmować jego czasu
-> od pozostałych pomiarów ani przypisywać różnicy po odjęciu samej bazie danych.
-> Linia na wykresach pomaga jedynie rozpoznać, które wyniki są tego samego rzędu
-> wielkości co najlżejsze zapytanie całej aplikacji.
-
-> **DELETE celowo poza zakresem.** PQL ma instrukcję `delete`, ale w oryginalnym
-> ProcessM nie jest ona dostępna przez API REST (endpoint zapytań jest tylko do
-> odczytu; wykonawca `DBXESDeleter` używany jest wyłącznie w testach). Usuwanie
-> logu przez API idzie osobnym zasobem (`DELETE /data-stores/{id}/logs/{logId}`,
-> kasowanie całego logu po id) — inna operacja niż zapytanie PQL. Porównanie
-> czarnoskrzynkowe DELETE-PQL byłoby więc niesymetryczne, dlatego ta klasa nie
-> jest mierzona.
-
-> **Indeksy właściwości Neo4j — zbadane i odrzucone (2026-07-04).** Sonda
-> `PROFILE` na pełnym stanie bazy (381 742 zdarzenia) wykazała, że każda klasa
-> zapytań z tabeli wyżej jest planowana od kotwicy `NodeUniqueIndexSeek` na
-> `Log.logId` (ograniczenie unikalności) z ekspansją po relacjach
-> `CONTAINS`/`HAS_EVENT`, a filtry/sortowania/grupowania po atrybutach zdarzeń
-> wykonywane są za ekspansją. Po utworzeniu indeksów RANGE na `Event.activity`,
-> `Event.timestamp` i `Trace.caseId` planner nie użył żadnego z nich w żadnym
-> planie (plany identyczne). Wymuszenie `USING INDEX event:Event(activity)`
-> pogorszyło zapytanie filtrujące ok. 8× (skan całego indeksu — 381 742 wpisy
-> globalnie, bez zawężenia do loga — plus `NodeHashJoin`; ~1,51 mln db hits vs
-> ~0,15 mln przy trawersie). Jedyny kształt, przy którym planner sięga po taki
-> indeks naturalnie, to predykat równościowy po atrybucie zdarzenia — na
-> rozgrzanym cache bez mierzalnego zysku względem trawersu (18 ms vs 29 ms przy
-> ~3 tys. pasujących zdarzeń). Indeksy właściwości podnosiłyby natomiast koszt
-> importu (utrzymanie przy każdym wstawieniu), rozmiar dysku i RAM. Decyzja:
-> schemat pozostaje przy 4 ograniczeniach unikalności identyfikatorów; brak
-> indeksów po atrybutach nie jest zaniedbaniem, lecz decyzją popartą pomiarem.
-
-### Q3 — zasobożerność
-- **Dysk:** finalny wynik pochodzi wyłącznie z
-  `scripts/benchmarks/measure-storage-scaling.py`. Każdy dataset jest mierzony
-  na osobnym stacku utworzonym od zera: usunięcie wolumenów, start obu systemów
-  bez danych seedujących, pomiar bazowy, import tych samych bajtów XES, pomiar
-  końcowy. Neo4j Community jest checkpointowany przez czysty restart kontenera,
-  PostgreSQL przez `CHECKPOINT;`. Porównywany zakres to trwałe dane bez logów
-  transakcyjnych: Neo4j `/data/databases` i suma `pg_database_size` PostgreSQL.
-
-  Izolacja punktów eliminuje podstawowy confounder starej sondy sekwencyjnej:
-  skok prealokacji lub recykling stron po wcześniejszym imporcie nie może zostać
-  przypisany kolejnemu datasetowi. Plik `storage-scaling.csv` musi mieć dla
-  każdego wiersza `measurementMode=isolated-fresh-stack`; generator odrzuca
-  starsze dane sekwencyjne. Przyrost nieściśle dodatni przerywa sondę zamiast
-  być zamieniany w zero albo używany w regresji.
-  Każdy punkt zapisuje także commit Git oraz dokładne image ID interpretera, Neo4j
-  i REFERENCE; commit i obrazy muszą być identyczne z blokiem kotwiczącym, inaczej
-  sonda odmawia startu albo punkt jest odrzucany.
-
-  Dla serii trace/event/attribute dopasowuje się osobno dla każdego systemu:
-
-  ```text
-  deltaBytes = a + b · xesBytes
-  ```
-
-  `b` jest krańcowym współczynnikiem ekspansji [B danych trwałych / B XES], `a`
-  opisuje stały koszt utworzenia datastore'u i alokacji, a R² informuje o jakości
-  dopasowania. Serii shape nie redukuje się do jednego współczynnika: ma stałą
-  liczbę zdarzeń, lecz zmienne liczby trace'ów i bajtów XES, więc raportuje się
-  jej punkty bez wniosku przyczynowego o samym modelu danych. Pomiary
-  `storage-results.csv` z głównego benchmarku obejmują narastający stan, różne
-  zakresy plików i brak symetrycznego checkpointu; pozostają diagnostycznym
-  załącznikiem i nie służą do odpowiedzi na Q3-dysk.
-
-- **Pamięć operacyjna:** sonda dąży do okresu 1 s w fazie zapytań, lecz
-  `docker stats --no-stream` ma własne, zmienne opóźnienie. Autorytatywne są
-  znaczniki czasu w `memory-results.csv`, a nie deklaracja „dokładnie co 1 s”.
-  Obie strony mierzone są tą samą sondą:
-  - REFERENCE: kontener `processm-server` (aplikacja i PostgreSQL razem),
-  - LOCAL: suma kontenerów `processm-interpreter` (interpreter) i
-    `processm-neo4j` (baza).
-
-  Sumy systemowe tworzy się **per wspólny znacznik czasu**, a dopiero potem
-  oblicza medianę i peak. Suma median składników byłaby inną wielkością i mogłaby
-  zaniżać lub zawyżać typową pamięć całego systemu. Obecność starego składnika
-  `local-jvm`, brak któregoś kontenera albo brak `local-total`/`reference-total`
-  dyskwalifikuje przebieg jako dowód Q3. Pojedynczy blok pozostaje opisowy.
-  W serii co najmniej trzech pełnych przebiegów zgodny znak różnicy jest
-  warunkiem koniecznym, lecz niewystarczającym: najmniejszy efekt kierunku
-  niższego wskazania `docker stats` musi przekroczyć większy z międzyblokowych
-  rozrzutów max/min
-  obu systemów. Peak i jego udział w budżecie służą do sprawdzenia, czy limit
-  został faktycznie osiągnięty; sam równy limit nie unieważnia obserwacji.
-  Ta konserwatywna reguła interpretacji została dodana po przeglądzie raportu;
-  nie zmienia interwału pomiarowego, protokołu 10 ani zebranych próbek.
-
-### Q4 — poprawność
-- roundtrip XES (import → eksport → porównanie kanoniczne z oryginałem),
-- parytet liczności i ścisła równoważność semantyczna odpowiedzi per zapytanie
-  (sekcja 2 pkt 6),
-- odwołanie do niezależnego raportu kompatybilności.
-
-#### Hoistowane warianty śladu i remis na granicy limitu
-
-**Rozjazd liczności dla `hoistedGroup` nie dowodzi odstępstwa REFERENCE ani poprawki
-w LOCAL.** Wcześniejsze wyjaśnienie kolejnością `time:timestamp` zostało odrzucone
-po ponownym audycie kodu, surowych XES i odpowiedzi obu API.
-
-Zapytanie `group by ^e:name order by count(t:name) desc` grupuje ślady według pełnej
-sekwencji nazw zdarzeń, ale porządkuje powstałe grupy tylko po ich liczności. Oba API
-nakładają następnie domyślny limit 30 śladów. Sam `count(t:name) desc` nie definiuje
-porządku między grupami o tej samej liczności, a właśnie na granicy 30 wyników
-występuje duży remis:
-
-| Dataset | Grupy liczniejsze od progu | Grupy remisujące na progu | Miejsca do obsadzenia z remisu | Zakres możliwej liczby zdarzeń | LOCAL | REFERENCE |
-|---|---:|---:|---:|---:|---:|---:|
-| Hospital | 25 | 13 | 5 | 125–186 | 141 | 135 |
-| JournalReview | 3 | 93 | 27 | 432–984 | 714 | 603 |
-| Sepsis | 27 | 35 | 3 | 237–266 | 255 | 245 |
-
-W każdym przypadku oba obserwowane wyniki składają się z tych samych grup o
-liczności większej od progu i z innego, dozwolonego podzbioru grup remisujących.
-Celowane wykonanie live potwierdziło dokładne długości wybranych wariantów.
-
-Hipoteza timestampowa jest sprzeczna z dowodami: wszystkie trzy pliki mają
-niemalejące timestampy wewnątrz śladów, stabilne sortowanie po timestampie nie
-zmienia żadnej sekwencji nazw, a referencyjny `TranslatedQuery` używa dla pustego
-porządku zdarzeń identyfikatora `e.id`, nie `time:timestamp`. Reguła specyfikacji PQL
-o zachowaniu kolejności źródłowej nadal obowiązuje i LOCAL realizuje ją przez
-`importOrder`, lecz nie wyjaśnia tych trzech rozjazdów.
-
-Benchmark zachowuje twardy status `MISMATCH` i wyklucza te pary z porównań czasów,
-ponieważ odpowiedzi nie są identyczne. Raport nie przypisuje jednak winy żadnemu
-systemowi. Audyt odtwarza
-`scripts/benchmarks/verify-hoisted-group-mismatches.py`; jego JSON zapisuje hashe
-XES i źródeł, rozkład remisów, obserwacje wszystkich bloków oraz opcjonalny replay
-live. W kolejnym protokole workload powinien mierzyć koszt grupowania projekcją
-niezależną od wyboru remisujących wariantów, np. `select count(t:name) group by
-^e:name order by count(t:name) desc`.
-
-## 5. Protokół pomiarowy
-
-1. Przed pierwszym blokiem serii
-   `scripts/benchmarks/prepare-benchmark-stack.py --confirm-destroy-volumes`
-   buduje `bootJar` z bieżącego źródła i obraz LOCAL oznaczony commitem, a
-   następnie usuwa wolumeny. Przed kolejnymi blokami ten sam skrypt jest
-   wywoływany z `--reuse-local-image-id sha256:...`, gdzie wartością jest
-   dokładne image ID z pierwszego `environment.json`. Tryb ponownego użycia
-   odmawia startu, jeżeli tag wskazuje inny obraz, etykieta rewizji obrazu nie
-   odpowiada bieżącemu commitowi albo drzewo Git jest brudne. Dzięki temu każdy
-   blok ma świeże wolumeny, lecz żaden nie dostaje przypadkowo innego,
-   niereprodukowalnego bitowo obrazu z kolejnego builda. Skrypt następnie
-   uruchamia wyłącznie mierzone usługi z nakładką
-   `docker-compose.benchmark.yml`, weryfikuje równy skończony budżet pamięci bez
-   swapu i tworzy konto REFERENCE
-   **bez** importu fixture'ów kompatybilności. Skrypt oraz runner wymagają, by
-   oba API wystawiały zero datastore'ów. Skrypt tworzy jednorazowy marker,
-   który runner zużywa i archiwizuje jako `stack-preparation.json`; agregator
-   sprawdza świeże wolumeny, zerowe liczności API oraz zgodność commita i
-   dokładnych image ID z `environment.json`. Zwykłe `docker compose up`, które
-   uruchamia seed tylko po stronie REFERENCE, nie przygotowuje ważnego pomiaru.
-2. Runner zapisuje `environment.json`: host, budżet Docker VM, dokładne image ID
-   kontenerów, efektywne ustawienia pamięci, commit i stan dirty Git oraz hash
-   konfiguracji datasetów i zapytań. Serię wolno łączyć wyłącznie przy zgodnym
-   fingerprintcie, commicie, obrazach i budżecie Docker VM; drzewo musi być czyste.
-3. **Globalna rozgrzewka** (FULL: 200 rund pełnego zestawu zapytań na wyrzucanym
-   zbiorze 100×10×5) odbywa się przed rejestrowaniem próbek. Kolejność systemów
-   zmienia się w każdej rundzie. Błąd importu, zapytania albo semantyczny mismatch
-   przerywa przebieg — rozgrzewka nie może ukrywać niesprawnego workloadu.
-   Datastore rozgrzewkowy pozostaje obecny do końcowego sprzątania w obu systemach;
-   dzięki temu baseline i pomiary nie obejmują asymetrycznego kosztu kasowania ani
-   ponownego wychłodzenia, ale Q3-pamięć dotyczy jawnie tego rozgrzanego stanu.
-4. Po rozgrzewce zbierany jest 60-sekundowy baseline pamięci. Okno bezczynności
-   celowo wychładza procesy, dlatego bezpośrednio po nim oba systemy przechodzą
-   nierejestrowany cykl: utworzenie świeżego datastore'u → import wyrzucanego
-   zbioru 100×10×5 → 200 rund aktywacyjnych → usunięcie datastore'u. Kolejność
-   systemów w zapytaniach jest naprzemienna. Sonda pamięci nie ma wtedy aktywnej
-   fazy: cykl nie zanieczyszcza ani baseline'u `idle`, ani serii `queries`.
-   Datastore globalnej rozgrzewki pozostaje obecny, więc stan tła pamięci przed
-   i po cyklu ma tę samą strukturę. Cykl płaci nie tylko powrót procesów z
-   60-sekundowej bezczynności, ale też pierwszą ścieżkę importu i kasowania;
-   pierwszy mierzony dataset wchodzi dzięki temu w taki sam stan lifecycle'u jak
-   kolejne. Następnie każdy
-   dataset trafia do osobnego datastore'u w obu systemach. Dla jednego datasetu
-   wykonywany jest cały blok: import obu stron → zapytania → roundtrip LOCAL →
-   usunięcie obu datastore'ów; dopiero potem dopuszczany jest następny dataset.
-   Dzięki temu czas i pamięć zapytania nie zależą od obecności 24 niepowiązanych
-   baz, a oba systemy konkurują o budżet Docker VM tylko z tym samym aktualnym
-   zbiorem. System rozpoczynający import zmienia się co dataset (LOCAL→REFERENCE,
-   potem REFERENCE→LOCAL). Czas Q1 obejmuje upload i oczekiwanie na widoczność
-   logu. Przyrosty dysku z tej fazy są diagnostyczne, nie są finalną sondą
-   Q3-dysk. Blok `reversed` odwraca także
-   system rozpoczynający import konkretnego datasetu względem `declared` (dla
-   nieparzystej liczby datasetów wymaga to jawnego przesunięcia parzystości).
-5. **Kolejność datasetów jest kontrbalansowana między pełnymi przebiegami:**
-
-   ```bash
-   BENCHMARK_DATASET_ORDER=declared ./gradlew runBenchmarkFull
-   BENCHMARK_DATASET_ORDER=reversed ./gradlew runBenchmarkFull
-   BENCHMARK_DATASET_ORDER=random BENCHMARK_DATASET_ORDER_SEED=20260728 ./gradlew runBenchmarkFull
-   ```
-
-   Użyta kolejność i ziarno trafiają do `environment.json`; agregator wymaga
-   dla bloku `random` z góry ustalonego ziarna `20260728` (jest ono również
-   wartością domyślną runnera). Są to trzy bloki
-   eksperymentu, nie trzy warianty, spośród których wybiera się najkorzystniejszy.
-6. Dla każdej pary (dataset, zapytanie) wykonuje się po jednym opisowym pierwszym
-   wykonaniu na nowym datastore (`phase=cold`), trzy nieraportowane rozgrzewki
-   zapytania i 30 repetycji warm. Aplikacje przeszły już globalną i po-idle
-   rozgrzewkę, więc próbka `cold` nie jest zimnym startem procesu. W każdym numerze
-   repetycji oba systemy tworzą przyległy blok; kolejność zmienia się AB/BA, a
-   system rozpoczynający pierwszą parę zmienia się między parami. Błąd HTTP
-   przerywa przebieg. Liczności odpowiedzi są porównywane w każdej repetycji warm,
-   a pełna semantyka XES-JSON — dla ostatniej odpowiedzi warm; mismatch zachowuje
-   surowe czasy, ale wyklucza parę z porównania wydajności.
-7. Runner usuwa parę datastore'ów po zakończeniu każdego datasetu i zawsze próbuje
-   usunąć pozostałe datastore'y `bench-*` także po błędzie. Każda próba trafia do
-   `cleanup-results.csv`. Po każdym pełnym bloku stack i tak jest odtwarzany od
-   zera, aby drugi blok nie dziedziczył stron, WAL ani cache danych z pierwszego.
-   Po sprzątaniu runner ponownie odczytuje stan wszystkich kontenerów i obecność
-   procesów JVM; działający PID 1 lub wadliwy healthcheck nie zastępuje tej kontroli.
-8. **Finalny eksperyment zawiera co najmniej trzy ważne bloki FULL** zebrane na tej
-   samej wersji protokołu. Wersja 11 zastępuje historyczne `hoistedGroup`
-   wariantem agregującym, który nie materializuje arbitralnego podzbioru grup
-   remisujących na granicy limitu. Finalna seria zebrana wcześniej protokołem 10
-   pozostaje ważnym, niezmienianym historycznie dowodem; jej trzy pary MISMATCH są
-   wykluczone z Q2 i wyjaśnione osobnym audytem. Wersja jest zapisywana w każdym przebiegu jako
-   `benchmarkProtocolVersion`; dowodem w pracy są wyłącznie przebiegi zebrane
-   protokołem opisanym w tym dokumencie, a przebieg o innej wersji jest odrzucany
-   przez walidację, a nie interpretowany. `compare-runs.py` waliduje kompletność macierzy, 30 repetycji,
-   roundtrip, sprzątanie, pamięć, środowisko, fingerprint i trzy wymagane kolejności. Skrypt
-   nie wybiera „reprezentatywnego wyniku”: wszystkie bloki są jednostkami dowodu.
-   Jeden środkowy blok jest wskazywany jedynie jako kotwica dla szczegółowych
-   tabel i wykresów, by nie powielać identycznej struktury raportu.
-
-   Dla każdej pary skrypt podaje iloraz REFERENCE/LOCAL w każdym bloku, jego zakres
-   i medianę. Kierunek przewagi jest wspierany tylko wtedy, gdy jest jednakowy we
-   wszystkich blokach, a **najmniejszy** efekt przekracza największy błąd
-   replikacyjny danego zapytania. W tabelach główną wielkością jest ten efekt
-   konserwatywny jako czynnik ≥ 1 wraz z kierunkiem; surowa mediana i zakres R/L
-   pozostają jawnie oznaczoną diagnostyką pomocniczą. Wyniki trafiają do
-   `series-comparison.csv`, `series-cell-stability.csv`, `series-import.csv`,
-   `repeatability.csv`, `series-query-outcomes.csv`, `series-real-dataset-outcomes.csv`,
-   `series-payload.csv`, `series-memory.csv`, `series-scaling.csv`, `series-scaling-exploratory.csv`,
-   `report-provenance.json`, `thesis-report-series.md` oraz
-   `thesis-tables-series.tex` (tabele międzyblokowe; pakiety `booktabs` i
-   `longtable`):
-
-   ```bash
-   python3 scripts/benchmarks/compare-runs.py \
-     tmp/benchmark-results/<declared> \
-     tmp/benchmark-results/<reversed> \
-     tmp/benchmark-results/<random> \
-     --compatibility-report tmp/compatibility-reports/<reportId>
-   ```
-
-   Przy trzech blokach reguła ta jest kryterium **powtarzalności na
-   zarejestrowanym środowisku**, nie testem istotności dla populacji komputerów.
-   Wnioski są warunkowe względem zapisanych wersji aplikacji, obrazów, limitów
-   Docker VM, hosta i workloadu; nie są automatycznie uogólniane na inną
-   konfigurację sprzętową lub inne logi.
-
-   **Stabilność wielkości efektu.** Niezależnie od werdyktu kierunku raport
-   zachowuje dwa ciągłe wskaźniki opisowe: rozrzut max/min ilorazu R/L między
-   blokami oraz Q3/Q1 każdej 30-próbkowej komórki. Alarm `UNSTABLE_MAGNITUDE`
-   pojawia się przy co najmniej trzykrotnej zmianie któregokolwiek wskaźnika.
-   Jest to celowo zgrubna diagnostyka dodana po krytycznym przeglądzie raportu,
-   a nie próg istotności ani nowa bramka ważności pomiaru. Nie zmienia werdyktu
-   kierunku, lecz zabrania traktowania mediany R/L jako reprezentatywnej skali
-   przewagi. Sama zmiana reżimu opóźnienia bez planów wykonania/`EXPLAIN` nie
-   pozwala przypisać przyczyny np. przełączeniu planu PostgreSQL.
-
-   **Skalowanie eksploracyjne.** `series-scaling-exploratory.csv` obejmuje
-   wszystkie zapytania niepredeklarowane dla osi `trace-scaling`, a nie wybrane
-   przykłady o korzystnym wyniku. Podaje punkty końcowe i dopasowania każdego
-   systemu, ale nie zmienia `scalingSeries`, fingerprintu ani werdyktów
-   konfirmacyjnych i nie służy do testowania różnicy wykładników.
-
-   **Bramka replikacyjna.** `trace-100`, `event-10` i `attr-5` opisują ten sam
-   eksperyment 100×10×5 pod trzema nazwami. Dla każdej pary
-   `(zapytanie, system)` wylicza się rozrzut max/min. Jeżeli **górny kwartyl**
-   tych rozrzutów przekracza **×1,25**, blok jest nieważny dla Q2. Maksimum nie
-   znika: najgorszy rozrzut danego zapytania (po obu systemach) jest jego
-   indywidualnym progiem efektu. Q1 ma osobną bramkę maksimum o tym samym progu,
-   ponieważ jest pojedynczym pomiarem
-   kwantowanym pollingiem; jej przekroczenie pozostawia Q1 nierozstrzygnięte, ale
-   nie unieważnia zapytań, które mają własną kontrolę replikacji. Próg ×1,25 nie
-   jest progiem efektu: do oceny praktycznej konkretnego zapytania używa się jego
-   rzeczywiście zmierzonego, najbardziej konserwatywnego rozrzutu replikatów z
-   całej serii; Q1 używa analogicznego rozrzutu replikatów importu i nie publikuje
-   przewagi, gdy jego osobna bramka jakości nie przejdzie.
-
-   Wartość ×1,25 i statystyka górnego kwartyla są **operacyjnym kryterium jakości
-   ustalonym przed serią finalną**, a nie poziomem istotności ani minimalnym
-   efektem badawczym. Maksimum z 28 współczynników (14 zapytań × 2 systemy) jest
-   statystyką ekstremalną, szczególnie niestabilną dla komórek 2–8 ms: pojedyncza
-   różnica poniżej 2 ms może dać iloraz ×1,4. Użycie go jednocześnie jako bramki
-   całego bloku i per-zapytaniowego flooru liczyłoby ten sam lokalny problem
-   podwójnie. Górny kwartyl odrzuca **szeroki** dryf protokołu, a maksimum nadal
-   konserwatywnie ogranicza wniosek o konkretnym zapytaniu.
-   Niezależnie od bramki każdy
-   zaakceptowany efekt musi przekroczyć faktycznie zmierzony floor swojej
-   metryki, także wtedy, gdy jest on znacznie mniejszy lub większy niż ×1,25.
-
-### Statystyka
-
-Dla każdej pary (dataset, zapytanie, system) raportuje się **medianę** i
-**kwartyle Q1–Q3** z 30 repetycji. Różnicę między systemami opisują trzy liczby:
-
-1. **Efekt** — iloraz median podany jako czynnik ≥ 1 wraz z kierunkiem
-   (`×2,66 (REFERENCE)`). Jedna kolumna nie miesza wtedy 0,02 z 4,49, a
-   najmocniejszy wynik pracy nie ukrywa się pod zapisem „0,02”.
-2. **Przedział ufności efektu** — 95% percentylowy bootstrap ilorazu median
-   (10 000 losowań). Repetycje o tym samym numerze tworzą blok czasowy LOCAL /
-   REFERENCE i są losowane wspólnie, co zachowuje wspólny dryf w czasie. Ziarno
-   wyprowadza się z nazwy pary, więc przedział jest odtwarzalny z artefaktów.
-3. **Test istotności** — sparowany test rang Wilcoxona (dwustronny,
-   przybliżenie normalne z poprawką na wiązania i ciągłość) z korektą
-   **Holma–Bonferroniego** na całą rodzinę porównań przebiegu. Test sparowany
-   odpowiada protokołowi AB/BA; traktowanie obu serii jako niezależnych gubiłoby
-   informację o wspólnym bloku czasowym.
-
-**Werdykt „istotna” wymaga jednocześnie** p < 0,05 po korekcie, przedziału
-ufności nieobejmującego 1,00 **oraz** efektu przekraczającego zmierzony błąd
-pomiaru (rozrzut replikatów, bramka w §5). Efekt spełniający dwa pierwsze warunki,
-a nie trzeci, opisywany jest jako **„poniżej błędu pomiaru”** — jest wtedy
-realny, ale mniejszy niż to, o ile waha się sam pomiar, więc nie jest dowodem
-o systemach.
-
-> **Reguła rozłącznych IQR została wycofana.** IQR mierzy rozrzut *próby*, a nie
-> niepewność *mediany*: jego rozłączność nie kontroluje żadnego błędu I rodzaju
-> i zależy od `n` tylko przez estymator kwantyla. Na danych profilu FULL reguła
-> ta uznawała za istotne **86 % wszystkich par** (113 ze 132), z czego 74 % miało
-> efekt poniżej ×2 — czyli poniżej błędu, jaki replikaty wykazują na *identycznych*
-> danych. Kryterium odpalające prawie zawsze nie niesie informacji.
-
-**p95 podaje się w tabelach i wykresach pracy wyłącznie przy `n ≥ 200`.** Przy
-`n = 30` kwantyl 0,95 jest interpolacją między 28. a 29. statystyką pozycyjną —
-opisuje konkretne losowanie, nie ogon rozkładu. `query-summary.csv` zachowuje
-wyliczoną wartość jako diagnostykę odtwarzalną z surowych próbek, ale generator
-nie przenosi jej do narracji ani figur.
-
-**Zastrzeżenie o niezależności.** Repetycje wykonywane są seryjnie na tym samym
-rozgrzanym procesie, więc kolejne pary są autoskorelowane; sparowanie nie usuwa
-tej zależności. Podane p są zatem kryterium pomocniczym. Jednostką niezależnej
-replikacji dla wniosku końcowego jest pełny przebieg: rozstrzygający jest zgodny
-kierunek w blokach i konserwatywny efekt zestawiony z błędem replikacyjnym.
-
-Wszystkie kwantyle (mediana, Q1/Q3, p95) we wszystkich artefaktach —
-`query-summary.csv`, tabelach `thesis-report.md`/`thesis-tables.tex`
-i wykresach z nich generowanych — liczone są tym samym estymatorem typu 7
-wg Hyndman & Fan (interpolacja liniowa między rangami; domyślny estymator
-R/NumPy/Excela), więc ta sama wielkość ma identyczną wartość w tabeli
-i na rysunku.
-
-## 6. Artefakty wynikowe
-
-Każdy przebieg zapisuje do `tmp/benchmark-results/<timestamp>/`:
-- surowe CSV (import/query/storage/memory/roundtrip/cleanup — bez ręcznej edycji),
-- `environment.json` / `environment.md`,
-- **`thesis-report.md`** — raport pojedynczego bloku po polsku; jest diagnostyką
-  i źródłem szczegółowych tabel, nie finalnym dowodem serii,
-- **`thesis-tables.tex`** — te same tabele w LaTeX (booktabs, etykiety
-  `tab:bench-*`, polskie nagłówki), do bezpośredniego `\input{}` w pracy.
-
-Po walidacji serii `compare-runs.py` tworzy w katalogu bloku kotwiczącego
-`thesis-report-series.md`, CSV wnioskowania międzyblokowego i
-`report-provenance.json`. Ten ostatni rozdziela commit kodu mierzonego od commita
-generatora raportu, zapisuje stan dirty oraz SHA-256 `compare-runs.py`, dzięki
-czemu sam `HEAD` nie jest mylony z dokładną wersją generatora. To jest finalny
-raport Markdown: zaczyna się werdyktami całej serii, a tabele pojedynczego bloku
-umieszcza w jawnie diagnostycznej części szczegółowej. `render-report-html.py`
-wybiera go automatycznie i tworzy
-samowystarczalny `thesis-report.html`; odmawia użycia pliku serii starszego niż
-raport bazowy oraz odmawia finalnego renderu bez kompletnej sondy Q3-dysk,
-sekcji werdyktu Q2, skalowania międzyblokowego, Q4 i wszystkich wskazanych
-wykresów. Wykresy generuje
-`plot-benchmark-results.py` z surowych CSV i — gdy dostępne są artefakty serii —
-z median pełnych bloków; przy każdym uruchomieniu usuwa stare SVG, aby zmiana
-workloadu nie pozostawiała nieaktualnych figur.
-
-Finalny raport serii nie kopiuje automatycznie wielostronicowych tabel bloku
-kotwiczącego. Zamiast tego pokazuje przekrój werdyktów per zapytanie, osobny
-przekrój logów rzeczywistych, największe różnice payloadu oraz pamięć między
-blokami; komplet komórek pozostaje w CSV, a szczegółowy raport bloku w
-`thesis-report.md`. Do `report-provenance.json` trafiają także hashe szerokiego
-raportu kompatybilności i — dla historycznej serii v10 — audytu granicznego
-remisu `hoistedGroup`.
-
-Finalny Q3-dysk i finalny render wymagają dodatkowego `storage-scaling.csv` z izolowanej sondy.
-Starszy plik bez `measurementMode=isolated-fresh-stack` jest jawnie oznaczany
-jako nienadający się do wniosku, a nie reinterpretowany przez nowy generator.
-
-## 7. Zagrożenia trafności (threats to validity) — do rozdziału pracy
-
-- **Zakres porównania.** Wyniki dotyczą dwóch konkretnych aplikacji, obrazów,
-  konfiguracji i publicznych API zapisanych w artefaktach. Nie izolują wpływu
-  samego modelu grafowego od relacyjnego ani samej bazy od interpretera,
-  serializacji i topologii wdrożenia. Wnioski formułuje się jako „LOCAL wobec
-  REFERENCE w tym eksperymencie”, nie „Neo4j wobec PostgreSQL w ogólności”.
-
-- **Wspólny host.** Systemy dzielą host i budżet Docker VM, ale żądania nie
-  wykonują się równocześnie. AB/BA ogranicza krótkookresowy dryf, a trzy pełne
-  bloki ujawniają zmienność międzyprzebiegową. Nie jest to jednak substytut
-  replikacji na innych maszynach; wyniki bez `environment.json` nie są przenośne.
-
-- **Różna architektura procesów.** REFERENCE zawiera aplikację i PostgreSQL w
-  jednym kontenerze, LOCAL używa osobnych kontenerów interpretera i Neo4j oraz
-  sieci kontenerowej między nimi. Mierzona jest rzeczywista architektura obu
-  aplikacji, nie sztucznie wyrównany mikropomiar. W Q3 sumuje się dwa składniki
-  LOCAL per timestamp, lecz REFERENCE nie da się rozdzielić bez modyfikacji obrazu.
-
-- **Różne polityki pamięci baz.** Neo4j ma jawny heap i page cache, PostgreSQL w
-  oficjalnym obrazie zachowuje ustawienia dostarczone przez REFERENCE. Ich
-  „wyrównanie” wymagałoby zmiany jednego z produktów i również byłoby arbitralne.
-  Dokładne wartości i efektywne sterty są częścią raportu środowiska; dlatego Q2
-  i Q3 opisują dostarczone aplikacje z tymi konfiguracjami.
-
-- **Ograniczone odpowiedzi.** Domyślne limity 10 logów / 30 śladów / 90 zdarzeń
-  sprawiają, że zapytania klasy „okno” mierzą opóźnienie ograniczonej odpowiedzi,
-  nie przepustowość po całym zbiorze. Nie wyklucza to pracy przed limitem niższego
-  zakresu. Skalowanie wolno interpretować wyłącznie dla zadeklarowanych przed
-  pomiarem par zapytanie–seria; płaski wynik może być skutkiem skutecznego indeksu,
-  a nie dowodem braku zależności semantycznej.
-
-- **Dane syntetyczne.** Deterministyczny generator ma regularne rozkłady i
-  ściśle rosnące timestampy. Seria real-validation poszerza trafność ekologiczną,
-  lecz cztery logi rzeczywiste nadal nie reprezentują wszystkich logów XES.
-  Kształt, zagnieżdżone metadane i równe timestampy należy opisywać oddzielnie.
-
-- **Autokorelacja.** Trzydzieści żądań warm zwiększa precyzję mediany wewnątrz
-  bloku, ale nie jest trzydziestoma niezależnymi eksperymentami. Test Wilcoxona
-  i bootstrap zachowują sparowanie czasowe, jednak wniosek końcowy wymaga
-  zgodnego kierunku w pełnych blokach oraz efektu większego od replikacyjnego
-  błędu pomiaru.
-
-- **Import Q1.** Pomiar kończy się na pierwszym pollingu, w którym log jest
-  widoczny. Kwantyzacja poniżej 1 s jest szczególnie istotna dla krótkich importów
-  i ogranicza rozdzielczość porównań, mimo kontrbalansowania kolejności systemów.
-
-- **Dysk Q3.** Restart Neo4j i `CHECKPOINT;` PostgreSQL są różnymi mechanizmami,
-  a `pg_database_size` oraz rozmiar `/data/databases` odzwierciedlają natywne,
-  nieidentyczne formaty. Izolacja każdego punktu usuwa zanieczyszczenie między
-  datasetami, lecz stały koszt datastore'u pozostaje i jest modelowany wyrazem
-  wolnym. Regresję wolno interpretować tylko przy wiarygodnym R² i dodatnich
-  deltach; generator oznacza model jako interpretowalny przy dodatnim `b` i
-  R² ≥ 0,30. Każdy dataset ma jeden izolowany pomiar storage; model jest opisowy
-  i nie ma przedziału niepewności między powtórzeniami, bo powtórzenie całej
-  drabiny wymagałoby wielokrotnego odtwarzania wolumenów dla każdego punktu.
-
-- **Wiele porównań i selekcja workloadu.** Korekta Holma dotyczy testów
-  wewnątrz bloku. Klasy zapytań i zbiorów są wersjonowane, a fingerprint blokuje
-  łączenie różnych macierzy, co ogranicza dobieranie przypadków po obejrzeniu
-  wyników. Nowy workload musi przejść smoke i pełną kontrolę semantyczną przed
-  wejściem do serii finalnej.
+| Sepsis Cases | `10.4121/uuid:915d2bfb-7e84-49ad-a286-dc35f063a460` | mały log medyczny o dużej różnorodności wariantów |
+| BPIC15 Municipality 1 | `10.4121/uuid:a0addfda-2044-4541-a450-fdcc9fe16d17` | wiele aktywności i prawie unikatowe warianty |
+| BPIC15 Municipality 2 | `10.4121/uuid:63a8435a-077d-4ece-97cd-2c76d394d99c` | drugi niezależny proces gminny z tej samej edycji |
+| BPIC15 Municipality 3 | `10.4121/uuid:ed445cdd-27d-4d77-a1f7-59fe7360cfbe` | trzeci proces gminny umożliwiający ocenę zmienności wewnątrz edycji |
+| BPIC15 Municipality 4 | `10.4121/uuid:679b11cf-47cd-459e-a6de-9ca614e25985` | czwarty proces gminny o odrębnej strukturze śladów |
+| BPIC15 Municipality 5 | `10.4121/uuid:b32c6fe5-f212-4286-9774-58dd53511cf8` | piąty proces gminny domykający pełną rodzinę BPIC15 |
+| Hospital Log | `10.4121/uuid:d9769f3d-0ab0-4fb8-803b-0d1120ffcf54` | bardzo długie i nierówne ślady oraz szeroki alfabet aktywności |
+| BPI Challenge 2012 | `10.4121/uuid:3926db30-f712-4394-aebc-75976070e91f` | proces kredytowy o średnim rozmiarze i tysiącach wariantów |
+| BPIC13 Incidents | `10.4121/uuid:500573e6-accc-4b0c-9576-aa5468b10cee` | log zarządzania incydentami o dużej liczbie zgłoszeń |
+| BPIC13 Closed Problems | `10.4121/uuid:c2c3b154-ab26-4b31-a0e8-8f2350ddac11` | zamknięte problemy z tego samego środowiska usługowego |
+| BPIC13 Open Problems | `10.4121/uuid:3537c19d-6c64-4b1d-815d-915ab0e479da` | mały log zarządzania problemami o innej domenie i strukturze niż procesy medyczne oraz kredytowe |
+| Road Traffic Fine Management | `10.4121/uuid:270fd440-1057-4fb9-89a9-b699b47990f5` | ponad 150 tys. krótkich śladów, ale niewiele wariantów |
+
+Dobór jest celowy, aby pokryć różne rejony cech strukturalnych, a nie losowy.
+Nie stanowi reprezentatywnej próby wszystkich logów procesowych. `JournalReview`
+nie jest już klasyfikowany jako log rzeczywisty: repozytorium ProcessM używa go
+jako fixture'a, a nie znaleziono dla niego źródła pozwalającego uczciwie wykazać
+pochodzenie danych rzeczywistych.
+
+Niezmodyfikowany `LogsService` REFERENCE ogranicza czytany strumień wejściowy do 5 MiB,
+niezależnie od wyższego limitu multipart ustawionego dla API. Dlatego pełne
+Hospital Billing (5 952 122 B gzip) i BPIC17 (26 515 956 B gzip) nie należą do
+wspólnej domeny importu i nie są mierzone. Nie zastępuje się ich niejawnie
+próbkami ani zmodyfikowaną wersją REFERENCE. Największym logiem rzeczywistym w
+badaniu pozostaje Road Traffic: 561 470 zdarzeń i 150 370 śladów. Runner przerywa
+przed importem, jeżeli wybrany plik przekracza ten limit.
+
+Lokalne repozytorium referencyjnego ProcessM dostarcza również `BPIC14_f`, pełne
+BPIC17 i BPIC19. Pliki są zachowane poza classpath, w
+`benchmark-data/bpi/archive/`, i nie należą do aktywnej macierzy: BPIC14 ma
+wyłącznie wariant oznaczony jako filtrowany, natomiast
+skompresowane BPIC17 i BPIC19 przekraczają limit 5 MiB. ProcessM nie zawiera
+logów BPIC16 ani BPIC20, a BPIC18 pozostawił jedynie identyfikator usuniętego
+obiektu Git LFS. Kopia Open Problems dostarczona przez ProcessM jest zachowana
+z sufiksem `_processm` i to ona należy do aktywnej macierzy. Różni się bajtowo
+od wcześniej wersjonowanego pliku, który pozostaje nietknięty dla odtwarzalności
+historycznych przebiegów.
+
+Przed pomiarem inspektor zapisuje dla każdego logu liczbę śladów i zdarzeń,
+średnią, medianę, p95 i maksimum długości śladu, liczbę wartości
+`event concept:name`, liczbę wariantów tych nazw, średnią liczbę atrybutów
+zdarzenia, DOI oraz SHA-256 dokładnego pliku przekazanego obu systemom. Te cechy opisują próbę; nie są dodatkowymi
+zmiennymi niezależnymi w jednym modelu statystycznym.
+
+Ręcznie przygotowany `sample_process.xes` jest używany wyłącznie w profilu
+SMOKE do sprawdzenia kompletności pipeline'u. Nie jest przedstawiany jako log
+rzeczywisty ani włączany do wnioskowania profilu FULL.
+
+Profil PILOT korzysta z datasetów FULL, lecz wykonuje tylko jeden import i trzy
+pary zapytań. Służy wyłącznie do kontroli wykonalności, pamięci, round-trip i
+formatu raportu. Jego wyniki nie są łączone z FULL ani interpretowane
+statystycznie.
+
+Wszystkie parametry i ścieżki są wersjonowane w
+`src/benchmark/resources/benchmark-datasets.json`. Te same bajty XES trafiają
+do obu systemów.
+
+## 5. Mierzone wielkości
+
+### 5.1 Czas zapytania
+
+Mierzony jest czas ściany od wysłania żądania HTTP do odebrania całego korpusu
+odpowiedzi. Parsowanie odpowiedzi na potrzeby kontroli semantycznej odbywa się
+poza mierzonym przedziałem.
+
+Dla każdej pary dataset–zapytanie wykonuje się:
+
+1. 40 niemierzonych rozgrzewek per system;
+2. 30 mierzonych par LOCAL–REFERENCE;
+3. naprzemienną kolejność LR, RL, LR, RL, aby żaden system nie był stale pierwszy.
+
+Repetycje o tym samym numerze tworzą parę czasową. Wszystkie 30 surowych czasów
+pozostaje w `query-results.csv`.
+
+Przed pierwszym pomiarem profil FULL wykonuje 200 nierejestrowanych rund na
+wyrzucanym datastorze. Liczbę ustalono na podstawie historycznego pilota, w
+którym krótsza rozgrzewka nie usuwała szerokiego dryfu JVM. Eksperyment nie
+wykonuje drugiej adaptacyjnej fazy aktywacyjnej.
+
+Stałe 40 rozgrzewek per dataset–zapytanie ustalono w osobnej diagnostyce małych
+datasetów. Wersja z 12 rozgrzewkami nadal wykazywała różnicę 12–27% między
+początkiem i końcem części mierzonej. Nie stosuje się adaptacyjnego kończenia
+rozgrzewki na podstawie obserwowanych czasów, aby reguła rozpoczęcia pomiaru nie
+zależała od chwilowo korzystnego wyniku. Po ostatniej rozgrzewce blok czasowy
+zaczyna się bez sondy Docker CLI i bez sztucznego okresu bezczynności.
+
+### 5.2 Czas importu
+
+Import jest mierzony od rozpoczęcia wysyłania pliku do chwili, w której log jest
+widoczny przez API datastore'u. Odpowiedź 2xx nie kończy pomiaru, ponieważ
+REFERENCE może zakończyć import asynchronicznie. Stan jest sprawdzany co 100 ms;
+wynik ma więc dodatnią kwantyzację mniejszą niż 100 ms.
+
+Profil FULL wykonuje 10 sparowanych importów każdego datasetu do świeżych
+datastore'ów. Kolejność systemów zmienia się w kolejnych parach. Ostatnia para
+pozostaje na czas pomiarów zapytań; pozostałe datastore'y są usuwane od razu.
+Modularny profil BLOCK wykonuje jedną parę importu przygotowującą datastore,
+ponieważ służy walidacji zapytań na jednym logu rzeczywistym. Nie dostarcza
+wnioskowania o czasie importu; pełna rodzina importowa pozostaje związana z
+kompletną osią `size-scaling`.
+
+### 5.3 Pamięć
+
+Po zakończeniu 30 par czasowych runner odtwarza tę samą kolejność 30 par jako
+osobny blok zasobowy. Jego czas nie trafia do statystyki latencji. `docker stats`
+jest próbkowane tylko podczas tego odtworzenia. Dla LOCAL sumuje się jednoczesne
+wskazania kontenerów interpretera i Neo4j; dla REFERENCE używa się kontenera
+ProcessM zawierającego aplikację i PostgreSQL. Runner potwierdza zatrzymanie
+samplera przed przejściem do kolejnego bloku czasowego.
+
+Każda próbka zachowuje nazwę datasetu i zapytania. Raport protokołu 23 podaje
+medianę median równych bloków oraz największe zaobserwowane wskazanie, zamiast
+łączyć próbki w jedną serię zależną od liczby datasetów w kampanii. Nie nazywa
+tej metryki procesowym RSS, szczytem dokładnie podczas mierzonego żądania ani
+minimalną pamięcią potrzebną do uruchomienia systemu.
+
+Kolejne próbki czasowe są autokorelowane, dlatego nie tworzy się z nich
+sztucznego przedziału ufności. Są opisem obserwowanego przebiegu.
+
+### 5.4 I/O kontenerów
+
+Poza mierzonym czasem wykonuje się snapshot przed i po każdym bloku importu.
+Dla zapytań snapshoty obejmują opisane wyżej osobne odtworzenie 30 par, a nie
+blok, z którego pochodzą czasy. Raportowane są nieujemne delty:
+
+- bajty odczytane i zapisane w Block I/O (`io.stat` daje dokładne liczniki,
+  a wartość `docker stats` jest fallbackiem, gdy host ich nie udostępnia);
+- operacje odczytu i zapisu z `io.stat` cgroup, jeżeli host je udostępnia;
+- bajty odebrane i wysłane przez interfejs sieciowy kontenera.
+
+W kampanii modularnej delty są agregowane najpierw wewnątrz stałego bloku 30
+wykonań danego zapytania, a następnie raportowana jest mediana bloków. Nie sumuje
+się I/O wszystkich datasetów jako głównego wyniku, ponieważ taki wynik rósłby
+mechanicznie wraz z długością kampanii.
+
+### 5.5 Modularne bloki i kampanie
+
+Profil BLOCK jest atomową jednostką finalnej walidacji rzeczywistego logu:
+zaczyna na świeżym stosie, wybiera dokładnie jeden dataset, wykonuje całą
+zadeklarowaną rodzinę zapytań, kontrolę semantyczną, round-trip oraz blok
+zasobowy. Pojedyncze zapytanie nie może zostać wybrane jako finalny blok.
+
+Kampania składa kompletne bloki z surowych CSV i ponownie oblicza statystyki.
+Nie łączy gotowych p-wartości ani werdyktów. Składanie odrzuca różne wersje
+protokołu, zapytania, commity, obrazy, limity zasobów, środowiska, nieczysty stan
+Git, brakujące pary, błędy zgodności, niepełne zasoby i powtórzony dataset.
+Złożony artefakt otrzymuje profil raportowy CAMPAIGN; nie można uruchomić go jako
+profilu pomiarowego bez wejściowych bloków.
+Kontrolowane osie rozmiaru i wariantów pozostają pojedynczymi pełnymi
+przebiegami, aby dzień uruchomienia nie został skonfundowany z punktem osi.
+
+Dla LOCAL raport może pokazywać składniki interpreter/Neo4j oraz ich sumę; dla
+REFERENCE cały kontener. Network I/O odzwierciedla również różnicę topologii:
+LOCAL przesyła dane między dwoma kontenerami, a aplikacja i PostgreSQL
+REFERENCE współdzielą kontener. Jest to koszt wdrożonego systemu, nie izolowany
+koszt silnika bazy. Kompletność Network I/O jest wymagana na raportowanej
+granicy aplikacji: kontenerze interpretera dla LOCAL i wspólnym kontenerze
+ProcessM dla REFERENCE. Jeżeli `docker stats` nie zwróci sieci wewnętrznego
+kontenera Neo4j, wiersz pozostaje oznaczony jako częściowy w surowym CSV, lecz
+nie unieważnia dokładnych liczników Block I/O odczytanych z cgroup ani wykresu
+sieci na granicy aplikacji.
+
+### 5.5 Trwałe miejsce na dysku
+
+Finalny pomiar dysku pozostaje osobną sondą. Każdy punkt zaczyna się od świeżych
+wolumenów, zapisuje rozmiar bazowy, importuje ten sam XES, wymusza dostępny dla
+danego silnika mechanizm utrwalenia i zapisuje przyrost. Wynik z narastającego
+stanu głównego benchmarku jest wyłącznie diagnostyczny.
+
+Jeżeli punkt ma otrzymać przedział niepewności, całą operację świeży stack →
+import → pomiar trzeba powtórzyć. Próbki z jednego narastającego wolumenu nie są
+niezależnymi powtórzeniami.
+
+## 6. Statystyka
+
+### 6.1 Porównanie zapytań
+
+Dla każdej poprawnej pary dataset–zapytanie raport podaje:
+
+- medianę 30 czasów LOCAL i REFERENCE;
+- iloraz median `REFERENCE / LOCAL`;
+- 95% przedział ufności ilorazu z bootstrapu, który losuje całe pary czasowe;
+- dwustronny test rangowanych znaków Wilcoxona dla par;
+- p-wartość po korekcie Holma.
+
+Korekta Holma obejmuje wszystkie inferencyjne zapytania wykonane na danym
+datasecie: sześć w seriach rozmiaru i logów rzeczywistych oraz trzy w serii
+wariantów. Baseline nie należy do tej rodziny i nie otrzymuje werdyktu
+istotności.
+
+Interpretacja ilorazu:
+
+- wartość większa od 1 — krótsza mediana LOCAL;
+- wartość mniejsza od 1 — krótsza mediana REFERENCE;
+- wartość 1 — brak różnicy median.
+
+Wynik jest rozstrzygnięty tylko wtedy, gdy skorygowana p-wartość jest mniejsza
+od 0,05 oraz 95% przedział nie obejmuje 1. Raport zawsze pokazuje wielkość efektu
+i przedział; sama istotność statystyczna nie opisuje znaczenia praktycznego.
+
+Repetycje opisują stabilność na jednej maszynie i jednej konfiguracji. Nie są
+próbą losową komputerów ani wersji baz, więc wyniku nie uogólnia się na całą
+populację środowisk.
+
+Stabilność czasowa jest oceniana diagnostycznie. Raportowany efekt
+`mediana(REFERENCE) / mediana(LOCAL)` oblicza się osobno w pierwszej i ostatniej
+jednej trzeciej 30 chronologicznych par; środkowa część nie uczestniczy w tej
+kontroli. Jeżeli kierunkowo niezależny iloraz efektów z obu okien przekracza
+1,10, raport pokazuje jawne ostrzeżenie o dryfie, ale nie usuwa kompletnych par
+z testu ani wykresu. Stały próg 10% nie jest testem statystycznym i przy wielu
+porównaniach arbitralnie odrzucałby także wyniki zachowujące kierunek i duży
+efekt. O wniosku decydują kompletność oraz zgodność semantyczna par, 95% przedział
+ufności, parowany test Wilcoxona i korekta Holma. Nie stosuje się mediany
+ilorazów pojedynczych par: byłby to inny estymand niż raportowany iloraz median
+i przy naprzemiennej kolejności LR/RL reagowałby na dwa pasma efektu kolejności.
+Bezwzględne mediany każdego systemu z obu okien pozostają diagnostyką wspólnego
+dryfu. Baseline nie tworzy hipotezy ani werdyktu: ostrzeżenie o jego dryfie jest
+widoczne, ale punkt pozostaje opisany medianą i IQR bez linii trendu.
+
+### 6.2 Import
+
+Dziesięć importów tworzy pary według numeru repetycji. Raport stosuje ten sam
+iloraz, sparowany bootstrap i test Wilcoxona. Korekta Holma obejmuje datasety
+porównywane w głównej serii rozmiaru. Wyniki logów rzeczywistych i wariantów są
+opisową walidacją pomocniczą, wyraźnie oznaczoną w raporcie.
+
+### 6.3 Czego nie liczymy
+
+- IQR opisuje rozrzut próbek, a nie niepewność mediany; nie jest testem różnicy.
+- p95 nie jest interpretowany przy 30 powtórzeniach.
+- nie dopasowuje się automatycznie potęgowego modelu do każdego zapytania.
+- nie agreguje się wyników do jednego rankingu „który system jest lepszy”.
+- nie tworzy się p-wartości ani CI z gęstych, autokorelowanych próbek pamięci.
+
+## 7. Kontrola poprawności
+
+W każdej ciepłej repetycji porównywane są liczby logów, śladów i zdarzeń.
+Ostatnie odpowiedzi obu systemów są dodatkowo porównywane ścisłym komparatorem
+XES-JSON. Rozjazd nadaje całej parze status `MISMATCH` i wyklucza jej czasy ze
+statystyki, ale zachowuje surowe próbki do diagnozy.
+
+Dodatkowo przed publikacją wyników wymagane są:
+
+- zero ścisłych problemów w szerokim raporcie kompatybilności;
+- poprawny round-trip XES dla mierzonych datasetów;
+- zielony pełny zestaw testów, w tym testy portowane z ProcessM;
+- brak błędów importu, OOM, restartów i brakujących procesów JVM.
+
+## 8. Środowisko i kolejność
+
+Oba systemy działają w kontenerach na tym samym hoście i otrzymują równy,
+skończony budżet pamięci całej aplikacji bez swapu. Żądania nie wykonują się
+równocześnie. Dokładne wersje, image ID, commit, limity i sprzęt trafiają do
+`environment.json`.
+
+REFERENCE otrzymuje 6144 MiB we wspólnym kontenerze aplikacji i PostgreSQL, a
+LOCAL łącznie 6144 MiB: po 3072 MiB dla interpretera i Neo4j. Oficjalny launcher
+REFERENCE przeznacza połowę limitu kontenera na stertę JVM, czyli 3072 MiB. Po
+stronie LOCAL stałe sufity 2304 MiB dla interpretera i 768 MiB dla Neo4j dają
+taki sam łączny sufit stert 3072 MiB; pozostała pamięć obejmuje PostgreSQL albo
+page cache i pamięć natywną Neo4j. Skrypt przygotowania odczytuje efektywne
+parametry `-Xmx` z uruchomionych procesów i odrzuca asymetrię — sam tekst Compose
+nie jest dowodem. Kontenery nie mogą korzystać ze swapu
+(`memswap_limit = mem_limit`). Docker VM ma około 15,6 GiB RAM; efektywna pamięć
+VM oraz wszystkie limity są zapisywane w artefaktach przebiegu.
+
+Neo4j ma limity pamięci transakcji per baza i globalnie równe 1024 MiB. Wartość 512 MiB okazała się
+sztuczną barierą dla kontrolnego eksportu całego logu 1 mln zdarzeń i Road
+Traffic, mimo że zwykłe zapytania działały poprawnie. Podniesienie limitu nie
+zmienia cgroup ani łącznego budżetu LOCAL; pozwala jedynie wykorzystać dostępną
+pamięć kontenera podczas pełnego round-trip.
+
+Datasety są wykonywane w jednej stałej kolejności zapisanej w konfiguracji.
+Nie ma wariantów declared/reversed/random. Krótkookresowy dryf ogranicza
+parowanie i naprzemienna kolejność systemów wewnątrz każdej repetycji.
+
+Przebieg finalny wymaga czystego commita i świeżych wolumenów. Każdy BLOCK
+wymaga nowego jednorazowego dowodu przygotowania stosu. Pilot służy
+wyłącznie sprawdzeniu protokołu i nie jest łączony z wynikiem finalnym. Po
+pilocie workload, liczby repetycji i reguły wnioskowania są zamrażane.
+
+## 9. Raport
+
+Główny raport ma odpowiadać na pytania, a nie odtwarzać całe CSV. Pełne dane
+pozostają w załączniku. Protokół 23 generuje dziesięć figur, w tym osobny wykres
+efektów i mapę cieplną dla rodziny BPI Challenge; raport historycznego protokołu
+22 zachowuje osiem figur.
+
+Każda sekcja wynikowa zawiera kolejno:
+
+1. pytanie;
+2. uzasadnienie wyboru danych i zapytania;
+3. definicję miary;
+4. instrukcję czytania wykresu;
+5. wynik;
+6. ostrożny wniosek i jego ograniczenia.
+
+Główne wykresy używają osi liniowych. Dla pojedynczych oszacowań kropka oznacza
+iloraz median, pozioma kreska 95% przedział ufności, a linia przy 1 brak różnicy.
+Chmura surowych punktów może ilustrować najwyżej jeden wynik wyraźny i jeden
+nierozstrzygnięty; nie zastępuje wykresu efektu ani testu.
+
+Nazwy kodowe pojawiają się dopiero po nazwie opisowej. Każda tabela i figura
+podaje jednostkę, liczbę powtórzeń, definicję efektu i zakres korekty p-wartości.
+Fingerprinty, pełne środowisko, wszystkie pary i diagnostyka trafiają do
+artefaktów lub załącznika, nie do głównej narracji.
+
+## 10. Artefakty
+
+Minimalny komplet nowego protokołu obejmuje:
+
+- `datasets.csv`, `queries.csv`;
+- `import-results.csv`, `query-results.csv`, `query-summary.csv`;
+- `comparison-results.csv` — efekt, 95% CI, surowe i skorygowane p per para;
+- `container-io.csv` — surowe delty Block/Network I/O i operacji;
+- `memory-results.csv`, `memory-summary.csv`;
+- `roundtrip-results.csv`, `cleanup-results.csv`;
+- `environment.json`, `stack-preparation.json`;
+- `benchmark-report.md` — krótki raport główny;
+- `benchmark-appendix.md` — pełne tabele;
+- `benchmark-report.html` i dziesięć figur protokołu 23 po renderowaniu.
+
+Wyniki historycznych protokołów 10, 11 i 12 pozostają niezmienionymi dowodami
+historycznymi. Nie wolno nadać im wersji 13 przez samo ponowne wygenerowanie
+raportu.

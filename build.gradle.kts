@@ -134,18 +134,85 @@ tasks.register<JavaExec>("runBenchmarkFull") {
     args("full")
 }
 
-tasks.register<JavaExec>("runBenchmarkScaling") {
+tasks.register<JavaExec>("runBenchmarkBlock") {
     group = "benchmark"
-    description = "Runs the common-domain size ladder (10^4..2*10^5 events) for Q2 diagnostics."
+    description = "Runs one thesis-grade real-dataset block (-Pdataset=<name>) for later campaign assembly."
     classpath = benchmarkSourceSet.runtimeClasspath
     mainClass.set("com.processm.processminterpreter.benchmark.BenchmarkRunnerKt")
-    args("scaling")
+    args("block")
+    doFirst {
+        val dataset = providers.gradleProperty("dataset").orNull
+            ?: error("Missing -Pdataset=<benchmark dataset name>")
+        environment("BENCHMARK_DATASET_FILTER", dataset)
+    }
+}
+
+tasks.register<JavaExec>("runBenchmarkSizeCampaign") {
+    group = "benchmark"
+    description = "Runs the complete controlled size-scaling series as one FULL block."
+    classpath = benchmarkSourceSet.runtimeClasspath
+    mainClass.set("com.processm.processminterpreter.benchmark.BenchmarkRunnerKt")
+    args("full")
+    environment("BENCHMARK_SERIES_FILTER", "size-scaling")
+}
+
+tasks.register<JavaExec>("runBenchmarkVariantCampaign") {
+    group = "benchmark"
+    description = "Runs the complete controlled variant-scaling series as one FULL block."
+    classpath = benchmarkSourceSet.runtimeClasspath
+    mainClass.set("com.processm.processminterpreter.benchmark.BenchmarkRunnerKt")
+    args("full")
+    environment("BENCHMARK_SERIES_FILTER", "variant-scaling")
+}
+
+tasks.register<JavaExec>("runBenchmarkPilotDataset") {
+    group = "benchmark"
+    description = "Runs a non-inferential pilot for one FULL dataset (-Pdataset=<name>)."
+    classpath = benchmarkSourceSet.runtimeClasspath
+    mainClass.set("com.processm.processminterpreter.benchmark.BenchmarkRunnerKt")
+    args("pilot")
+    doFirst {
+        val dataset = providers.gradleProperty("dataset").orNull
+            ?: error("Missing -Pdataset=<benchmark dataset name>")
+        environment("BENCHMARK_DATASET_FILTER", dataset)
+    }
+}
+
+tasks.register<JavaExec>("assembleBenchmarkCampaign") {
+    group = "benchmark"
+    description = "Validates complete BLOCK runs and re-derives one campaign report from their raw CSVs."
+    classpath = benchmarkSourceSet.runtimeClasspath
+    mainClass.set("com.processm.processminterpreter.benchmark.BenchmarkRunnerKt")
+    argumentProviders.add {
+        val output = providers.gradleProperty("campaignOut").orNull
+            ?: error("Missing -PcampaignOut=<empty output directory>")
+        val runs = providers.gradleProperty("campaignRuns").orNull
+            ?.split(',')?.map(String::trim)?.filter(String::isNotEmpty).orEmpty()
+        require(runs.isNotEmpty()) { "Missing -PcampaignRuns=<run1,run2,...>" }
+        listOf("campaign", output) + runs
+    }
+}
+
+tasks.register<JavaExec>("runBenchmarkPilot") {
+    group = "benchmark"
+    description = "Runs selected FULL datasets with diagnostic, non-inferential repetition counts."
+    classpath = benchmarkSourceSet.runtimeClasspath
+    mainClass.set("com.processm.processminterpreter.benchmark.BenchmarkRunnerKt")
+    args("pilot")
+}
+
+tasks.register<JavaExec>("runBenchmarkDiagnostic") {
+    group = "benchmark"
+    description = "Checks temporal stability on size-1k/5k/20k before the full thesis benchmark."
+    classpath = benchmarkSourceSet.runtimeClasspath
+    mainClass.set("com.processm.processminterpreter.benchmark.BenchmarkRunnerKt")
+    args("diagnostic")
 }
 
 tasks.register<JavaExec>("rebuildBenchmarkReport") {
     group = "benchmark"
     description =
-        "Re-derives thesis-report.md/.tex for an existing run from its CSVs " +
+        "Re-derives the protocol-appropriate report for an existing run from its CSVs " +
         "(-PrunDir=tmp/benchmark-results/<runId>). No containers needed."
     classpath = benchmarkSourceSet.runtimeClasspath
     mainClass.set("com.processm.processminterpreter.benchmark.BenchmarkRunnerKt")

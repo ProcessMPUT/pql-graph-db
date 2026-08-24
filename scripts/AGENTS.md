@@ -37,20 +37,27 @@ consistent with each other. Use it rather than re-deriving:
   by the report, not run directly, hence the importable underscore name.
 - `run-compatibility-report.py`: orchestrate matrix/dropdown/discovery reports.
 - `benchmarks/plot-benchmark-results.py`: create SVG plots from benchmark
-  artifacts and embed them into the run's `thesis-report.md` and `.tex`.
-- `benchmarks/render-report-html.py`: fold the current
-  `thesis-report-series.md` (or explicitly diagnostic single-run report) and
+  artifacts and embed them into historical protocol-10/11 reports.
+- `benchmarks/plot-readable-benchmark-results.py`: create ten linear-scale SVG
+  figures from protocol-23 CSVs, including the BPI forest/heatmap, while
+  retaining the historical eight-figure protocol-22 contract. It never changes
+  raw data or the Markdown narrative.
+- `benchmarks/render-report-html.py`: fold the current protocol's
+  `benchmark-report.md`, or a historical `thesis-report-series.md`, and its
   charts into one self-contained HTML file.
 - `benchmarks/prepare-benchmark-stack.py`: explicitly destructive setup for a
   clean symmetric benchmark stack; builds the current `bootJar` once per final
   series, then accepts only an exact commit-labelled LOCAL image ID for later
   fresh-volume blocks and isolated storage points; starts REFERENCE
   without fixture seeding through the benchmark Compose resource override, proves
-  equal finite system-level memory budgets and zero datastores in both APIs, then
+  equal finite system-level memory budgets, equal aggregate effective JVM heap
+  ceilings and zero datastores in both APIs, then
+  verifies the live per-database and DBMS-wide Neo4j transaction-memory limits, and
   writes the single-use fresh-volume/image-ID/resource marker consumed by
   `BenchmarkRunner`.
-- `benchmarks/compare-runs.py`: validates at least three counterbalanced FULL
-  runs and estimates conclusions from all blocks. The anchor run is only the
+- `benchmarks/compare-runs.py`: historical protocol-10/11 tool which validates
+  at least three counterbalanced FULL runs and estimates conclusions from all
+  blocks. The anchor run is only the
   output location for `repeatability.*`, `series-*.csv`, the combined report,
   `report-provenance.json`, and `thesis-tables-series.tex`. Descriptive
   magnitude-stability and non-preregistered scaling diagnostics must remain
@@ -61,6 +68,8 @@ consistent with each other. Use it rather than re-deriving:
   implementation is incorrect.
 - `benchmarks/test_compare_runs.py`: standard-library end-to-end contract test
   for the three-block aggregator, including its rejection path.
+- `benchmarks/test_plot_readable_results.py`: standard-library contract test
+  for the current eight-figure generator.
 - `benchmarks/measure-storage-scaling.py`: isolated storage probe with a fresh
   Compose stack per dataset (writes `storage-scaling.csv`).
 
@@ -130,6 +139,12 @@ After changing the cross-run aggregator, run:
 
 ```bash
 python3 -m unittest scripts/benchmarks/test_compare_runs.py -v
+```
+
+After changing the current protocol-aware chart or HTML path, run:
+
+```bash
+python3 -m unittest scripts/benchmarks/test_plot_readable_results.py -v
 ```
 
 After changing ProcessM initialization, rebuild a fresh stack and verify every

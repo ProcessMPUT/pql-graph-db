@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Path
 import kotlin.io.path.readLines
+import kotlin.io.path.readText
 
 class BenchmarkResultsWriterTest {
     @Test
@@ -91,12 +92,14 @@ class BenchmarkResultsWriterTest {
         assertEquals("local,trace-100,hierarchyWindow,0,cold,0.123,OK,456,1,10,100,", queryLines[1])
 
         val memoryLines = tempDir.resolve("memory-results.csv").readLines()
-        assertEquals("timestamp,phase,component,bytes", memoryLines[0])
-        assertEquals("2026-07-02T10:00:00Z,idle,processm-neo4j,1073741824", memoryLines[1])
+        assertEquals("timestamp,phase,datasetName,operationLabel,component,bytes", memoryLines[0])
+        assertEquals("2026-07-02T10:00:00Z,idle,,,processm-neo4j,1073741824", memoryLines[1])
 
         val summaryLines = tempDir.resolve("memory-summary.csv").readLines()
-        assertEquals("component,phase,medianBytes,peakBytes", summaryLines[0])
-        assertEquals("processm-neo4j,idle,1073741824,2147483648", summaryLines[1])
+        assertEquals("datasetName,operationLabel,component,phase,medianBytes,peakBytes", summaryLines[0])
+        assertEquals(",,processm-neo4j,idle,1073741824,2147483648", summaryLines[1])
+        assertTrue(tempDir.resolve("environment.json").readText()
+            .contains("\"localAppContainer\" : \"processm-interpreter\""))
 
         val markdown = tempDir.resolve("summary.md").readLines()
         assertTrue(markdown.contains("- Query samples: 3, errors: 0, mismatch samples: 2 across 1 (dataset, query) pairs"))

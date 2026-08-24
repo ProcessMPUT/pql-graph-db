@@ -1,49 +1,33 @@
 {
   "smoke": [
-    { "type": "SYNTHETIC", "name": "trace-100", "series": "trace-scaling", "traces": 100, "eventsPerTrace": 10, "attributesPerEvent": 5 },
-    { "type": "SYNTHETIC", "name": "trace-500", "series": "trace-scaling", "traces": 500, "eventsPerTrace": 10, "attributesPerEvent": 5 },
-    { "type": "SYNTHETIC", "name": "event-5", "series": "event-scaling", "traces": 100, "eventsPerTrace": 5, "attributesPerEvent": 5 },
-    { "type": "SYNTHETIC", "name": "event-10", "series": "event-scaling", "traces": 100, "eventsPerTrace": 10, "attributesPerEvent": 5 },
-    { "type": "SYNTHETIC", "name": "attr-1", "series": "attribute-scaling", "traces": 100, "eventsPerTrace": 10, "attributesPerEvent": 1 },
-    { "type": "SYNTHETIC", "name": "attr-5", "series": "attribute-scaling", "traces": 100, "eventsPerTrace": 10, "attributesPerEvent": 5 },
-    { "type": "SYNTHETIC", "name": "shape-100x100", "series": "shape-scaling", "traces": 100, "eventsPerTrace": 100, "attributesPerEvent": 5 },
-    { "type": "REAL", "name": "real-sample-process", "series": "real-validation", "resourcePath": "src/main/resources/logs/sample_process.xes" }
+    { "type": "SYNTHETIC", "name": "size-1k", "series": "size-scaling", "traces": 100, "eventsPerTrace": 10, "attributesPerEvent": 5 },
+    { "type": "SYNTHETIC", "name": "variants-100", "series": "variant-scaling", "traces": 2000, "eventsPerTrace": 50, "attributesPerEvent": 5, "activityCount": 48, "variantCount": 100 },
+    { "type": "FIXTURE", "name": "fixture-sample-process", "series": "smoke-fixture", "resourcePath": "src/main/resources/logs/sample_process.xes" }
   ],
   "full": [
-    { "type": "SYNTHETIC", "name": "trace-100", "series": "trace-scaling", "traces": 100, "eventsPerTrace": 10, "attributesPerEvent": 5 },
-    { "type": "SYNTHETIC", "name": "trace-500", "series": "trace-scaling", "traces": 500, "eventsPerTrace": 10, "attributesPerEvent": 5 },
-    { "type": "SYNTHETIC", "name": "trace-2000", "series": "trace-scaling", "traces": 2000, "eventsPerTrace": 10, "attributesPerEvent": 5 },
-    { "type": "SYNTHETIC", "name": "trace-10000", "series": "trace-scaling", "traces": 10000, "eventsPerTrace": 10, "attributesPerEvent": 5 },
-    { "type": "SYNTHETIC", "name": "trace-20000", "series": "trace-scaling", "traces": 20000, "eventsPerTrace": 10, "attributesPerEvent": 5 },
+    { "type": "SYNTHETIC", "name": "size-1k", "series": "size-scaling", "traces": 100, "eventsPerTrace": 10, "attributesPerEvent": 5 },
+    { "type": "SYNTHETIC", "name": "size-5k", "series": "size-scaling", "traces": 500, "eventsPerTrace": 10, "attributesPerEvent": 5 },
+    { "type": "SYNTHETIC", "name": "size-20k", "series": "size-scaling", "traces": 2000, "eventsPerTrace": 10, "attributesPerEvent": 5 },
+    { "type": "SYNTHETIC", "name": "size-100k", "series": "size-scaling", "traces": 10000, "eventsPerTrace": 10, "attributesPerEvent": 5 },
+    { "type": "SYNTHETIC", "name": "size-200k", "series": "size-scaling", "traces": 20000, "eventsPerTrace": 10, "attributesPerEvent": 5 },
+    { "type": "SYNTHETIC", "name": "size-500k", "series": "size-scaling", "traces": 50000, "eventsPerTrace": 10, "attributesPerEvent": 5 },
+    { "type": "SYNTHETIC", "name": "size-1m", "series": "size-scaling", "traces": 100000, "eventsPerTrace": 10, "attributesPerEvent": 5 },
 
-    { "type": "SYNTHETIC", "name": "event-5", "series": "event-scaling", "traces": 100, "eventsPerTrace": 5, "attributesPerEvent": 5 },
-    { "type": "SYNTHETIC", "name": "event-10", "series": "event-scaling", "traces": 100, "eventsPerTrace": 10, "attributesPerEvent": 5 },
-    { "type": "SYNTHETIC", "name": "event-50", "series": "event-scaling", "traces": 100, "eventsPerTrace": 50, "attributesPerEvent": 5 },
-    { "type": "SYNTHETIC", "name": "event-200", "series": "event-scaling", "traces": 100, "eventsPerTrace": 200, "attributesPerEvent": 5 },
-    { "type": "SYNTHETIC", "name": "event-1000", "series": "event-scaling", "traces": 100, "eventsPerTrace": 1000, "attributesPerEvent": 5 },
+    { "type": "SYNTHETIC", "name": "variants-1", "series": "variant-scaling", "traces": 2000, "eventsPerTrace": 50, "attributesPerEvent": 5, "activityCount": 48, "variantCount": 1 },
+    { "type": "SYNTHETIC", "name": "variants-100", "series": "variant-scaling", "traces": 2000, "eventsPerTrace": 50, "attributesPerEvent": 5, "activityCount": 48, "variantCount": 100 },
+    { "type": "SYNTHETIC", "name": "variants-2000", "series": "variant-scaling", "traces": 2000, "eventsPerTrace": 50, "attributesPerEvent": 5, "activityCount": 48, "variantCount": 2000 },
 
-    { "type": "SYNTHETIC", "name": "attr-1", "series": "attribute-scaling", "traces": 100, "eventsPerTrace": 10, "attributesPerEvent": 1 },
-    { "type": "SYNTHETIC", "name": "attr-2", "series": "attribute-scaling", "traces": 100, "eventsPerTrace": 10, "attributesPerEvent": 2 },
-    { "type": "SYNTHETIC", "name": "attr-5", "series": "attribute-scaling", "traces": 100, "eventsPerTrace": 10, "attributesPerEvent": 5 },
-    { "type": "SYNTHETIC", "name": "attr-10", "series": "attribute-scaling", "traces": 100, "eventsPerTrace": 10, "attributesPerEvent": 10 },
-    { "type": "SYNTHETIC", "name": "attr-20", "series": "attribute-scaling", "traces": 100, "eventsPerTrace": 10, "attributesPerEvent": 20 },
-    { "type": "SYNTHETIC", "name": "attr-50", "series": "attribute-scaling", "traces": 100, "eventsPerTrace": 10, "attributesPerEvent": 50 },
-
-    { "type": "SYNTHETIC", "name": "shape-1000x10", "series": "shape-scaling", "traces": 1000, "eventsPerTrace": 10, "attributesPerEvent": 5 },
-    { "type": "SYNTHETIC", "name": "shape-500x20", "series": "shape-scaling", "traces": 500, "eventsPerTrace": 20, "attributesPerEvent": 5 },
-    { "type": "SYNTHETIC", "name": "shape-100x100", "series": "shape-scaling", "traces": 100, "eventsPerTrace": 100, "attributesPerEvent": 5 },
-    { "type": "SYNTHETIC", "name": "shape-20x500", "series": "shape-scaling", "traces": 20, "eventsPerTrace": 500, "attributesPerEvent": 5 },
-    { "type": "SYNTHETIC", "name": "shape-10x1000", "series": "shape-scaling", "traces": 10, "eventsPerTrace": 1000, "attributesPerEvent": 5 },
-
-    { "type": "REAL", "name": "real-sample-process", "series": "real-validation", "resourcePath": "src/main/resources/logs/sample_process.xes" },
-    { "type": "REAL", "name": "real-journal-review", "series": "real-validation", "resourcePath": "src/main/resources/logs/JournalReview.xes.gz" },
-    { "type": "REAL", "name": "real-sepsis", "series": "real-validation", "resourcePath": "src/main/resources/logs/Sepsis.xes.gz" },
-    { "type": "REAL", "name": "real-hospital", "series": "real-validation", "resourcePath": "src/main/resources/logs/Hospital_log.xes.gz" }
-  ],
-  "scaling": [
-    { "type": "SYNTHETIC", "name": "trace-1000", "series": "trace-scaling", "traces": 1000, "eventsPerTrace": 10, "attributesPerEvent": 5 },
-    { "type": "SYNTHETIC", "name": "trace-5000", "series": "trace-scaling", "traces": 5000, "eventsPerTrace": 10, "attributesPerEvent": 5 },
-    { "type": "SYNTHETIC", "name": "trace-10000", "series": "trace-scaling", "traces": 10000, "eventsPerTrace": 10, "attributesPerEvent": 5 },
-    { "type": "SYNTHETIC", "name": "trace-20000", "series": "trace-scaling", "traces": 20000, "eventsPerTrace": 10, "attributesPerEvent": 5 }
+    { "type": "REAL", "name": "real-sepsis", "series": "real-validation", "resourcePath": "src/main/resources/logs/Sepsis.xes.gz", "sourceDoi": "10.4121/uuid:915d2bfb-7e84-49ad-a286-dc35f063a460" },
+    { "type": "REAL", "name": "real-bpic15-1", "series": "real-validation", "resourcePath": "src/main/resources/logs/BPIC15_1.xes.gz", "sourceDoi": "10.4121/uuid:a0addfda-2044-4541-a450-fdcc9fe16d17", "collection": "bpi-challenge", "collectionOrder": 2015 },
+    { "type": "REAL", "name": "real-bpic15-2", "series": "real-validation", "resourcePath": "src/main/resources/logs/BPIC15_2.xes.gz", "sourceDoi": "10.4121/uuid:63a8435a-077d-4ece-97cd-2c76d394d99c", "collection": "bpi-challenge", "collectionOrder": 2015 },
+    { "type": "REAL", "name": "real-bpic15-3", "series": "real-validation", "resourcePath": "src/main/resources/logs/BPIC15_3.xes.gz", "sourceDoi": "10.4121/uuid:ed445cdd-27d-4d77-a1f7-59fe7360cfbe", "collection": "bpi-challenge", "collectionOrder": 2015 },
+    { "type": "REAL", "name": "real-bpic15-4", "series": "real-validation", "resourcePath": "src/main/resources/logs/BPIC15_4.xes.gz", "sourceDoi": "10.4121/uuid:679b11cf-47cd-459e-a6de-9ca614e25985", "collection": "bpi-challenge", "collectionOrder": 2015 },
+    { "type": "REAL", "name": "real-bpic15-5", "series": "real-validation", "resourcePath": "src/main/resources/logs/BPIC15_5.xes.gz", "sourceDoi": "10.4121/uuid:b32c6fe5-f212-4286-9774-58dd53511cf8", "collection": "bpi-challenge", "collectionOrder": 2015 },
+    { "type": "REAL", "name": "real-hospital", "series": "real-validation", "resourcePath": "src/main/resources/logs/Hospital_log.xes.gz", "sourceDoi": "10.4121/uuid:d9769f3d-0ab0-4fb8-803b-0d1120ffcf54", "collection": "bpi-challenge", "collectionOrder": 2011 },
+    { "type": "REAL", "name": "real-bpic12", "series": "real-validation", "resourcePath": "src/main/resources/logs/BPIC12.xes.gz", "sourceDoi": "10.4121/uuid:3926db30-f712-4394-aebc-75976070e91f", "collection": "bpi-challenge", "collectionOrder": 2012 },
+    { "type": "REAL", "name": "real-bpic13-incidents", "series": "real-validation", "resourcePath": "src/main/resources/logs/bpi_Challenge_2013_incidents.xes.gz", "sourceDoi": "10.4121/uuid:500573e6-accc-4b0c-9576-aa5468b10cee", "collection": "bpi-challenge", "collectionOrder": 2013 },
+    { "type": "REAL", "name": "real-bpic13-closed-problems", "series": "real-validation", "resourcePath": "src/main/resources/logs/bpi_challenge_2013_closed_problems.xes.gz", "sourceDoi": "10.4121/uuid:c2c3b154-ab26-4b31-a0e8-8f2350ddac11", "collection": "bpi-challenge", "collectionOrder": 2013 },
+    { "type": "REAL", "name": "real-bpic13-open-problems", "series": "real-validation", "resourcePath": "src/main/resources/logs/bpi_challenge_2013_open_problems_processm.xes.gz", "sourceDoi": "10.4121/uuid:3537c19d-6c64-4b1d-815d-915ab0e479da", "collection": "bpi-challenge", "collectionOrder": 2013 },
+    { "type": "REAL", "name": "real-road-traffic", "series": "real-validation", "resourcePath": "src/main/resources/logs/Road_Traffic_Fine_Management_Process.xes.gz", "sourceDoi": "10.4121/uuid:270fd440-1057-4fb9-89a9-b699b47990f5" }
   ]
 }

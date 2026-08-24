@@ -1,25 +1,37 @@
 # Thesis benchmark resource policy.
 #
-# The Docker Desktop VM available on the measurement host exposes 7.75 GiB.  The
+# The Docker Desktop VM available on the measurement host exposes about 15.60 GiB. The
 # ordinary development stack deliberately has no cgroup limits, but that lets the
 # three JVMs advertise more than 14 GiB of heap in aggregate and the REFERENCE JVM
 # can be killed by the VM OOM controller near the end of a FULL run.  Thesis runs
-# use equal 3.25 GiB budgets per compared application, with 1.25 GiB left for the
-# Docker VM/kernel at the currently recorded VM size.
+# use equal 6 GiB budgets per compared application, leaving more than 3 GiB for the
+# Docker VM/kernel. Both systems receive the same 3 GiB aggregate JVM heap ceiling;
+# the remaining cgroup space is database/native/page-cache headroom for instrumented
+# 1m-event runs.
 services:
   neo4j:
-    mem_limit: 2048m
-    memswap_limit: 2048m
+    mem_limit: 3072m
+    memswap_limit: 3072m
     environment:
       - NEO4J_server_memory_heap_initial__size=512M
       - NEO4J_server_memory_heap_max__size=768M
       - NEO4J_server_memory_pagecache_size=512M
-      - NEO4J_db_memory_transaction_total_max=512M
+      # Full semantic round-trip exports scan the complete million-event log.
+      # 512 MiB rejected that correctness check before comparison; 1 GiB stays
+      # inside the 3072 MiB Neo4j cgroup budget.
+      - NEO4J_db_memory_transaction_total_max=1024M
+      - NEO4J_dbms_memory_transaction_total_max=1024M
 
   app:
-    mem_limit: 1280m
-    memswap_limit: 1280m
+    mem_limit: 3072m
+    memswap_limit: 3072m
+    environment:
+      # LOCAL has two JVMs: 2304 MiB here plus Neo4j's 768 MiB heap, giving the
+      # same 3072 MiB aggregate heap ceiling as REFERENCE.
+      - JVM_HEAP_OPTS=-Xmx2304m
 
   processm:
-    mem_limit: 3328m
-    memswap_limit: 3328m
+    mem_limit: 6144m
+    memswap_limit: 6144m
+    # The stock ProcessM launcher explicitly assigns half of this cgroup to its
+    # JVM (`-Xmx3145728k`); the prepare script verifies the effective command line.

@@ -8,6 +8,15 @@ import org.junit.jupiter.api.Test
 
 class QueryExecutionPlanTest {
     @Test
+    fun `every protocol query parses`() {
+        val parser = AntlrPqlParser()
+
+        BenchmarkConfig.load(BenchmarkProfile.FULL).queries.forEach { spec ->
+            parser.parse(spec.query)
+        }
+    }
+
+    @Test
     fun `standard attribute ordering query has four explicit tie breakers`() {
         val spec = BenchmarkConfig.load(BenchmarkProfile.FULL).queries.single {
             it.label == "standardAttributesOrder"
@@ -20,47 +29,73 @@ class QueryExecutionPlanTest {
     @Test
     fun `query scaling eligibility is declared per varied dataset series`() {
         val specs = BenchmarkConfig.load(BenchmarkProfile.FULL).queries.associateBy { it.label }
-        val allowed = setOf("trace-scaling", "event-scaling", "attribute-scaling", "shape-scaling")
+        val allowed = setOf("size-scaling", "variant-scaling")
 
         assertTrue(specs.values.flatMap { it.scalingSeries }.all { it in allowed })
+        assertEquals(4, specs.values.count { it.role == BenchmarkQueryRole.PRIMARY })
+        assertEquals(2, specs.values.count { it.role == BenchmarkQueryRole.CONTROL })
+        assertEquals(1, specs.values.count { it.role == BenchmarkQueryRole.BASELINE })
+        assertTrue(specs.getValue("standardAttributesOrder").isMeasuredFor("size-scaling"))
+        assertTrue(!specs.getValue("standardAttributesOrder").isMeasuredFor("variant-scaling"))
+        assertTrue(specs.getValue("hierarchyCardinality").isMeasuredFor("size-scaling"))
+        assertTrue(specs.getValue("hierarchyCardinality").isMeasuredFor("real-validation"))
+        assertTrue(!specs.getValue("hierarchyCardinality").isMeasuredFor("variant-scaling"))
+        assertEquals(7, specs.values.count { it.isMeasuredFor("size-scaling") })
+        assertEquals(4, specs.values.count { it.isMeasuredFor("variant-scaling") })
+        assertEquals(7, specs.values.count { it.isMeasuredFor("real-validation") })
+    }
+
+    @Test
+    fun `full profile retains its design under modular protocol 23`() {
+        val config = BenchmarkConfig.load(BenchmarkProfile.FULL)
+        assertEquals(22, config.datasets.size)
+        assertEquals(7, config.datasets.count { it.series == "size-scaling" })
+        assertEquals(3, config.datasets.count { it.series == "variant-scaling" })
+        assertEquals(12, config.datasets.count { it.series == "real-validation" })
+        assertEquals(10, config.datasets.count { it.collection == "bpi-challenge" })
+        assertEquals(7, config.queries.size)
+        assertEquals(30, BenchmarkProfile.FULL.repetitions)
+        assertEquals(10, BenchmarkProfile.FULL.importRepetitions)
+        assertEquals(40, BenchmarkProfile.FULL.warmups)
+        assertEquals(23, CURRENT_BENCHMARK_PROTOCOL_VERSION)
+    }
+
+    @Test
+    fun `block profile keeps full query evidence but uses one setup import`() {
+        val config = BenchmarkConfig.load(BenchmarkProfile.BLOCK)
+
+        assertEquals(BenchmarkConfig.load(BenchmarkProfile.FULL).datasets, config.datasets)
+        assertEquals(7, config.queries.size)
+        assertEquals(40, BenchmarkProfile.BLOCK.warmups)
+        assertEquals(30, BenchmarkProfile.BLOCK.repetitions)
+        assertEquals(1, BenchmarkProfile.BLOCK.importRepetitions)
+    }
+
+    @Test
+    fun `diagnostic isolates small size stationarity workload`() {
+        val config = BenchmarkConfig.load(BenchmarkProfile.DIAGNOSTIC)
+
+        assertEquals(listOf("size-1k", "size-5k", "size-20k"), config.datasets.map { it.name })
+        assertEquals(listOf("minimalWindow", "hierarchyWindow"), config.queries.map { it.label })
+        assertEquals(40, BenchmarkProfile.DIAGNOSTIC.warmups)
+        assertEquals(30, BenchmarkProfile.DIAGNOSTIC.repetitions)
+        assertEquals(1, BenchmarkProfile.DIAGNOSTIC.importRepetitions)
+    }
+
+    @Test
+    fun `pilot uses full datasets with non inferential repetition counts`() {
         assertEquals(
-            listOf("event-scaling", "shape-scaling"),
-            specs.getValue("timestampAggregates").scalingSeries,
-            "a trace-windowed aggregate still reads every event of each retained trace",
+            BenchmarkConfig.load(BenchmarkProfile.FULL).datasets,
+            BenchmarkConfig.load(BenchmarkProfile.PILOT).datasets,
         )
-        assertTrue("attribute-scaling" !in specs.getValue("hoistedGroup").scalingSeries)
-        assertTrue("attribute-scaling" in specs.getValue("absentAttrScan").scalingSeries)
-        assertTrue(specs.getValue("hierarchyWindow").scalingSeries.isEmpty())
+        assertEquals(3, BenchmarkProfile.PILOT.repetitions)
+        assertEquals(1, BenchmarkProfile.PILOT.importRepetitions)
     }
 
     @Test
-    fun `reversed odd dataset list flips which system imports each dataset first`() {
-        val count = 25
-        repeat(count) { declaredIndex ->
-            val reversedIndex = count - 1 - declaredIndex
-            val declaredStart = counterbalancedImportRound(declaredIndex, count, DatasetOrder.DECLARED) % 2
-            val reversedStart = counterbalancedImportRound(reversedIndex, count, DatasetOrder.REVERSED) % 2
-            assertEquals(1 - declaredStart, reversedStart)
-        }
-    }
-
-    @Test
-    fun `reversal alone flips import order for an even dataset list`() {
-        val count = 24
-        repeat(count) { declaredIndex ->
-            val reversedIndex = count - 1 - declaredIndex
-            val declaredStart = counterbalancedImportRound(declaredIndex, count, DatasetOrder.DECLARED) % 2
-            val reversedStart = counterbalancedImportRound(reversedIndex, count, DatasetOrder.REVERSED) % 2
-            assertEquals(1 - declaredStart, reversedStart)
-        }
-    }
-
-    @Test
-    fun `plan runs cold first then interleaved warmups then interleaved repetitions`() {
+    fun `plan runs interleaved warmups then paired repetitions`() {
         val plan = buildQueryExecutionPlan(systemCount = 2, warmups = 2, repetitions = 3)
         val expected = listOf(
-            QueryExecutionStep(0, QueryStepKind.COLD, run = 0),
-            QueryExecutionStep(1, QueryStepKind.COLD, run = 0),
             QueryExecutionStep(0, QueryStepKind.WARMUP, run = 0),
             QueryExecutionStep(1, QueryStepKind.WARMUP, run = 0),
             QueryExecutionStep(1, QueryStepKind.WARMUP, run = 0),
@@ -76,11 +111,10 @@ class QueryExecutionPlanTest {
     }
 
     @Test
-    fun `single system plan keeps cold before warmups and sequential repetitions`() {
+    fun `single system plan keeps warmups before sequential repetitions`() {
         val plan = buildQueryExecutionPlan(systemCount = 1, warmups = 1, repetitions = 2)
         assertEquals(
             listOf(
-                QueryExecutionStep(0, QueryStepKind.COLD, run = 0),
                 QueryExecutionStep(0, QueryStepKind.WARMUP, run = 0),
                 QueryExecutionStep(0, QueryStepKind.MEASURED, run = 1),
                 QueryExecutionStep(0, QueryStepKind.MEASURED, run = 2),
@@ -94,14 +128,14 @@ class QueryExecutionPlanTest {
         val plan = buildQueryExecutionPlan(systemCount = 2, warmups = 0, repetitions = 5)
         val measured = plan.filter { it.kind == QueryStepKind.MEASURED }
         assertEquals(listOf(0, 1, 1, 0, 0, 1, 1, 0, 0, 1), measured.map { it.systemIndex })
-        assertTrue(plan.takeWhile { it.kind == QueryStepKind.COLD }.size == 2, "cold steps must come first")
+        assertTrue(plan.all { it.kind == QueryStepKind.MEASURED })
     }
 
     @Test
     fun `pair can start with the second system`() {
         val plan = buildQueryExecutionPlan(systemCount = 2, warmups = 1, repetitions = 2, initialSystemIndex = 1)
         assertEquals(
-            listOf(1, 0, 1, 0, 1, 0, 0, 1),
+            listOf(1, 0, 1, 0, 0, 1),
             plan.map { it.systemIndex },
         )
     }

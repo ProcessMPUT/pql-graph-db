@@ -15,9 +15,12 @@ from __future__ import annotations
 
 from pathlib import Path
 import argparse
+import csv
 from datetime import datetime, timezone
+import io
 import json
 import os
+import re
 import sys
 import time
 import uuid
@@ -48,6 +51,13 @@ MEASURED_CONTAINERS = {
     "processm-neo4j": "processm-neo4j",
     "processm-server": "processm-server",
 }
+NEO4J_TRANSACTION_MEMORY_SETTINGS = {
+    "db.memory.transaction.total.max": "1.00GiB",
+    "dbms.memory.transaction.total.max": "1.00GiB",
+}
+PROC_CMDLINE_SCAN = "for f in /proc/[0-9]*/cmdline; do tr '\\0' ' ' < \"$f\" 2>/dev/null; echo; done"
+MAX_HEAP_PATTERN = re.compile(r"(?:^|\s)-Xmx([0-9]+)([kKmMgG]?)")
+HEAP_UNIT_BYTES = {"": 1, "k": 1024, "m": 1024**2, "g": 1024**3}
 
 
 def parse_args() -> argparse.Namespace:
@@ -108,6 +118,33 @@ def docker_memory_bytes() -> int:
     return int(value)
 
 
+def parse_effective_max_heap_bytes(command_lines: str) -> int:
+    """Parse one distinct effective `-Xmx` value from container process commands."""
+    heaps = {
+        int(value) * HEAP_UNIT_BYTES[unit.lower()]
+        for value, unit in MAX_HEAP_PATTERN.findall(command_lines)
+    }
+    if len(heaps) != 1:
+        raise ScriptError(
+            "expected exactly one distinct effective -Xmx value, "
+            f"found {len(heaps)}"
+        )
+    return heaps.pop()
+
+
+def container_effective_max_heap_bytes(container: str) -> int:
+    code, output = run_capture(
+        ["docker", "exec", container, "sh", "-c", PROC_CMDLINE_SCAN],
+        timeout=30.0,
+    )
+    if code != 0:
+        raise ScriptError(f"cannot read JVM command lines for {container}: {output.strip()}")
+    try:
+        return parse_effective_max_heap_bytes(output)
+    except ScriptError as error:
+        raise ScriptError(f"cannot prove effective JVM heap for {container}: {error}") from error
+
+
 def assert_symmetric_resource_budget() -> dict[str, object]:
     limits = container_memory_limits()
     local_budget = limits["processm-interpreter"][0] + limits["processm-neo4j"][0]
@@ -124,16 +161,30 @@ def assert_symmetric_resource_budget() -> dict[str, object]:
             f"measured containers reserve {measured_total / docker_budget:.1%} of Docker memory; "
             f"maximum is {MAX_MEASURED_SHARE_OF_DOCKER_MEMORY:.0%} so the VM/kernel retains headroom"
         )
+    effective_heaps = {
+        component: container_effective_max_heap_bytes(container)
+        for component, container in MEASURED_CONTAINERS.items()
+    }
+    local_heap = effective_heaps["processm-interpreter"] + effective_heaps["processm-neo4j"]
+    reference_heap = effective_heaps["processm-server"]
+    if local_heap != reference_heap:
+        raise ScriptError(
+            f"benchmark aggregate JVM heaps are asymmetric: LOCAL={local_heap} B, "
+            f"REFERENCE={reference_heap} B"
+        )
     return {
-        "policy": "equal-system-cgroup-no-swap",
+        "policy": "equal-system-cgroup-and-aggregate-jvm-heap-no-swap",
         "localBytes": local_budget,
         "referenceBytes": reference_budget,
+        "localEffectiveJvmHeapBytes": local_heap,
+        "referenceEffectiveJvmHeapBytes": reference_heap,
         "dockerBytes": docker_budget,
         "measuredShare": measured_total / docker_budget,
         "containerLimits": {
             component: {"memoryBytes": memory, "memorySwapBytes": memory_swap}
             for component, (memory, memory_swap) in limits.items()
         },
+        "containerEffectiveJvmHeapBytes": effective_heaps,
     }
 
 
@@ -261,6 +312,32 @@ def assert_empty_datastores(args: argparse.Namespace) -> None:
             raise ScriptError(f"{system} is not clean: {len(rows)} datastore(s): {names}")
 
 
+def assert_neo4j_transaction_memory() -> dict[str, str]:
+    query = (
+        "SHOW SETTINGS YIELD name, value "
+        "WHERE name IN ['db.memory.transaction.total.max', "
+        "'dbms.memory.transaction.total.max'] "
+        "RETURN name, value ORDER BY name"
+    )
+    code, output = run_capture(
+        [
+            "docker", "exec", "processm-neo4j", "cypher-shell", "--format", "plain",
+            "-u", "neo4j", "-p", "password123", query,
+        ],
+        timeout=30.0,
+    )
+    if code != 0:
+        raise ScriptError(f"cannot read Neo4j transaction-memory settings: {output.strip()}")
+    rows = list(csv.reader(io.StringIO(output), skipinitialspace=True))
+    actual = {row[0]: row[1] for row in rows[1:] if len(row) == 2}
+    if actual != NEO4J_TRANSACTION_MEMORY_SETTINGS:
+        raise ScriptError(
+            "Neo4j transaction-memory settings differ from the benchmark contract: "
+            f"expected {NEO4J_TRANSACTION_MEMORY_SETTINGS}, got {actual}"
+        )
+    return actual
+
+
 def main() -> int:
     args = parse_args()
     if not args.confirm_destroy_volumes:
@@ -292,6 +369,7 @@ def main() -> int:
     wait_for_json(f"{args.local_api.rstrip('/')}/query/features", args.health_timeout)
     assert_empty_datastores(args)
     resource_budget = assert_symmetric_resource_budget()
+    neo4j_transaction_memory = assert_neo4j_transaction_memory()
     image_ids = container_image_ids()
     if image_ids["processm-interpreter"] != expected_local_image_id:
         raise ScriptError(
@@ -313,6 +391,7 @@ def main() -> int:
                 "localImageMode": local_image_mode,
                 "localImageSourceRevision": git_commit,
                 "resourceBudget": resource_budget,
+                "neo4jTransactionMemory": neo4j_transaction_memory,
                 "command": "docker compose -f docker-compose.yml -f "
                 f"{BENCHMARK_COMPOSE_FILE} down -v --remove-orphans",
             },

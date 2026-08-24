@@ -3,6 +3,8 @@ package com.processm.processminterpreter.benchmark
 import java.time.Instant
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 import kotlin.math.roundToLong
 
 /**
@@ -10,8 +12,8 @@ import kotlin.math.roundToLong
  *
  * A daemon thread polls all configured [MemorySource]s once per [intervalMillis].
  * Samples are recorded only while a phase is active (`idle` baseline before imports,
- * `queries` during the query phase); between phases sampling is paused so imports and
- * report writing do not pollute the series.
+ * `queries` during an unmeasured resource replay); between phases sampling is paused so
+ * timed latency requests, imports and report writing do not overlap Docker polling.
  */
 class MemorySampler(
     private val sources: List<MemorySource>,
@@ -23,9 +25,12 @@ class MemorySampler(
     }
 
     private val recorded = ConcurrentLinkedQueue<MemorySample>()
+    private val probeLock = ReentrantLock()
+    private val probeIdle = probeLock.newCondition()
 
     @Volatile
-    private var phase: String? = null
+    private var context: MemorySamplingContext? = null
+    private var probing = false
 
     @Volatile
     private var running = false
@@ -40,8 +45,40 @@ class MemorySampler(
         }
     }
 
-    fun setPhase(phase: String?) {
-        this.phase = phase
+    fun setPhase(
+        phase: String?,
+        datasetName: String = "",
+        operationLabel: String = "",
+    ) {
+        probeLock.withLock {
+            context = phase?.let { MemorySamplingContext(it, datasetName, operationLabel) }
+        }
+    }
+
+    /**
+     * Stops scheduling probes and waits until a probe already in progress has exited.
+     * Merely clearing [phase] is racy: the sampler may already have observed the old
+     * phase and be starting `docker stats` while the caller begins a timed request.
+     */
+    fun pauseAndAwaitQuiescence(timeoutMillis: Long = 30_000L) {
+        probeLock.withLock {
+            context = null
+            var remainingNanos = TimeUnit.MILLISECONDS.toNanos(timeoutMillis)
+            while (probing) {
+                check(remainingNanos > 0L) { "Memory sampler did not become quiescent within ${timeoutMillis}ms" }
+                remainingNanos = probeIdle.awaitNanos(remainingNanos)
+            }
+        }
+    }
+
+    /** Guarantees at least one observation for a short resource block. */
+    fun sampleOnce(
+        phase: String,
+        datasetName: String = "",
+        operationLabel: String = "",
+    ) {
+        pauseAndAwaitQuiescence()
+        recordProbe(MemorySamplingContext(phase, datasetName, operationLabel))
     }
 
     /** Samples in phase [phase] for [seconds], blocking the caller (idle baseline). */
@@ -53,7 +90,7 @@ class MemorySampler(
         try {
             Thread.sleep(seconds * 1_000L)
         } finally {
-            setPhase(null)
+            pauseAndAwaitQuiescence()
         }
     }
 
@@ -71,17 +108,16 @@ class MemorySampler(
     private fun loop() {
         var nextProbeNanos = System.nanoTime()
         while (running) {
-            val currentPhase = phase
-            if (currentPhase != null) {
-                val timestamp = Instant.now().toString()
-                sources.forEach { source ->
-                    runCatching { source.sample() }.getOrDefault(emptyList()).forEach { (component, bytes) ->
-                        recorded += MemorySample(
-                            timestamp = timestamp,
-                            phase = currentPhase,
-                            component = component,
-                            bytes = bytes,
-                        )
+            val currentContext = probeLock.withLock {
+                context?.also { probing = true }
+            }
+            if (currentContext != null) {
+                try {
+                    recordProbe(currentContext)
+                } finally {
+                    probeLock.withLock {
+                        probing = false
+                        probeIdle.signalAll()
                     }
                 }
             }
@@ -102,39 +138,63 @@ class MemorySampler(
             }
         }
     }
+
+    private fun recordProbe(currentContext: MemorySamplingContext) {
+        val timestamp = Instant.now().toString()
+        sources.forEach { source ->
+            runCatching { source.sample() }.getOrDefault(emptyList()).forEach { (component, bytes) ->
+                recorded += MemorySample(
+                    timestamp = timestamp,
+                    phase = currentContext.phase,
+                    component = component,
+                    bytes = bytes,
+                    datasetName = currentContext.datasetName,
+                    operationLabel = currentContext.operationLabel,
+                )
+            }
+        }
+    }
 }
 
 fun summarizeMemory(samples: List<MemorySample>): List<MemorySummary> {
     fun summarize(rows: List<MemorySample>): List<MemorySummary> = rows
-        .groupBy { it.component to it.phase }
+        .groupBy { listOf(it.component, it.phase, it.datasetName, it.operationLabel) }
         .map { (key, rows) ->
             val sorted = rows.map { it.bytes }.sorted()
             MemorySummary(
-                component = key.first,
-                phase = key.second,
+                component = key[0],
+                phase = key[1],
                 medianBytes = ThesisStatistics.quantile(sorted.map(Long::toDouble), 0.50).roundToLong(),
                 peakBytes = sorted.last(),
+                datasetName = key[2],
+                operationLabel = key[3],
             )
         }
 
     val totals = samples
-        .groupBy { it.timestamp to it.phase }
+        .groupBy { listOf(it.timestamp, it.phase, it.datasetName, it.operationLabel) }
         .flatMap { (key, rows) ->
             val values = rows.associate { it.component to it.bytes }
             buildList {
                 val interpreter = values["processm-interpreter"]
                 val neo4j = values["processm-neo4j"]
                 if (interpreter != null && neo4j != null) {
-                    add(MemorySample(key.first, key.second, "local-total", interpreter + neo4j))
+                    add(MemorySample(key[0], key[1], "local-total", interpreter + neo4j, key[2], key[3]))
                 }
                 values["processm-server"]?.let {
-                    add(MemorySample(key.first, key.second, "reference-total", it))
+                    add(MemorySample(key[0], key[1], "reference-total", it, key[2], key[3]))
                 }
             }
         }
     return (summarize(samples) + summarize(totals))
-        .sortedWith(compareBy({ it.component }, { it.phase }))
+        .sortedWith(compareBy({ it.datasetName }, { it.operationLabel }, { it.component }, { it.phase }))
 }
+
+private data class MemorySamplingContext(
+    val phase: String,
+    val datasetName: String,
+    val operationLabel: String,
+)
 
 /**
  * Samples container memory via `docker stats --no-stream` for the given container names.

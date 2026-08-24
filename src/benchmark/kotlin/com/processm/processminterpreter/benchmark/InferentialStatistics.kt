@@ -23,13 +23,10 @@ import kotlin.random.Random
  *    its uncertainty, on the scale the thesis actually argues in ("LOCAL is ×k
  *    faster"). Deterministic: the resampling seed is derived from the pair key,
  *    so re-running the report on the same samples reproduces the same interval.
- * 2. **Wilcoxon signed-rank test** (normal approximation, tie- and continuity-corrected)
- *    with **Holm–Bonferroni** adjustment across all pairs compared in the run.
- *    Without the adjustment, ~7 of 132 comparisons would be expected to reach
- *    p < 0,05 by chance alone.
- * 3. **Practical significance** — the effect must additionally exceed the
- *    measurement error demonstrated *within the same run* by the replicate
- *    datasets ([ReplicateControl]), never a threshold declared in advance.
+ * 2. **Wilcoxon signed-rank test** (exact permutation distribution for at most
+ *    20 non-zero pairs; tie- and continuity-corrected normal approximation for
+ *    larger samples) with **Holm** adjustment in the family defined by the
+ *    current paired analysis.
  *
  * The samples are back-to-back executions against one warm process, so they are
  * autocorrelated; the p-values are therefore optimistic and are reported only as
@@ -89,9 +86,10 @@ object InferentialStatistics {
 
     /**
      * Two-sided Wilcoxon signed-rank test for paired repetitions via the normal
-     * approximation, with tie and continuity correction. Zero differences are
-     * discarded. Returns 1.0 for missing/degenerate inputs so a broken pairing can
-     * never manufacture significance.
+     * exact sign-permutation distribution for up to 20 non-zero differences and a
+     * tie-/continuity-corrected normal approximation above that. Zero differences
+     * are discarded. Returns 1.0 for missing/degenerate inputs so a broken pairing
+     * can never manufacture significance.
      */
     fun wilcoxonSignedRank(
         a: List<Double>,
@@ -117,6 +115,19 @@ object InferentialStatistics {
         val positiveRank = differences.indices.filter { differences[it] > 0.0 }.sumOf { ranks[it] }
         val n = differences.size.toDouble()
         val mean = n * (n + 1.0) / 4.0
+        if (differences.size <= 20) {
+            val observed = abs(positiveRank - mean)
+            val assignments = 1L shl differences.size
+            var atLeastAsExtreme = 0L
+            for (mask in 0 until assignments) {
+                var rankSum = 0.0
+                for (bit in ranks.indices) {
+                    if (mask and (1L shl bit) != 0L) rankSum += ranks[bit]
+                }
+                if (abs(rankSum - mean) + 1e-12 >= observed) atLeastAsExtreme++
+            }
+            return atLeastAsExtreme.toDouble() / assignments
+        }
         val variance = n * (n + 1.0) * (2.0 * n + 1.0) / 24.0 - tieCorrection / 48.0
         if (variance <= 0.0) return 1.0
         val numerator = abs(positiveRank - mean) - 0.5

@@ -11,6 +11,12 @@ class BenchmarkResultsWriter(
 ) {
     private val mapper = jacksonObjectMapper()
 
+    /** Rewrites derived paired statistics without touching raw measurements. */
+    fun writeComparisonsOnly(comparisons: List<BenchmarkComparisonResult>) {
+        outputDirectory.createDirectories()
+        writeComparisons(comparisons)
+    }
+
     fun write(
         settings: BenchmarkSettings,
         datasets: List<PreparedDataset>,
@@ -24,6 +30,8 @@ class BenchmarkResultsWriter(
         memorySummaries: List<MemorySummary> = emptyList(),
         environmentDetails: Map<String, Any?> = emptyMap(),
         querySpecs: List<BenchmarkQuerySpec> = emptyList(),
+        comparisons: List<BenchmarkComparisonResult> = emptyList(),
+        containerIo: List<ContainerIoBenchmarkResult> = emptyList(),
     ) {
         outputDirectory.createDirectories()
         writeDatasets(datasets)
@@ -34,6 +42,8 @@ class BenchmarkResultsWriter(
         writeStorage(storage)
         writeRoundtrips(roundtrips)
         writeMemory(memorySamples, memorySummaries)
+        writeComparisons(comparisons)
+        writeContainerIo(containerIo)
         writeCleanup(cleanup)
         writeEnvironment(settings, environmentDetails, datasets, querySpecs)
         writeSummary(settings, datasets, imports, queries, querySummaries, storage, roundtrips, cleanup, memorySamples)
@@ -52,6 +62,17 @@ class BenchmarkResultsWriter(
                 "totalAttributes",
                 "xesBytes",
                 "xesGzBytes",
+                "meanEventsPerTrace",
+                "medianEventsPerTrace",
+                "p95EventsPerTrace",
+                "maxEventsPerTrace",
+                "activityCount",
+                "variantCount",
+                "sourceDoi",
+                "fileSha256",
+                "meanEventAttributes",
+                "collection",
+                "collectionOrder",
             ),
             datasets.map {
                 listOf(
@@ -64,6 +85,17 @@ class BenchmarkResultsWriter(
                     it.totalAttributes,
                     it.xesBytes,
                     it.xesGzBytes,
+                    it.meanEventsPerTrace,
+                    it.medianEventsPerTrace,
+                    it.p95EventsPerTrace,
+                    it.maxEventsPerTrace,
+                    it.activityCount,
+                    it.variantCount,
+                    it.sourceDoi,
+                    it.fileSha256,
+                    it.meanEventAttributes,
+                    it.collection,
+                    it.collectionOrder,
                 )
             },
         )
@@ -73,9 +105,60 @@ class BenchmarkResultsWriter(
     private fun writeQuerySpecs(querySpecs: List<BenchmarkQuerySpec>) {
         CsvWriter.write(
             outputDirectory.resolve("queries.csv"),
-            listOf("queryLabel", "workload", "scalingSeries", "clause", "pql"),
+            listOf(
+                "queryLabel", "displayName", "role", "workload", "measurementSeries",
+                "scalingSeries", "purpose", "clause", "pql",
+            ),
             querySpecs.map {
-                listOf(it.label, it.workload, it.scalingSeries.sorted().joinToString(";"), it.clause, it.query)
+                listOf(
+                    it.label, it.displayName, it.role.name.lowercase(), it.workload,
+                    it.measurementSeries.sorted().joinToString(";"),
+                    it.scalingSeries.sorted().joinToString(";"), it.purpose, it.clause, it.query,
+                )
+            },
+        )
+    }
+
+    private fun writeComparisons(rows: List<BenchmarkComparisonResult>) {
+        CsvWriter.write(
+            outputDirectory.resolve("comparison-results.csv"),
+            listOf(
+                "metric", "datasetName", "series", "operationLabel", "displayName", "role", "pairs",
+                "localMedianSeconds", "referenceMedianSeconds", "ratioReferenceToLocal",
+                "confidenceLow", "confidenceHigh", "rawPValue", "holmPValue", "verdict", "status",
+                "stabilityWindowSamples", "localEarlyMedianSeconds", "localLateMedianSeconds", "localEarlyLateRatio",
+                "referenceEarlyMedianSeconds", "referenceLateMedianSeconds", "referenceEarlyLateRatio",
+                "pairedEarlyMedianRatio", "pairedLateMedianRatio", "pairedEarlyLateRatio", "details",
+            ),
+            rows.map {
+                listOf(
+                    it.metric, it.datasetName, it.series, it.operationLabel, it.displayName, it.role, it.pairs,
+                    it.localMedianSeconds, it.referenceMedianSeconds, it.ratioReferenceToLocal,
+                    it.confidenceLow, it.confidenceHigh, it.rawPValue, it.holmPValue,
+                    it.verdict, it.status, it.stabilityWindowSamples,
+                    it.localEarlyMedianSeconds, it.localLateMedianSeconds, it.localEarlyLateRatio,
+                    it.referenceEarlyMedianSeconds, it.referenceLateMedianSeconds, it.referenceEarlyLateRatio,
+                    it.pairedEarlyMedianRatio, it.pairedLateMedianRatio, it.pairedEarlyLateRatio,
+                    it.details,
+                )
+            },
+        )
+    }
+
+    private fun writeContainerIo(rows: List<ContainerIoBenchmarkResult>) {
+        CsvWriter.write(
+            outputDirectory.resolve("container-io.csv"),
+            listOf(
+                "system", "phase", "datasetName", "operationLabel", "run", "component",
+                "blockReadBytes", "blockWriteBytes", "blockReadOperations", "blockWriteOperations",
+                "networkReceiveBytes", "networkTransmitBytes", "status", "details",
+            ),
+            rows.map {
+                listOf(
+                    it.system, it.phase, it.datasetName, it.operationLabel, it.run, it.component,
+                    it.blockReadBytes, it.blockWriteBytes, it.blockReadOperations, it.blockWriteOperations,
+                    it.networkReceiveBytes, it.networkTransmitBytes, it.status, it.details,
+                )
             },
         )
     }
@@ -130,13 +213,15 @@ class BenchmarkResultsWriter(
     ) {
         CsvWriter.write(
             outputDirectory.resolve("memory-results.csv"),
-            listOf("timestamp", "phase", "component", "bytes"),
-            samples.map { listOf(it.timestamp, it.phase, it.component, it.bytes) },
+            listOf("timestamp", "phase", "datasetName", "operationLabel", "component", "bytes"),
+            samples.map { listOf(it.timestamp, it.phase, it.datasetName, it.operationLabel, it.component, it.bytes) },
         )
         CsvWriter.write(
             outputDirectory.resolve("memory-summary.csv"),
-            listOf("component", "phase", "medianBytes", "peakBytes"),
-            summaries.map { listOf(it.component, it.phase, it.medianBytes, it.peakBytes) },
+            listOf("datasetName", "operationLabel", "component", "phase", "medianBytes", "peakBytes"),
+            summaries.map {
+                listOf(it.datasetName, it.operationLabel, it.component, it.phase, it.medianBytes, it.peakBytes)
+            },
         )
     }
 
@@ -253,27 +338,29 @@ class BenchmarkResultsWriter(
         val environment = mapOf(
             "benchmarkProtocolVersion" to settings.protocolVersion,
             "profile" to settings.profile.name.lowercase(),
-            "warmups" to settings.profile.warmups,
+            "warmups" to settings.queryWarmups,
             "repetitions" to settings.profile.repetitions,
+            "importRepetitions" to settings.profile.importRepetitions,
             "globalWarmupRounds" to settings.globalWarmupRounds,
-            "postIdleWarmupRounds" to settings.postIdleWarmupRounds,
-            "postIdleWarmupMode" to POST_IDLE_WARMUP_MODE,
-            // Position in the dataset sequence is a confounder the alternating
-            // protocol cannot remove; the order actually used must be recoverable
-            // from the artifacts, and a RANDOM order must be reproducible.
-            "datasetOrder" to settings.datasetOrder.name.lowercase(),
-            "datasetOrderSeed" to settings.datasetOrderSeed,
+            "datasetOrder" to "fixed-declared",
             "localApi" to settings.localApi,
             "referenceApi" to settings.referenceApi,
+            "localAppContainer" to settings.localAppContainer,
             "datasetFilter" to settings.datasetFilter.sorted(),
+            "seriesFilter" to settings.seriesFilter.sorted(),
             "systemFilter" to settings.systemFilter.sorted(),
             "keepBenchmarkDataStores" to settings.keepBenchmarkDataStores,
             "experiment" to mapOf(
                 "fingerprintSha256" to experimentFingerprint(datasets, querySpecs),
                 "datasetCount" to datasets.size,
                 "queryCount" to querySpecs.size,
-                "replicateValidityGate" to ReplicateControl.VALIDITY_GATE_SPREAD,
-                "replicateValidityStatistic" to REPLICATE_VALIDITY_STATISTIC,
+                "queryPairing" to "adjacent-ab-ba",
+                "queryTest" to "two-sided-wilcoxon-signed-rank",
+                "confidenceInterval" to "paired-bootstrap-median-ratio",
+                "multipleTestingCorrection" to "holm-within-dataset",
+                "temporalStabilityGate" to "diagnostic-only-paired-ratio-of-medians-first-last-third",
+                "temporalStabilityMaxRatio" to TemporalStability.MAX_EARLY_LATE_RATIO,
+                "temporalStabilityMinimumSamples" to TemporalStability.MINIMUM_SAMPLES,
             ),
             "javaVersion" to System.getProperty("java.version"),
             "osName" to System.getProperty("os.name"),
@@ -289,17 +376,17 @@ class BenchmarkResultsWriter(
                 appendLine()
                 appendLine("- Benchmark protocol version: ${settings.protocolVersion}")
                 appendLine("- Profile: ${settings.profile.name.lowercase()}")
-                appendLine("- Warmups per query: ${settings.profile.warmups}")
+                appendLine("- Warmups per query and system: ${settings.queryWarmups}")
                 appendLine("- Global warm-up rounds before the first measured dataset: ${settings.globalWarmupRounds}")
-                appendLine("- Activation warm-up rounds after the idle baseline: ${settings.postIdleWarmupRounds}")
-                appendLine("- Activation warm-up mode: $POST_IDLE_WARMUP_MODE")
                 appendLine("- Measured repetitions per query: ${settings.profile.repetitions}")
-                appendLine("- Dataset order: ${settings.datasetOrder.name.lowercase()} (seed ${settings.datasetOrderSeed})")
+                appendLine("- Paired import repetitions per dataset: ${settings.profile.importRepetitions}")
+                appendLine("- Dataset order: fixed, as declared in benchmark-datasets.json")
                 appendLine("- Java: ${System.getProperty("java.version")}")
                 appendLine("- OS: ${System.getProperty("os.name")} ${System.getProperty("os.version")}")
                 appendLine("- Available processors reported by JVM: ${Runtime.getRuntime().availableProcessors()}")
                 appendLine("- JVM max memory bytes: ${Runtime.getRuntime().maxMemory()}")
                 appendLine("- Dataset filter: ${settings.datasetFilter.ifEmpty { setOf("all") }.joinToString(", ")}")
+                appendLine("- Series filter: ${settings.seriesFilter.ifEmpty { setOf("all") }.joinToString(", ")}")
                 appendLine("- System filter: ${settings.systemFilter.ifEmpty { setOf("all") }.joinToString(", ")}")
                 appendLine("- Keep benchmark datastores after run: ${settings.keepBenchmarkDataStores}")
                 appendLine()
@@ -318,12 +405,14 @@ class BenchmarkResultsWriter(
                 appendLine("- Operations are issued sequentially by one benchmark runner, not concurrently.")
                 appendLine("- The runner refuses to start unless both APIs expose zero pre-existing datastores; every dataset/system pair then gets a fresh datastore for this run.")
                 appendLine("- Benchmark datastores use the `bench-` prefix and are deleted after the run unless `BENCHMARK_KEEP_DATASTORES=true`.")
-                appendLine("- Storage is measured as stabilized directory size before and after importing a dataset.")
-                appendLine("- Memory sampling targets a 1 s pause between probes; the raw timestamps in `memory-results.csv` are authoritative because `docker stats --no-stream` adds probe latency. Both applications and databases use the same Docker probe in thesis-grade runs; phases: `idle` (${settings.profile.idleBaselineSeconds} s baseline before imports) and `queries`. After the idle phase, a fresh throw-away import, ${settings.postIdleWarmupRounds} unrecorded activation round(s), and deletion restore the same datastore lifecycle that precedes later measured datasets.")
-                appendLine("- Each (dataset, query) pair runs one recorded first execution on a new datastore (`phase=cold`) per system before query-level warmups. The applications have already completed global and post-idle warmups, so this is not a process cold start. Measured repetitions alternate between systems (local, reference, local, reference, ...).")
+                appendLine("- Import is repeated in fresh datastores; readiness is polled every 100 ms. The final pair remains for query measurements.")
+                appendLine("- Memory sampling targets a 1 s pause between probes during a duplicate, unmeasured resource block after latency collection. The sampler is quiescent during timed requests; raw timestamps in `memory-results.csv` are authoritative because `docker stats --no-stream` adds probe latency.")
+                appendLine("- Each (dataset, query) pair receives unrecorded warmups, then adjacent measured pairs in alternating LOCAL/REFERENCE order. No ambiguous recorded cold sample is used.")
+                appendLine("- With at least ${TemporalStability.MINIMUM_SAMPLES} measured pairs, the REFERENCE/LOCAL ratio of medians is computed separately in the first and last chronological thirds. A direction-free ratio above ${TemporalStability.MAX_EARLY_LATE_RATIO} is reported as a drift warning, not used to discard otherwise complete paired evidence. This matches the reported effect estimand; a median of individual pair ratios is deliberately not used. Absolute system drift remains diagnostic because common-mode drift is controlled by pairing.")
+                appendLine("- Docker Block I/O, Network I/O and, when exposed, cgroup v2 read/write operation deltas are sampled outside timed intervals and written to `container-io.csv`.")
                 appendLine("- Log/trace/event counts are compared in every measured warm repetition. The last warm responses are also checked with the strict XES-JSON semantic comparator; on divergence all samples of the pair are marked `MISMATCH` (Q4 parity).")
                 appendLine("- Per-dataset rows in `storage-results.csv` are protocol diagnostics. Thesis-grade Q3 disk evidence comes only from `measure-storage-scaling.py`, one fresh stack per dataset.")
-                appendLine("- Query charts use medians from `query-summary.csv`, not single samples. p95 is not interpreted below 200 repetitions.")
+                appendLine("- Query comparisons use REFERENCE/LOCAL median ratios, paired bootstrap 95% intervals and paired Wilcoxon tests. Holm correction is applied to inferential queries within each dataset.")
                 appendLine()
                 appendLine("## Recommended Manual Controls")
                 appendLine()
@@ -345,15 +434,19 @@ class BenchmarkResultsWriter(
                     listOf(
                         "dataset", it.name, it.series, it.traces, it.eventsPerTrace,
                         it.totalEvents, it.attributesPerEvent, it.totalAttributes,
-                        it.xesBytes, it.xesGzBytes,
+                        it.xesBytes, it.xesGzBytes, it.meanEventsPerTrace, it.medianEventsPerTrace,
+                        it.p95EventsPerTrace, it.maxEventsPerTrace, it.activityCount,
+                        it.variantCount, it.sourceDoi, it.fileSha256, it.meanEventAttributes,
+                        it.collection, it.collectionOrder,
                     ).joinToString("\u001f"),
                 )
             }
             querySpecs.sortedBy { it.label }.forEach {
                 appendLine(
                     listOf(
-                        "query", it.label, it.workload, it.scalingSeries.sorted().joinToString(";"),
-                        it.clause, it.query,
+                        "query", it.label, it.displayName, it.role, it.workload,
+                        it.measurementSeries.sorted().joinToString(";"),
+                        it.scalingSeries.sorted().joinToString(";"), it.purpose, it.clause, it.query,
                     ).joinToString("\u001f"),
                 )
             }
@@ -419,6 +512,8 @@ class BenchmarkResultsWriter(
             appendLine("- `import-results.csv`")
             appendLine("- `query-results.csv`")
             appendLine("- `query-summary.csv`")
+            appendLine("- `comparison-results.csv`")
+            appendLine("- `container-io.csv`")
             appendLine("- `storage-results.csv`")
             appendLine("- `roundtrip-results.csv`")
             appendLine("- `memory-results.csv`")
@@ -426,13 +521,13 @@ class BenchmarkResultsWriter(
             appendLine("- `cleanup-results.csv`")
             appendLine("- `environment.json`")
             appendLine("- `environment.md`")
-            appendLine("- `thesis-report.md`")
-            appendLine("- `thesis-tables.tex`")
+            appendLine("- `benchmark-report.md`")
+            appendLine("- `benchmark-appendix.md`")
             appendLine()
             appendLine("Generate SVG plots with:")
             appendLine()
             appendLine("```bash")
-            appendLine("python3 scripts/benchmarks/plot-benchmark-results.py $outputDirectory")
+            appendLine("python3 scripts/benchmarks/plot-readable-benchmark-results.py $outputDirectory")
             appendLine("```")
         }
         outputDirectory.resolve("summary.md").writeText(markdown)

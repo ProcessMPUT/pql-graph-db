@@ -60,6 +60,12 @@ claude.md
 src/main/resources/logs/*.xes
 !src/main/resources/logs/sample_process.xes
 
+# Machine-local benchmark inputs that are intentionally excluded from the
+# executable JAR. Active, reproducible benchmark fixtures remain tracked under
+# src/main/resources/logs/.
+benchmark-data/bpi/archive/
+benchmark-data/local/
+
 ### Temporary Output ###
 tmp/
 *.txt

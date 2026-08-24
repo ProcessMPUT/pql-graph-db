@@ -1,94 +1,71 @@
 [
   {
     "label": "minimalWindow",
+    "displayName": "Minimalne okno odpowiedzi",
     "query": "limit l:1, t:1, e:1",
     "workload": "floor",
-    "clause": "najmniejsze możliwe okno — opisowy punkt odniesienia end-to-end"
+    "role": "BASELINE",
+    "purpose": "Opisowy punkt odniesienia dla pełnej ścieżki HTTP, wykonania zapytania i rekonstrukcji najmniejszej odpowiedzi. Nie testuje głównej hipotezy.",
+    "measurementSeries": ["size-scaling", "variant-scaling", "real-validation", "smoke-fixture"]
   },
   {
     "label": "hierarchyWindow",
+    "displayName": "Pobranie hierarchii log–ślad–zdarzenie",
     "query": "limit l:1, t:10, e:20",
     "workload": "window",
-    "clause": "klauzula `limit` (okno hierarchii)"
-  },
-  {
-    "label": "eventNameFilter",
-    "query": "where e:name is not null limit l:1, t:10, e:20",
-    "workload": "window",
-    "clause": "klauzula `where` po atrybucie standardowym"
-  },
-  {
-    "label": "customAttrFilter",
-    "query": "where [e:attr_1] is not null limit l:1, t:10, e:20",
-    "workload": "window",
-    "clause": "klauzula `where` po atrybucie niestandardowym"
-  },
-  {
-    "label": "standardAttributesOrder",
-    "query": "order by e:timestamp, e:name, e:org:group, e:org:resource limit l:1, t:10, e:20",
-    "workload": "window",
-    "clause": "klauzula `order by` po standardowych atrybutach XES",
-    "scalingSeries": ["event-scaling", "shape-scaling"]
-  },
-  {
-    "label": "eventNameGroup",
-    "query": "group by e:name order by e:name limit l:1, t:10, e:20",
-    "workload": "window",
-    "clause": "klauzula `group by` w obrębie śladu",
-    "scalingSeries": ["event-scaling", "shape-scaling"]
+    "role": "PRIMARY",
+    "purpose": "Bezpośredni test hipotezy: odczyt ograniczonej odpowiedzi obejmującej wszystkie trzy poziomy hierarchii XES.",
+    "measurementSeries": ["size-scaling", "variant-scaling", "real-validation", "smoke-fixture"],
+    "scalingSeries": ["size-scaling", "variant-scaling"]
   },
   {
     "label": "hoistedWhere",
+    "displayName": "Filtrowanie śladów na podstawie zdarzeń",
     "query": "where ^e:name is not null limit l:1, t:10, e:20",
     "workload": "window",
-    "clause": "filtr hoistowany (EXISTS/JOIN)"
-  },
-  {
-    "label": "timestampAggregates",
-    "query": "select min(e:timestamp), max(e:timestamp), count(e:name)",
-    "workload": "window",
-    "clause": "klauzule `select` + agregacje min/max/count w obrębie śladu",
-    "scalingSeries": ["event-scaling", "shape-scaling"]
-  },
-  {
-    "label": "customAttributesProjection",
-    "query": "select [e:attr_1], [e:attr_5] limit l:1, t:10, e:20",
-    "workload": "window",
-    "clause": "projekcja atrybutów niestandardowych"
-  },
-  {
-    "label": "hoistedGroup",
-    "query": "select count(t:name) group by ^e:name order by count(t:name) desc",
-    "workload": "dataDependent",
-    "clause": "grupowanie śladów w warianty bez materializacji arbitralnego podzbioru remisujących wariantów",
-    "scalingSeries": ["trace-scaling", "event-scaling", "shape-scaling"]
-  },
-  {
-    "label": "globalEventCount",
-    "query": "select l:name, count(t:name), count(^^e:name) group by l:name order by l:name limit e:1",
-    "workload": "dataDependent",
-    "clause": "agregat globalny — zliczenie wszystkich śladów i zdarzeń logu",
-    "scalingSeries": ["trace-scaling", "event-scaling", "shape-scaling"]
+    "role": "PRIMARY",
+    "purpose": "Bezpośredni test hipotezy: warunek w zakresie śladu zależy od atrybutu należącego do zdarzeń i wymaga przejścia między poziomami hierarchii.",
+    "measurementSeries": ["size-scaling", "variant-scaling", "real-validation", "smoke-fixture"],
+    "scalingSeries": ["size-scaling", "variant-scaling"]
   },
   {
     "label": "variantGroupCount",
+    "displayName": "Grupowanie wariantów procesu",
     "query": "select count(t:name), count(^e:name) group by ^e:name order by count(t:name) desc limit l:1, t:3",
     "workload": "dataDependent",
-    "clause": "warianty procesu z licznościami (grupowanie + agregacja po hoistowanym atrybucie)",
-    "scalingSeries": ["trace-scaling", "event-scaling", "shape-scaling"]
+    "role": "PRIMARY",
+    "purpose": "Bezpośredni test hipotezy dla operacji charakterystycznej dla eksploracji procesów: grupowania śladów według sekwencji zdarzeń i obliczenia liczności.",
+    "measurementSeries": ["size-scaling", "variant-scaling", "real-validation", "smoke-fixture"],
+    "scalingSeries": ["size-scaling", "variant-scaling"]
   },
   {
-    "label": "absentAttrScan",
-    "query": "where [e:attr_absent_benchmark_probe] is not null limit l:1, t:10, e:20",
+    "label": "hierarchyCardinality",
+    "displayName": "Zliczanie elementów hierarchii log–ślad–zdarzenie",
+    "query": "select count(l:name), count(^t:name), count(^^e:name) limit l:1",
     "workload": "dataDependent",
-    "clause": "filtr po atrybucie nieobecnym w logu — pełny przegląd zdarzeń kandydackich, wynik pusty",
-    "scalingSeries": ["trace-scaling", "event-scaling", "attribute-scaling", "shape-scaling"]
+    "role": "PRIMARY",
+    "purpose": "Bezpośredni test hipotezy przy stałym rozmiarze odpowiedzi: zliczenie logów, śladów i zdarzeń wymaga przejścia przez całą hierarchię, ale zwraca tylko trzy agregaty.",
+    "measurementSeries": ["size-scaling", "real-validation", "smoke-fixture"],
+    "scalingSeries": ["size-scaling"]
+  },
+  {
+    "label": "standardAttributesOrder",
+    "displayName": "Sortowanie po atrybutach standardowych",
+    "query": "order by e:timestamp, e:name, e:org:group, e:org:resource limit l:1, t:10, e:20",
+    "workload": "window",
+    "role": "CONTROL",
+    "purpose": "Przypadek kontrolny: sortowanie wartości nie powinno automatycznie korzystać z przewagi reprezentacji grafowej.",
+    "measurementSeries": ["size-scaling", "real-validation", "smoke-fixture"],
+    "scalingSeries": ["size-scaling"]
   },
   {
     "label": "likeScan",
+    "displayName": "Skan nazw zdarzeń operatorem LIKE",
     "query": "where e:name like '%zzq%' order by e:name, e:timestamp limit l:1, t:10, e:20",
     "workload": "dataDependent",
-    "clause": "filtr `like` po atrybucie standardowym bez dopasowań — pełny skan nazw zdarzeń",
-    "scalingSeries": ["trace-scaling", "event-scaling", "shape-scaling"]
+    "role": "CONTROL",
+    "purpose": "Przypadek kontrolny bez dopasowań: system musi wykazać brak pasującej nazwy, a graf nie powinien z definicji przyspieszać skanu pojedynczej właściwości.",
+    "measurementSeries": ["size-scaling", "real-validation", "smoke-fixture"],
+    "scalingSeries": ["size-scaling"]
   }
 ]

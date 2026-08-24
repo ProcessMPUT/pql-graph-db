@@ -478,7 +478,7 @@ data class ThesisReportModel(
                         "Tryb aktywacji po pomiarze bezczynności",
                         environment["postIdleWarmupMode"]?.toString() ?: MISSING,
                     ),
-                    listOf("Rozgrzewki na zapytanie", settings.profile.warmups.toString()),
+                    listOf("Rozgrzewki na zapytanie i system", settings.queryWarmups.toString()),
                     listOf("Repetycje mierzone na zapytanie", settings.profile.repetitions.toString()),
                     listOf("Kolejność zbiorów", "${settings.datasetOrder.name.lowercase()} (ziarno ${settings.datasetOrderSeed})"),
                     listOf("Okno pomiaru pamięci spoczynkowej [s]", settings.profile.idleBaselineSeconds.toString()),

@@ -21,14 +21,20 @@ fair or reproducible.
   comparison with byte-level XML or gzip comparison.
 - `StorageMeasurement.kt` contains environment-specific storage probes.
 - `BenchmarkRecords.kt` defines result records written to reports.
-- `BenchmarkResultsWriter.kt` owns CSV, JSON, Markdown, and environment output.
+- `BenchmarkResultsWriter.kt` owns raw/derived CSV and environment output;
+  `BenchmarkReportWriter.kt` owns the concise current report and appendix.
+- `BenchmarkAnalysis.kt` owns paired effects, confidence intervals, Wilcoxon
+  tests and the scope of Holm correction.
+- `ContainerIoMeter.kt` owns Docker Block/Network I/O and cgroup operation
+  counters. Probe outside timed intervals.
 - `resources/benchmark-datasets.json` defines scaling series and real datasets.
 - `resources/benchmark-queries.json` defines the stable query workload.
   Its `scalingSeries` field is the predeclared query-axis interpretation
   contract; response-window class alone is not enough because lower-scope
   sorting, grouping, or aggregation can happen before a hierarchical limit.
-- `scripts/benchmarks/plot-benchmark-results.py` is the plotting companion,
-  even though it lives outside this source set.
+- `scripts/benchmarks/plot-readable-benchmark-results.py` is the current
+  plotting companion. The older `plot-benchmark-results.py` is retained only
+  for historical protocol-10/11 reports.
 
 Keep benchmark utilities independent from Spring application internals. The
 runner must exercise both systems through HTTP as an external client would.
@@ -37,13 +43,18 @@ runner must exercise both systems through HTTP as an external client would.
 
 1. Run local and reference ProcessM against equivalent datasets and queries.
 2. Do not optimize, normalize, or special-case results for one known log.
-3. Change one scaling dimension at a time:
-   - trace series: vary trace count;
-   - event series: vary events per trace;
-   - attribute series: vary attributes per event.
-   Interpret a query trend only for a series named in that query's
-   `scalingSeries`; do not infer eligibility from `workload` or from a visually
-   convincing plot after the measurement.
+3. Keep the protocol-23 workload hypothesis-led:
+   - `size-scaling` changes total events while holding 10 events/trace and five
+     constant-valued custom event attributes fixed, from 1,000 through
+     1,000,000 events;
+   - `variant-scaling` holds 100,000 events, 2,000 traces, 50 events/trace,
+     48 activities and five custom event attributes fixed while changing only
+     the exact number of `concept:name` trace variants: 1, 100 and 2,000;
+   - `real-validation` checks transfer to twelve published real-life logs with
+     recorded DOI provenance; the hand-written
+     `sample_process.xes` fixture belongs only to the SMOKE profile.
+   Execute a query only on a series declared in its `measurementSeries` and
+   interpret a trend only on a series declared in `scalingSeries`.
 4. Keep fixed query text, warmup count, repetition count, limits, and response
    materialization rules across both systems.
 5. Do not count dataset generation, authentication, report writing, or cleanup
@@ -58,6 +69,10 @@ runner must exercise both systems through HTTP as an external client would.
    Use the compatibility report and canonical XES comparison.
 10. Record environment details needed to interpret results. Performance numbers
     without the runtime, hardware, system versions, and profile are incomplete.
+11. Stock REFERENCE truncates the compressed XES stream at 5 MiB inside
+    `LogsService`, even if the HTTP upload limit is raised. Every compared file
+    must stay below that common-domain limit; do not patch REFERENCE or silently
+    sample a published real log to make it pass.
 
 ## Fair Local Runs
 
@@ -70,47 +85,63 @@ Before collecting thesis results:
 - avoid IDE indexing, builds, downloads, virus scans, and other heavy workloads;
 - run systems sequentially or assign explicit CPU and memory limits when host
   contention would otherwise make the comparison asymmetric;
-- repeat the full experiment more than once and retain every run directory;
 - do not edit or regenerate CSV files manually after a run.
 
-METODOLOGIA §5 requires **at least three** valid FULL runs on one clean Git
-commit, with declared/reversed/random dataset order; the random block uses the
-preregistered seed `20260728`. The preserved final series uses
-`benchmarkProtocolVersion=10`; new collections use version 11. Versions before 2 have a weaker collection-time
-parity check, while version 2 also accumulated every dataset in both databases
-and can exhaust a shared Docker VM. Version 3 keeps only one measured dataset
-pair live at a time. Version 4 additionally performs an unrecorded activation
-warm-up after the intentional idle-memory baseline. Version 5 performs a fresh
-throw-away import, the activation queries, and datastore deletion, so the first
-measured dataset does not uniquely pay any part of the post-idle lifecycle.
-Version 6 gates broad Q2 instability on the upper quartile of query/system
-replicate spreads; the maximum for each query remains that query's practical
-effect floor. Version 7 uses the benchmark Compose override to assign equal,
-finite no-swap memory budgets to the complete applications, rejects OOM/restart/
-missing-JVM state at the end of a run, and extends the FULL global warm-up to
-200 rounds after a complete v6 block proved that 40 rounds did not reach the
-LOCAL optimization horizon. Version 8 raises only Neo4j's transaction-memory
-ceiling from 256 MiB to 512 MiB, within the same complete-application cgroup
-budget, after the former ceiling rejected the Hospital round-trip export.
-Version 9 extends the post-idle activation from 10 to 200 complete query rounds:
-the first complete v8 block had broad LOCAL drift (Q3 ×1.36) because the first
-replicate dataset remained slower after the 60-second idle window.
-Version 10 builds LOCAL once for a final series and requires every later
-fresh-volume block and isolated storage point to reuse that exact image ID.
-Version 11 replaces the historical materializing `hoistedGroup` query with an
-aggregate-only form. The former non-total ordering could select different valid
-subsets at the default trace-limit boundary and invalidate timing comparison.
-Do not rewrite version 10 evidence; its mismatches stay excluded and audited.
-Rebuilding a report never upgrades a run's protocol. `compare-runs.py` accepts
-version 10 and newer but never combines different versions.
-A thesis-grade memory run
-must contain `processm-interpreter`, `processm-neo4j`, and `processm-server`
-from the same `docker stats` probe plus the per-timestamp aggregates
-`local-total` and `reference-total`. The fallback `local-jvm` series is useful
-only for development and invalidates Q3. Combine runs with
-`scripts/benchmarks/compare-runs.py <runA> <runB> <runC>`; all runs are units
-of evidence. Its median-metric anchor is only a presentation location, never a
-replacement for cross-run estimation.
+Protocol 23 retains the protocol-22 paired query design: one fixed dataset
+order, 40 per-query warmups and 30 adjacent LOCAL/REFERENCE query pairs in
+AB/BA order. `FULL` retains 10 paired imports into fresh datastores;
+`BLOCK` is the atomic real-log campaign unit and performs one setup/import pair
+because import inference belongs to the complete `size-scaling` run. A final
+`BLOCK` must select exactly one non-scaling dataset and execute its complete
+predeclared query family. It has no recorded cold sample, idle baseline, post-idle activation
+or declared/reversed/random run variants. Query inference is performed per
+dataset: a paired bootstrap interval for `REFERENCE / LOCAL`, a two-sided paired
+Wilcoxon test and Holm correction across six queries (four primary and two
+control) for size/real datasets and three primary queries for variant datasets.
+No Docker CLI command may run concurrently with or immediately before the
+latency block. After latency collection, replay the same 30-pair system order as
+a separate unmeasured resource block; memory sampling and query I/O snapshots
+belong only to that replay. The runner must confirm that the sampler is quiescent
+before any later timed block. Before inference, a temporal-stability diagnostic
+computes the reported `median(REFERENCE) / median(LOCAL)` effect separately in
+the first and last third of the 30 chronological pairs. A direction-independent
+ratio above 1.10 is an explicit warning, not a hard validity gate: this fixed
+cutoff is not a statistical test and must not discard otherwise complete paired
+evidence. Do not substitute the median of individual pair ratios: it is a
+different estimand and is sensitive to the two bands created by alternating
+LR/RL order. Absolute LOCAL and REFERENCE drift and baseline drift also remain
+visible diagnostically. The baseline is drawn as unconnected per-dataset points
+with an IQR error bar and does not invalidate otherwise sound hypothesis tests.
+Import inference uses the seven `size-scaling`
+datasets as one Holm family; variant and real imports are descriptive validation.
+
+A protocol-23 thesis-grade memory/I/O run must contain
+`processm-interpreter`, `processm-neo4j`, and `processm-server` from Docker.
+LOCAL and REFERENCE receive equal 6 GiB whole-system cgroup budgets without
+container swap and equal 3 GiB aggregate effective JVM heap ceilings; clean-stack
+preparation must verify both from live containers rather than trusting Compose text.
+Memory samples and summaries retain dataset and operation labels and include
+per-timestamp `local-total` and `reference-total`. Campaign resource summaries
+use medians of equal-sized blocks; never sum resource use merely because a
+campaign contains more datasets.
+`container-io.csv` retains component-level Block/Network byte deltas and cgroup
+read/write operation deltas when available. A missing cgroup operation counter
+may be marked `PARTIAL`. Block read/write bytes are required for every component;
+Network I/O is required at the reported application boundary (`processm-interpreter`
+for LOCAL and `processm-server` for REFERENCE). A missing internal Neo4j network
+counter remains a visible diagnostic partial snapshot but must not discard exact
+cgroup Block I/O from the same row. Because Docker can transiently omit one
+container from a multi-container `stats --no-stream` response, the collector
+retries an incomplete snapshot outside the timed interval before declaring it
+unavailable.
+
+Protocols 10 through 22 remain historical evidence. Do not rewrite or relabel
+them as protocol 23. Protocol-12 reports already stored beside their raw run
+must remain unchanged; current replay deliberately refuses to regenerate them.
+`ThesisReportWriter`,
+`plot-benchmark-results.py`, and `compare-runs.py` exist to reproduce those
+artifacts; new runs use `BenchmarkReportWriter` and
+`plot-readable-benchmark-results.py`.
 
 Storage measurements require particular care. Database allocation, checkpoints,
 WAL/transaction logs, page cache, and filesystem allocation granularity can
@@ -163,10 +194,51 @@ Run the smoke profile:
 ./gradlew runBenchmarkSmoke
 ```
 
+Run a non-inferential feasibility check on datasets selected from the FULL
+profile (one import, three query pairs):
+
+```bash
+BENCHMARK_DATASET_FILTER=size-1m,variants-2000,real-road-traffic ./gradlew runBenchmarkPilot
+```
+
+PILOT results may prove that the pipeline and resource budget can handle a
+dataset. They must never be merged with or presented as FULL performance data.
+
+Before a FULL run, verify small-dataset stationarity with the diagnostic profile
+(1k, 5k and 20k; baseline plus hierarchy window; 40 warmups and 30 measured
+pairs):
+
+```bash
+./gradlew runBenchmarkDiagnostic
+```
+
 Run the full thesis profile:
 
 ```bash
 ./gradlew runBenchmarkFull
+```
+
+Run one complete real-log block and later assemble compatible blocks. Each
+block still requires a separately prepared fresh stack. Campaign assembly is
+read-only with respect to the live systems and rejects dirty Git state,
+different images/configuration, incomplete query families, failed parity,
+missing resource totals, and duplicate datasets:
+
+```bash
+./gradlew runBenchmarkBlock -Pdataset=real-bpic12
+./gradlew assembleBenchmarkCampaign \
+  -PcampaignOut=tmp/benchmark-results/campaign-bpi \
+  -PcampaignRuns=tmp/benchmark-results/<block1>,tmp/benchmark-results/<block2>
+```
+
+The assembled artifact uses the report-only `CAMPAIGN` profile. Never collect
+measurements directly under that profile.
+
+The controlled axes remain whole-run units:
+
+```bash
+./gradlew runBenchmarkSizeCampaign
+./gradlew runBenchmarkVariantCampaign
 ```
 
 Remove leftover benchmark datastores:
@@ -175,25 +247,25 @@ Remove leftover benchmark datastores:
 ./gradlew runBenchmarkCleanup
 ```
 
-Generate SVG charts and embed them into the run's `thesis-report.md` and
-`thesis-tables.tex` (standard post-run step; idempotent, safe to re-run), then
-optionally fold the Markdown report + charts into one self-contained HTML file:
+Protocol 23 generates ten linear-scale SVG charts (including a BPI effect
+forest and heatmap); historical protocol-22 replay retains its eight charts. The runner folds the
+short Markdown report into one self-contained HTML file. Both steps are
+idempotent and can also be rerun manually:
 
 ```bash
-python3 scripts/benchmarks/plot-benchmark-results.py tmp/benchmark-results/<runId>
+python3 scripts/benchmarks/plot-readable-benchmark-results.py tmp/benchmark-results/<runId>
 python3 scripts/benchmarks/render-report-html.py     tmp/benchmark-results/<runId>
 ```
 
-The HTML (`thesis-report.html`) inlines every SVG, so it needs nothing else to
-view or print to PDF. The `.tex` figure block uses extension-less
-`\includegraphics{plots/<name>}`; pdflatex needs PDF (not SVG) art, so convert
-once before compiling, e.g. `for f in plots/*.svg; do rsvg-convert -f pdf -o
-"${f%.svg}.pdf" "$f"; done`, or load the `svg` package and use `\includesvg`.
+The HTML (`benchmark-report.html`) inlines every SVG, so it needs nothing else
+to view or print to PDF. The main report is intentionally short; full tables
+belong in `benchmark-appendix.md` and raw values in CSV.
 
 Generated reports live under `tmp/` (gitignored) — do not commit run outputs;
 only the generator scripts are version-controlled.
 
-After three FULL blocks, validate and combine them before rendering HTML:
+The following workflow applies only to reproduction of historical protocol
+10/11 evidence, not to a new protocol-23 run:
 
 ```bash
 python3 scripts/benchmarks/compare-runs.py <declared-run> <reversed-run> <random-run> \
@@ -221,13 +293,15 @@ REFERENCE_PROCESSM_API=http://localhost:80/api
 PROCESSM_LOGIN=admin@example.com
 PROCESSM_PASSWORD=Admin1234
 BENCHMARK_OUTPUT_DIR=tmp/benchmark-results
-BENCHMARK_DATASET_FILTER=trace-100,trace-500
+BENCHMARK_DATASET_FILTER=size-1k,size-5k
+BENCHMARK_SERIES_FILTER=size-scaling
 BENCHMARK_SYSTEM_FILTER=local,reference
 BENCHMARK_KEEP_DATASTORES=false
 ```
 
-Use filters only for diagnostics. Final results should use the complete,
-version-controlled full profile.
+Use arbitrary filters only for diagnostics. Final controlled-axis results use
+the complete version-controlled series; final real-log filters are accepted
+only through the one-dataset `BLOCK` profile and campaign assembler.
 
 ## Result Contract
 
@@ -239,6 +313,8 @@ Each run must create an immutable directory under
 - `import-results.csv`
 - `query-results.csv`
 - `query-summary.csv`
+- `comparison-results.csv`
+- `container-io.csv`
 - `storage-results.csv`
 - `roundtrip-results.csv`
 - `memory-results.csv`
@@ -246,15 +322,15 @@ Each run must create an immutable directory under
 - `environment.json`
 - `stack-preparation.json` (single-use proof of fresh Compose volumes and exact measured image IDs)
 - `cleanup-results.csv`
+- `benchmark-report.md` / `benchmark-appendix.md`
+- `benchmark-report.html`
+- exactly ten SVG files under `figures/` for protocol 23 (eight for historical protocol 22)
 
 Generated datasets and detailed mismatch files may also be retained when useful.
 Do not commit generated benchmark results unless the task explicitly requests a
 reviewable thesis result snapshot.
 
-The per-run contract above intentionally does **not** include
-`storage-scaling.csv`: only the median-metric anchor receives the isolated Q3
-probe, and the series must be comparable before that anchor can be selected.
-A final series directory at the anchor additionally preserves:
+Historical protocol-10/11 final series additionally preserve:
 
 - `repeatability.csv` / `repeatability.md`
 - `series-comparison.csv` / `series-cell-stability.csv`
@@ -270,11 +346,11 @@ analysis/provenance artifacts or the isolated storage probe is absent. Do not
 add `storage-scaling.csv` to `compare-runs.py`'s per-run `REQUIRED_FILES`: doing
 so would make the two non-anchor runs invalid and prevent selecting the anchor.
 
-Interpret query performance primarily with median and Q1–Q3. Do not interpret
-p95 below 200 samples; the FULL profile has 30. Keep mean, min, max, sample
-count, status, and response size as supporting diagnostics. A speedup is valid
-only when both systems completed the same workload, returned semantically
-compatible data, and the direction repeats across the valid FULL blocks.
+Interpret protocol-23 query performance with paired medians, the
+`REFERENCE / LOCAL` effect, its paired-bootstrap 95% interval and the
+within-dataset Holm-adjusted paired Wilcoxon p-value. Keep raw times, status and
+response size as diagnostics. A directional verdict requires both adjusted
+`p < 0.05` and an interval excluding 1, after semantic parity has passed.
 
 ## Correctness Boundaries
 
@@ -305,6 +381,7 @@ When modifying benchmark code:
 ```bash
 ./gradlew compileKotlin compileTestKotlin compileBenchmarkKotlin
 ./gradlew test --tests 'com.processm.processminterpreter.benchmark.*'
+python3 -m unittest scripts/benchmarks/test_plot_readable_results.py -v
 python3 scripts/benchmarks/prepare-benchmark-stack.py --confirm-destroy-volumes
 ./gradlew runBenchmarkSmoke
 ```

@@ -6,10 +6,20 @@ import java.nio.file.StandardCopyOption
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import kotlin.io.path.createDirectories
+import kotlin.io.path.fileSize
 import kotlin.io.path.relativeToOrSelf
 
 fun main(args: Array<String>) {
     val command = args.firstOrNull()?.lowercase()
+
+    if (command == "campaign") {
+        val outputDirectory = args.getOrNull(1)?.let(Path::of)
+            ?: error("Usage: campaign <output-directory> <block-directory> [<block-directory> ...]")
+        val blockDirectories = args.drop(2).map(Path::of)
+        require(blockDirectories.isNotEmpty()) { "A campaign needs at least one block directory" }
+        BenchmarkCampaignAssembler.assemble(outputDirectory, blockDirectories)
+        return
+    }
 
     // `report <runDir>` re-derives the thesis artifacts from an existing run's CSVs
     // without touching the containers, so an improved analysis can be applied to runs
@@ -25,6 +35,9 @@ fun main(args: Array<String>) {
         ?.takeIf { it != "cleanup" }
         ?.let { BenchmarkProfile.valueOf(it.uppercase()) }
         ?: BenchmarkProfile.SMOKE
+    require(profile != BenchmarkProfile.CAMPAIGN) {
+        "CAMPAIGN is a report-only profile; collect BLOCK runs and use the campaign command"
+    }
     val settings = BenchmarkSettings.fromEnvironment(profile)
     val runId = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"))
     val outputDirectory = settings.outputRoot.resolve(if (command == "cleanup") "cleanup-$runId" else runId)
@@ -41,19 +54,24 @@ fun main(args: Array<String>) {
     val config = BenchmarkConfig.load(profile)
     val generator = XesDatasetGenerator()
     val selectedSpecs = config.datasets.filter { spec ->
-        settings.datasetFilter.isEmpty() || spec.name in settings.datasetFilter
+        (settings.datasetFilter.isEmpty() || spec.name in settings.datasetFilter) &&
+            (settings.seriesFilter.isEmpty() || spec.series in settings.seriesFilter)
     }
     require(selectedSpecs.isNotEmpty()) {
-        "No benchmark datasets selected. Filter was: ${settings.datasetFilter}"
+        "No benchmark datasets selected. Dataset filter was ${settings.datasetFilter}; " +
+            "series filter was ${settings.seriesFilter}"
+    }
+    if (profile == BenchmarkProfile.BLOCK) {
+        require(selectedSpecs.size == 1) {
+            "BLOCK requires exactly one dataset, found ${selectedSpecs.size}: ${selectedSpecs.joinToString { it.name }}"
+        }
+        require(selectedSpecs.single().series !in setOf("size-scaling", "variant-scaling")) {
+            "Controlled scaling axes must be collected as complete series, not as one-dataset BLOCKs"
+        }
     }
 
-    val orderedSpecs = settings.datasetOrder.apply(selectedSpecs, settings.datasetOrderSeed)
-    println(
-        "Dataset order: ${settings.datasetOrder}" +
-            (if (settings.datasetOrder == DatasetOrder.RANDOM) " (seed ${settings.datasetOrderSeed})" else "") +
-            " — ${orderedSpecs.joinToString(", ") { it.name }}",
-    )
-    val datasets = orderedSpecs.map { spec ->
+    println("Dataset order: fixed — ${selectedSpecs.joinToString(", ") { it.name }}")
+    val datasets = selectedSpecs.map { spec ->
         println("Preparing dataset ${spec.name}")
         generator.prepare(spec, generatedDatasetsDirectory)
     }
@@ -61,6 +79,21 @@ fun main(args: Array<String>) {
     val systems = benchmarkSystems(settings)
     require(systems.isNotEmpty()) {
         "No benchmark systems selected. Filter was: ${settings.systemFilter}"
+    }
+    if (systems.any { it.name == "reference" }) {
+        datasets.forEach { dataset ->
+            require(dataset.file.fileSize() < REFERENCE_XES_INPUT_LIMIT_BYTES) {
+                "Dataset ${dataset.name} is ${dataset.file.fileSize()} bytes on the wire, but stock REFERENCE " +
+                    "truncates XES input at $REFERENCE_XES_INPUT_LIMIT_BYTES bytes. Select a dataset in the " +
+                    "common import domain instead of measuring a guaranteed parse failure."
+            }
+        }
+    }
+    if (profile != BenchmarkProfile.SMOKE && systems.any { it.name == "local" }) {
+        require(dockerContainerExists(settings.localAppContainer)) {
+            "${profile.name} requires the LOCAL interpreter in container '${settings.localAppContainer}' so memory and I/O " +
+                "are measured with the same Docker probes as REFERENCE"
+        }
     }
     val clients = systems.associateWith { system ->
         BenchmarkHttpClient(system.apiBase, settings.processMLogin, settings.processMPassword).also {
@@ -84,121 +117,102 @@ fun main(args: Array<String>) {
     val storage = mutableListOf<StorageBenchmarkResult>()
     val roundtrips = mutableListOf<RoundtripBenchmarkResult>()
     val cleanup = mutableListOf<DataStoreCleanupResult>()
+    val containerIo = mutableListOf<ContainerIoBenchmarkResult>()
     val createdDataStores = mutableListOf<CreatedDataStoreHandle>()
     val memorySampler = MemorySampler(memorySources(settings, systems))
+    val ioMeter = ContainerIoMeter(ioContainers(settings, systems))
     var fatalError: Throwable? = null
 
     try {
-        // Global warm-up (METODOLOGIA §5 pkt 3a) BEFORE anything is recorded — including
-        // before the idle baseline, so the baseline describes a warmed process rather
-        // than one still loading classes. Pays the JIT/class-loading/page-cache cost
-        // that the replicate datasets proved the per-query warm-ups cannot cover, and
-        // absorbs the databases' first-import page pre-allocation so it is not billed
-        // to whichever dataset happens to come first.
+        // Global warm-up is completed and its datastores are deleted before any
+        // measurement. It pays the broad JVM/JIT initialization observed in the
+        // historical pilot without adding a misleading recorded "cold" sample.
         val warmupHandles =
             runGlobalWarmup(settings, config, clients, generator, generatedDatasetsDirectory, createdDataStores, runId)
-
+        val warmupStores = createdDataStores.filter { handle ->
+            warmupHandles.any { it.system == handle.system && it.dataStoreId == handle.dataStoreId }
+        }
+        if (!settings.keepBenchmarkDataStores) {
+            cleanup += cleanupCreatedDataStores(settings, warmupStores, clients)
+            createdDataStores.removeAll(warmupStores.toSet())
+        }
         memorySampler.start()
-        println("Sampling idle memory baseline for ${settings.profile.idleBaselineSeconds}s")
-        memorySampler.sampleBlocking(MEMORY_PHASE_IDLE, settings.profile.idleBaselineSeconds)
 
-        // The idle baseline deliberately cools the processes for up to 60 seconds.
-        // Reactivate a freshly imported throw-away workload before measuring the first dataset;
-        // otherwise the first member of the replicate control pays a cost that the
-        // later two do not. MemorySampler has already cleared its phase, so these
-        // unrecorded probes cannot pollute either the idle or query-memory series.
-        runPostIdleActivationWarmup(
-            settings = settings,
-            config = config,
-            clients = clients,
-            globalWarmupHandles = warmupHandles,
-            createdDataStores = createdDataStores,
-            cleanup = cleanup,
-            runId = runId,
-        )
-
-        // Protocol v3+ isolates the live datastore working set per dataset. Keeping all
-        // 25 pairs resident made the two applications compete for the Docker VM budget
-        // and killed REFERENCE although the failing query itself used a small result
-        // window. Import, query, round-trip and cleanup therefore form one complete
-        // block before the next dataset is admitted. Dataset order is still varied
-        // between FULL runs, so any residual cache/JIT drift remains observable.
-        val measuredQueries = config.queries
+        // The current protocol uses one fixed dataset order. Confounding by short-term drift
+        // is handled inside each adjacent pair. Import, query, round-trip and cleanup
+        // form one complete isolated dataset block.
         var queryPairIndex = 0
         datasets.forEachIndexed { datasetIndex, dataset ->
             val datasetStores = mutableListOf<CreatedDataStoreHandle>()
-            val handles = mutableListOf<ImportedDatasetHandle>()
+            var handles = emptyList<ImportedDatasetHandle>()
             try {
-                val importRound = counterbalancedImportRound(datasetIndex, datasets.size, settings.datasetOrder)
-                balancedOrder(systems, importRound).forEach { system ->
-                    val client = clients.getValue(system)
-                    val dataStoreName = "bench-$runId-${system.name}-${dataset.name}"
-                    println("[${system.name}] Creating datastore $dataStoreName")
-                    val dataStoreId = runCatching { client.createDataStore(dataStoreName) }
-                        .getOrElse { error ->
+                repeat(settings.profile.importRepetitions) { zeroBasedRun ->
+                    val importRun = zeroBasedRun + 1
+                    val finalRun = importRun == settings.profile.importRepetitions
+                    val storesThisRun = mutableListOf<CreatedDataStoreHandle>()
+                    val handlesThisRun = mutableListOf<ImportedDatasetHandle>()
+                    balancedOrder(systems, datasetIndex * settings.profile.importRepetitions + zeroBasedRun).forEach { system ->
+                        val client = clients.getValue(system)
+                        val dataStoreName = "bench-$runId-${system.name}-${dataset.name}-i$importRun"
+                        println("[${system.name}] Import $importRun/${settings.profile.importRepetitions}: $dataStoreName")
+                        val beforeStorage = if (finalRun) storageMeter.measureStable(system.storage) else null
+                        val dataStoreId = runCatching { client.createDataStore(dataStoreName) }.getOrElse { error ->
                             imports += ImportBenchmarkResult(
-                                system = system.name,
-                                datasetName = dataset.name,
-                                run = 1,
-                                seconds = 0.0,
-                                status = "ERROR",
-                                dataStoreId = "",
-                                logCount = 0,
-                                details = error.message.orEmpty(),
+                                system.name, dataset.name, importRun, 0.0, "ERROR", "", 0, error.message.orEmpty(),
                             )
                             return@forEach
                         }
-                    val created = CreatedDataStoreHandle(system, dataStoreName, dataStoreId)
-                    createdDataStores += created
-                    datasetStores += created
-
-                    val beforeStorage = storageMeter.measureStable(system.storage)
-                    val importResult = runCatching { client.uploadLogAndWait(dataStoreId, dataset.file) }
-                    val afterStorage = storageMeter.measureStable(system.storage)
-
-                    importResult
-                        .onSuccess { result ->
+                        val created = CreatedDataStoreHandle(system, dataStoreName, dataStoreId)
+                        createdDataStores += created
+                        storesThisRun += created
+                        val beforeIo = ioMeter.snapshot()
+                        val importResult = runCatching { client.uploadLogAndWait(dataStoreId, dataset.file) }
+                        val afterIo = ioMeter.snapshot()
+                        val afterStorage = if (finalRun) storageMeter.measureStable(system.storage) else null
+                        containerIo += ioMeter.deltas(
+                            phase = "import",
+                            datasetName = dataset.name,
+                            operationLabel = "import",
+                            run = importRun,
+                            before = beforeIo,
+                            after = afterIo,
+                        ).filter { it.system == system.name }
+                        importResult.onSuccess { result ->
                             imports += ImportBenchmarkResult(
-                                system = system.name,
-                                datasetName = dataset.name,
-                                run = 1,
-                                seconds = result.seconds,
-                                status = "OK",
-                                dataStoreId = dataStoreId,
-                                logCount = result.logCount,
+                                system.name, dataset.name, importRun, result.seconds, "OK", dataStoreId, result.logCount,
                             )
-                            handles += ImportedDatasetHandle(system, dataset, dataStoreId)
-                        }
-                        .onFailure { error ->
+                            handlesThisRun += ImportedDatasetHandle(system, dataset, dataStoreId)
+                        }.onFailure { error ->
                             imports += ImportBenchmarkResult(
-                                system = system.name,
-                                datasetName = dataset.name,
-                                run = 1,
-                                seconds = 0.0,
-                                status = "ERROR",
-                                dataStoreId = dataStoreId,
-                                logCount = 0,
-                                details = error.message.orEmpty(),
+                                system.name, dataset.name, importRun, 0.0, "ERROR", dataStoreId, 0, error.message.orEmpty(),
                             )
                         }
-
-                    storage += storageResult(system, dataset, beforeStorage, afterStorage)
+                        if (finalRun) storage += storageResult(system, dataset, beforeStorage, afterStorage)
+                    }
+                    require(handlesThisRun.size == systems.size) {
+                        "Dataset ${dataset.name}, import $importRun: ${handlesThisRun.size}/${systems.size} systems succeeded"
+                    }
+                    if (finalRun) {
+                        handles = handlesThisRun.sortedBy { handle -> systems.indexOf(handle.system) }
+                        datasetStores += storesThisRun
+                    } else if (!settings.keepBenchmarkDataStores) {
+                        cleanup += cleanupCreatedDataStores(settings, storesThisRun, clients)
+                        createdDataStores.removeAll(storesThisRun.toSet())
+                    } else {
+                        datasetStores += storesThisRun
+                    }
                 }
 
-                require(handles.size == systems.size) {
-                    "Dataset ${dataset.name} imported on ${handles.size}/${systems.size} systems; " +
-                        "see import-results.csv"
-                }
-                handles.sortBy { handle -> systems.indexOf(handle.system) }
-
-                // Per (dataset, query) pair: one recorded cold execution per system,
-                // interleaved warmups, then 30 interleaved measured repetitions.
-                memorySampler.setPhase(MEMORY_PHASE_QUERIES)
-                measuredQueries.forEach { query ->
+                // Per (dataset, query): interleaved warmups followed immediately by
+                // adjacent, counterbalanced measured pairs. No Docker CLI probe runs
+                // in or immediately before this latency block. The same measured-step
+                // order is then replayed without recording time as a separate resource
+                // block for memory and I/O observation.
+                config.queries.filter { it.isMeasuredFor(dataset.series) }.forEach { query ->
                     println("Query ${query.label} on ${dataset.name} [${handles.joinToString(",") { it.system.name }}]")
                     val plan = buildQueryExecutionPlan(
                         systemCount = handles.size,
-                        warmups = settings.profile.warmups,
+                        warmups = settings.queryWarmups,
                         repetitions = settings.profile.repetitions,
                         initialSystemIndex = queryPairIndex % handles.size,
                     )
@@ -212,11 +226,12 @@ fun main(args: Array<String>) {
                         val client = clients.getValue(handle.system)
                         when (step.kind) {
                             QueryStepKind.WARMUP -> client.executeQuery(handle.dataStoreId, query.query)
-                            QueryStepKind.COLD, QueryStepKind.MEASURED -> {
-                                val phase = if (step.kind == QueryStepKind.COLD) QUERY_PHASE_COLD else QUERY_PHASE_WARM
-                                val recorded = recordedQuerySample(client, handle, query.label, query.query, step.run, phase)
+                            QueryStepKind.MEASURED -> {
+                                val recorded = recordedQuerySample(
+                                    client, handle, query.label, query.query, step.run, QUERY_PHASE_WARM,
+                                )
                                 pairSamples += recorded.first
-                                if (phase == QUERY_PHASE_WARM && recorded.second != null) {
+                                if (recorded.second != null) {
                                     lastWarmBodies[handle.system.name] = recorded.second!!
                                 }
                                 if (recorded.first.status == "ERROR") pairFailure = recorded.first
@@ -227,10 +242,31 @@ fun main(args: Array<String>) {
                     pairFailure?.let {
                         error("Query ${query.label} failed on ${dataset.name}/${it.system}: ${it.details}")
                     }
+
+                    val beforeResourceIo = ioMeter.snapshot()
+                    memorySampler.setPhase(MEMORY_PHASE_QUERIES, dataset.name, query.label)
+                    try {
+                        plan.filter { it.kind == QueryStepKind.MEASURED }.forEach { step ->
+                            val handle = handles[step.systemIndex]
+                            clients.getValue(handle.system).executeQuery(handle.dataStoreId, query.query)
+                        }
+                    } finally {
+                        memorySampler.pauseAndAwaitQuiescence()
+                        memorySampler.sampleOnce(MEMORY_PHASE_QUERIES, dataset.name, query.label)
+                    }
+                    val afterResourceIo = ioMeter.snapshot()
+                    containerIo += ioMeter.deltas(
+                        phase = "query",
+                        datasetName = dataset.name,
+                        operationLabel = query.label,
+                        run = 0,
+                        before = beforeResourceIo,
+                        after = afterResourceIo,
+                    )
                 }
-                // Round-trip export is a correctness check, not part of the Q3
-                // query-memory interval.
-                memorySampler.setPhase(null)
+                // Round-trip export is a correctness check, not part of the query
+                // memory or I/O interval.
+                memorySampler.pauseAndAwaitQuiescence()
 
                 handles
                     .filter { it.system.name == "local" }
@@ -276,9 +312,24 @@ fun main(args: Array<String>) {
     }
 
     val querySummaries = QueryStatistics.summarize(queries)
+    val comparisons = BenchmarkAnalysis.queryComparisons(
+        datasets, config.queries, queries, expectedPairs = settings.profile.repetitions,
+    ) + BenchmarkAnalysis.importComparisons(
+        datasets, imports, expectedPairs = settings.profile.importRepetitions,
+    )
     val measuredContainers = memoryContainers(settings, systems)
     val environmentDetails = EnvironmentProbe.collect(measuredContainers)
     val runtimeIssues = EnvironmentProbe.runtimeIssues(environmentDetails, measuredContainers)
+    val memorySummaries = memorySampler.summaries()
+    val requiredMemoryTotals = if (profile != BenchmarkProfile.SMOKE) {
+        systems.map { if (it.name == "local") "local-total" else "reference-total" }.toSet()
+    } else {
+        emptySet()
+    }
+    val missingMemoryTotals = requiredMemoryTotals - memorySummaries
+        .filter { it.phase == MEMORY_PHASE_QUERIES }
+        .map { it.component }
+        .toSet()
     BenchmarkResultsWriter(outputDirectory).write(
         settings = settings,
         datasets = datasets,
@@ -289,23 +340,25 @@ fun main(args: Array<String>) {
         roundtrips = roundtrips,
         cleanup = cleanup,
         memorySamples = memorySampler.samples(),
-        memorySummaries = memorySampler.summaries(),
+        memorySummaries = memorySummaries,
         environmentDetails = environmentDetails,
         querySpecs = config.queries,
+        comparisons = comparisons,
+        containerIo = containerIo,
     )
-    // Thesis artifacts (METODOLOGIA §6): generated at the end of every run from the
-    // in-memory records, never by re-reading the CSVs written above.
-    ThesisReportWriter(outputDirectory).write(
+    BenchmarkReportWriter(outputDirectory).write(
         runId = runId,
         settings = settings,
         datasets = datasets,
         imports = imports,
         queries = queries,
-        storage = storage,
+        comparisons = comparisons,
+        containerIo = containerIo,
         roundtrips = roundtrips,
-        memorySummaries = memorySampler.summaries(),
+        memorySummaries = memorySummaries,
         querySpecs = config.queries,
     )
+    generateReportArtifacts(outputDirectory)
 
     println("Benchmark report written to $outputDirectory")
     fatalError?.let { throw it }
@@ -314,15 +367,21 @@ fun main(args: Array<String>) {
         println("WARNING: $mismatches query sample(s) invalidated by response MISMATCH. See query-results.csv")
     }
     runtimeIssues.forEach { println("ERROR: benchmark runtime state: $it") }
+    missingMemoryTotals.forEach { println("ERROR: missing required memory series: $it") }
     val strictErrors = imports.count { it.status != "OK" } +
-        queries.count { it.status == "ERROR" } +
-        roundtrips.count { it.status == "ERROR" } +
+        queries.count { it.status != "OK" } +
+        roundtrips.count { it.status != "MATCH" } +
+        comparisons.count { it.status != "OK" } +
         cleanup.count { it.status !in setOf("DELETED", "SKIPPED") } +
+        containerIo.count { ContainerIoValidity.isCriticalFailure(it, settings.localAppContainer) } +
+        missingMemoryTotals.size +
         runtimeIssues.size
     if (strictErrors > 0) {
         error("Benchmark finished with $strictErrors infrastructure/runtime error(s). See $outputDirectory")
     }
 }
+
+private const val REFERENCE_XES_INPUT_LIMIT_BYTES = 5L * 1024 * 1024
 
 /**
  * Archives and consumes the proof emitted immediately after `docker compose down -v`.
@@ -434,63 +493,6 @@ private fun runWarmupQueries(
         }
     }
     println("$label complete")
-}
-
-/**
- * Pays the first post-idle import/query/delete lifecycle before measured data.
- *
- * Querying only the datastore created before the idle baseline leaves the first
- * fresh measured import in a unique position. A temporary second pair makes the
- * transition into `trace-100` identical to the transitions between measured
- * dataset blocks. The persistent global-warm-up pair is not touched, so the idle
- * and query memory phases contain the same background datastore shape.
- */
-private fun runPostIdleActivationWarmup(
-    settings: BenchmarkSettings,
-    config: BenchmarkConfig,
-    clients: Map<BenchmarkSystem, BenchmarkHttpClient>,
-    globalWarmupHandles: List<ImportedDatasetHandle>,
-    createdDataStores: MutableList<CreatedDataStoreHandle>,
-    cleanup: MutableList<DataStoreCleanupResult>,
-    runId: String,
-) {
-    val rounds = settings.postIdleWarmupRounds
-    if (rounds <= 0 || clients.isEmpty()) return
-    require(globalWarmupHandles.size == clients.size) {
-        "Post-idle activation requires one prepared warm-up dataset per system"
-    }
-
-    val dataset = globalWarmupHandles.first().dataset
-    val activationStores = mutableListOf<CreatedDataStoreHandle>()
-    val activationHandles = mutableListOf<ImportedDatasetHandle>()
-    try {
-        clients.forEach { (system, client) ->
-            val storeName = "bench-$runId-${system.name}-post-idle"
-            val storeId = runCatching { client.createDataStore(storeName) }
-                .getOrElse { error("Post-idle datastore creation failed on ${system.name}: ${it.message}") }
-            val created = CreatedDataStoreHandle(system, storeName, storeId)
-            activationStores += created
-            createdDataStores += created
-            runCatching { client.uploadLogAndWait(storeId, dataset.file) }
-                .getOrElse { error("Post-idle import failed on ${system.name}: ${it.message}") }
-            activationHandles += ImportedDatasetHandle(system, dataset, storeId)
-        }
-        require(activationHandles.size == clients.size) {
-            "Post-idle activation imported ${activationHandles.size}/${clients.size} system datasets"
-        }
-        runWarmupQueries(
-            label = "Post-idle activation warm-up",
-            rounds = rounds,
-            config = config,
-            clients = clients,
-            handles = activationHandles,
-        )
-    } finally {
-        if (!settings.keepBenchmarkDataStores) {
-            cleanup += cleanupCreatedDataStores(settings, activationStores, clients)
-            createdDataStores.removeAll(activationStores.toSet())
-        }
-    }
 }
 
 private fun recordedQuerySample(
@@ -608,6 +610,20 @@ private fun memorySources(
         }
     }
 
+/** Container topology used for current-protocol I/O accounting. */
+private fun ioContainers(
+    settings: BenchmarkSettings,
+    systems: List<BenchmarkSystem>,
+): Map<String, String> = buildMap {
+    systems.forEach { system -> put(system.storage.container, system.name) }
+    if (systems.any { it.name == "local" } &&
+        settings.localAppContainer.isNotBlank() &&
+        dockerContainerExists(settings.localAppContainer)
+    ) {
+        put(settings.localAppContainer, "local")
+    }
+}
+
 private fun runCleanup(settings: BenchmarkSettings, outputDirectory: Path) {
     outputDirectory.createDirectories()
     val systems = benchmarkSystems(settings)
@@ -723,6 +739,19 @@ private fun deleteDataStore(
 }
 
 private const val BENCHMARK_DATASTORE_PREFIX = "bench-"
+
+internal fun generateReportArtifacts(outputDirectory: Path) {
+    val python = if (isWindowsHost) "python" else "python3"
+    listOf(
+        listOf(python, "scripts/benchmarks/plot-readable-benchmark-results.py", outputDirectory.toString()),
+        listOf(python, "scripts/benchmarks/render-report-html.py", outputDirectory.toString()),
+    ).forEach { command ->
+        val process = ProcessBuilder(command).redirectErrorStream(true).start()
+        val output = process.inputStream.bufferedReader().readText()
+        require(process.waitFor() == 0) { "Report command failed (${command.joinToString(" ")}): $output" }
+        if (output.isNotBlank()) println(output.trim())
+    }
+}
 
 private fun storageResult(
     system: BenchmarkSystem,

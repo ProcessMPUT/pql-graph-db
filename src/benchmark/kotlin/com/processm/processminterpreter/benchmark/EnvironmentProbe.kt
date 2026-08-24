@@ -81,10 +81,10 @@ object EnvironmentProbe {
     /**
      * The heap the JVM actually runs with, read from the container's Java process.
      *
-     * Both systems size their heap at startup rather than declaring it statically —
-     * the reference computes it from the memory available to its container, and this
-     * interpreter follows the same rule — so the configured environment alone does not
-     * document what was measured. Best-effort: containers without a JVM report null.
+     * The reference computes its heap from the memory available to its container,
+     * while LOCAL declares heap flags for two JVMs. The configured environment alone
+     * therefore does not document what was measured. Best-effort: containers without
+     * a JVM report null.
      */
     private fun effectiveJvmHeap(name: String): String? =
         runCatching {

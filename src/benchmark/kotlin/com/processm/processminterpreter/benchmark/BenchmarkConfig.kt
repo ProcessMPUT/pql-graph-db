@@ -8,64 +8,63 @@ import kotlin.io.path.Path
 enum class BenchmarkProfile(
     val warmups: Int,
     val repetitions: Int,
-    /**
-     * Idle memory-baseline sampling window before imports (methodology 5.2).
-     * FULL uses the methodology-mandated 60 s; SMOKE keeps a short window so the
-     * pipeline smoke test stays fast (smoke results are never thesis evidence).
-     */
-    val idleBaselineSeconds: Int,
-    /**
-     * Executions of a throw-away dataset before the first measured one.
-     *
-     * Three warm-ups *per query* are not enough: the replicate datasets show that
-     * the JVM's warm-up horizon spans the whole run (the same 100×10×5 dataset
-     * measured at separated positions differed broadly on LOCAL). A complete v6
-     * block still had Q3 ×1.57 after 40 rounds; FULL v7 therefore pays 200 rounds
-     * before any number is recorded.
-     */
+    val importRepetitions: Int,
+    /** Fixed process/JIT warm-up chosen from the historical pilot, never reported. */
     val globalWarmupRounds: Int,
-    /**
-     * Executions on a freshly imported throw-away dataset immediately after the
-     * idle-memory baseline. The complete unrecorded import/query/delete cycle
-     * restores an active lifecycle state before the first measured dataset,
-     * without contaminating the idle samples. A complete v8 block showed that
-     * 10 rounds still left the first replicate dataset broadly slower on LOCAL;
-     * FULL v9 therefore repeats the same 200-round workload after the idle window.
-     */
-    val postIdleWarmupRounds: Int,
+    /** Legacy protocol metadata; the current protocol does not collect an idle baseline. */
+    val idleBaselineSeconds: Int = 0,
 ) {
     SMOKE(
         warmups = 1,
         repetitions = 3,
-        idleBaselineSeconds = 5,
+        importRepetitions = 1,
         globalWarmupRounds = 2,
-        postIdleWarmupRounds = 2,
+    ),
+    /** Focused stationarity check before an expensive FULL collection. */
+    DIAGNOSTIC(
+        warmups = 40,
+        repetitions = 30,
+        importRepetitions = 1,
+        globalWarmupRounds = 200,
+    ),
+    /** Feasibility run over FULL datasets; never used for performance inference. */
+    PILOT(
+        warmups = 1,
+        repetitions = 3,
+        importRepetitions = 1,
+        globalWarmupRounds = 2,
     ),
     FULL(
-        warmups = 3,
+        warmups = 40,
         repetitions = 30,
-        idleBaselineSeconds = 60,
+        importRepetitions = 10,
         globalWarmupRounds = 200,
-        postIdleWarmupRounds = 200,
     ),
-
     /**
-     * Common-domain size ladder for Q2 diagnostics (10^4 … 2×10^5 events).
-     * Run separately from FULL: the thesis workload does not need to pay for it, and
-     * the ladder needs the headroom to leave the fixed transport floor behind.
+     * One thesis-grade dataset block.  It keeps the complete query family and
+     * full latency/resource protocol, but uses one setup import because import
+     * inference belongs to the dedicated size-scaling campaign.
      */
-    SCALING(
-        warmups = 3,
+    BLOCK(
+        warmups = 40,
         repetitions = 30,
-        idleBaselineSeconds = 60,
+        importRepetitions = 1,
         globalWarmupRounds = 200,
-        postIdleWarmupRounds = 200,
+    ),
+    /** Report-only profile produced by assembling validated [BLOCK] artifacts. */
+    CAMPAIGN(
+        warmups = 40,
+        repetitions = 30,
+        importRepetitions = 1,
+        globalWarmupRounds = 200,
     ),
 }
 
 enum class DatasetType {
     SYNTHETIC,
     REAL,
+    /** Small hand-written application fixture; useful for smoke, not external validation. */
+    FIXTURE,
 }
 
 /** See [BenchmarkSettings.datasetOrder]. */
@@ -100,7 +99,17 @@ data class BenchmarkDatasetSpec(
     val traces: Int? = null,
     val eventsPerTrace: Int? = null,
     val attributesPerEvent: Int? = null,
+    /** Synthetic activity alphabet; absent means the historical maximum of 20 names. */
+    val activityCount: Int? = null,
+    /** Exact number of concept:name trace variants requested from the synthetic generator. */
+    val variantCount: Int? = null,
     val resourcePath: String? = null,
+    /** Persistent identifier of a published real-life dataset, when applicable. */
+    val sourceDoi: String? = null,
+    /** Named published family used for cross-dataset validation figures. */
+    val collection: String? = null,
+    /** Stable display order inside [collection], normally the challenge year. */
+    val collectionOrder: Int? = null,
 )
 
 /**
@@ -129,10 +138,21 @@ data class BenchmarkDatasetSpec(
 const val WORKLOAD_FLOOR = "floor"
 const val WORKLOAD_WINDOW = "window"
 const val WORKLOAD_DATA_DEPENDENT = "dataDependent"
-const val BENCHMARK_SERIES_RANDOM_SEED = 20260728L
-const val CURRENT_BENCHMARK_PROTOCOL_VERSION = 11
-const val POST_IDLE_WARMUP_MODE = "fresh-import-query-delete"
-const val REPLICATE_VALIDITY_STATISTIC = "query-spread-q3"
+const val CURRENT_BENCHMARK_PROTOCOL_VERSION = 23
+
+enum class BenchmarkQueryRole {
+    /** Directly tests the hierarchy-traversal hypothesis. */
+    PRIMARY,
+
+    /** Deliberate boundary case where a graph is not assumed to help. */
+    CONTROL,
+
+    /** Descriptive end-to-end reference; excluded from hypothesis tests. */
+    BASELINE,
+
+    /** Historical query retained only when replaying an older run. */
+    SUPPLEMENTARY,
+}
 
 @JsonIgnoreProperties(ignoreUnknown = true)
 data class BenchmarkQuerySpec(
@@ -144,7 +164,18 @@ data class BenchmarkQuerySpec(
     val clause: String = "",
     /** Dataset series for which this query's semantics leave a causal path from the varied axis to work. */
     val scalingSeries: List<String> = emptyList(),
-)
+    /** Reader-facing name; code labels never need to carry the explanation alone. */
+    val displayName: String = label,
+    /** Why this query is in the experiment and what part of PQL it exercises. */
+    val purpose: String = clause,
+    val role: BenchmarkQueryRole = BenchmarkQueryRole.SUPPLEMENTARY,
+    /** Series on which the query is executed. Empty keeps legacy runs readable. */
+    val measurementSeries: List<String> = emptyList(),
+) {
+    val isInferential: Boolean get() = role == BenchmarkQueryRole.PRIMARY || role == BenchmarkQueryRole.CONTROL
+
+    fun isMeasuredFor(series: String): Boolean = measurementSeries.isEmpty() || series in measurementSeries
+}
 
 data class BenchmarkSettings(
     val profile: BenchmarkProfile,
@@ -163,18 +194,12 @@ data class BenchmarkSettings(
      * the application JVM's RSS on the host, which is the development setup.
      */
     val localAppContainer: String,
-    /**
-     * Order in which datasets are imported and measured — the confounder the
-     * alternating L,R,L,R protocol does **not** remove. Position in the sequence
-     * carries the JVM warm-up bias, and it hits the two-JVM LOCAL side hardest,
-     * i.e. it biases the experiment against the implementation under study.
-     *
-     * METODOLOGIA §5 pkt 6 requires the three runs of a series to counterbalance
-     * it: `declared`, then `reversed`, then `random` with the seed recorded in
-     * `environment.json` so the order is reproducible.
-     */
+    val seriesFilter: Set<String> = emptySet(),
+    /** Historical metadata only. The current protocol always uses the declared fixed order. */
     val datasetOrder: DatasetOrder = DatasetOrder.DECLARED,
     val datasetOrderSeed: Long = 0L,
+    /** Explicit because replay must report the value used by the historical run. */
+    val queryWarmups: Int = profile.warmups,
     /**
      * Version of the collection-time claims that may be made about a run.
      *
@@ -194,6 +219,43 @@ data class BenchmarkSettings(
      * workload with an aggregate-only variant. The old query used a non-total sort
      * at the default trace-limit boundary, so two valid engines could return different
      * tied subsets and make their latency samples semantically incomparable.
+     * Version 12 replaces the three-order/full-matrix experiment with one fixed,
+     * hypothesis-led design: 30 adjacent LOCAL/REFERENCE pairs, Wilcoxon tests and
+     * paired bootstrap intervals per dataset/query, Holm correction within each
+     * dataset, repeated imports, and container I/O deltas.
+     * Version 13 extends the size series to one million events, replaces the
+     * confounded trace-shape series with an exact trace-variant axis at fixed
+     * size and shape, and validates transfer on twelve published real-life logs.
+     * Version 14 adds a constant-response hierarchy-cardinality query to the
+     * size and real-log families. It traverses log, trace and event scopes while
+     * leaving the three-query variant family unchanged.
+     * Version 15 raises per-dataset/query warm-up to 12 executions per system,
+     * rejects 30-pair series whose first and last thirds differ by more than 10%,
+     * and adds a focused stationarity diagnostic before the FULL collection.
+     * Version 16 raises the fixed warm-up to 40 after the protocol-15 diagnostic
+     * still observed 12–27% early/late drift after 12 warm-up executions.
+     * Version 17 moves concurrent Docker memory polling to the unmeasured query
+     * warm-ups and adds a fixed quiet period after the pre-block I/O snapshot.
+     * Version 18 fully separates the latency block from Docker instrumentation:
+     * memory and I/O use a duplicate unmeasured 30-pair resource block afterwards.
+     * Version 19 keeps temporal drift visible for the descriptive baseline but
+     * restricts invalidation to primary/control comparisons used for inference.
+     * Version 20 gates the median of chronological paired REFERENCE/LOCAL ratios instead of
+     * either system's absolute latency. Common-mode host drift is therefore visible
+     * but does not invalidate the counterbalanced paired comparison. It also raises
+     * the equal whole-system cgroup budgets to 6 GiB after the former limits were
+     * reached during the instrumented resource replay.
+     * Version 21 aligns that gate with the reported ratio-of-medians estimand and
+     * verifies equal 3 GiB aggregate effective JVM heap ceilings from live process
+     * command lines.
+     * Version 22 retains the first/last-third ratio-of-medians as an explicit drift
+     * diagnostic but no longer uses the arbitrary 10% cutoff to discard complete
+     * paired observations. Semantic parity, complete pairs, confidence intervals,
+     * paired Wilcoxon tests and Holm correction remain inferential requirements.
+     * Version 23 adds complete one-real-dataset BLOCKs and validated campaign
+     * assembly from raw samples. It records dataset/query context on memory samples,
+     * reports resource medians for equal-sized blocks instead of duration-dependent
+     * campaign totals, and adds separate BPI Challenge forest/heatmap figures.
      */
     val protocolVersion: Int = CURRENT_BENCHMARK_PROTOCOL_VERSION,
     /**
@@ -202,8 +264,8 @@ data class BenchmarkSettings(
      * rather than what the current profile would do.
      */
     val globalWarmupRounds: Int = profile.globalWarmupRounds,
-    /** See [BenchmarkProfile.postIdleWarmupRounds]. */
-    val postIdleWarmupRounds: Int = profile.postIdleWarmupRounds,
+    /** Legacy replay metadata; the current protocol has no post-idle activation phase. */
+    val postIdleWarmupRounds: Int = 0,
 ) {
     companion object {
         fun fromEnvironment(profile: BenchmarkProfile): BenchmarkSettings =
@@ -218,13 +280,9 @@ data class BenchmarkSettings(
                 systemFilter = csvEnv("BENCHMARK_SYSTEM_FILTER"),
                 keepBenchmarkDataStores = booleanEnv("BENCHMARK_KEEP_DATASTORES", default = false),
                 localAppContainer = env("LOCAL_APP_CONTAINER", "processm-interpreter"),
-                datasetOrder = DatasetOrder.parse(env("BENCHMARK_DATASET_ORDER", DatasetOrder.DECLARED.name)),
-                // Keep the third counterbalancing block reproducible even when the
-                // operator omits the optional environment variable. compare-runs.py
-                // enforces the same preregistered seed for thesis evidence.
-                datasetOrderSeed = env("BENCHMARK_DATASET_ORDER_SEED", BENCHMARK_SERIES_RANDOM_SEED.toString())
-                    .toLongOrNull()
-                    ?: error("BENCHMARK_DATASET_ORDER_SEED must be an integer"),
+                seriesFilter = csvEnv("BENCHMARK_SERIES_FILTER"),
+                datasetOrder = DatasetOrder.DECLARED,
+                datasetOrderSeed = 0L,
             )
 
         private fun env(name: String, default: String): String =
@@ -259,13 +317,22 @@ data class BenchmarkConfig(
             val allDatasets = mapper.readValue(datasetsResource, BenchmarkDatasetProfiles::class.java)
             val datasets = when (profile) {
                 BenchmarkProfile.SMOKE -> allDatasets.smoke
-                BenchmarkProfile.FULL -> allDatasets.full
-                BenchmarkProfile.SCALING -> allDatasets.scaling
+                BenchmarkProfile.DIAGNOSTIC -> allDatasets.full.filter {
+                    it.name in setOf("size-1k", "size-5k", "size-20k")
+                }
+                BenchmarkProfile.PILOT, BenchmarkProfile.FULL, BenchmarkProfile.BLOCK,
+                BenchmarkProfile.CAMPAIGN,
+                -> allDatasets.full
             }
-            val queries = mapper.readValue(
+            val allQueries = mapper.readValue(
                 resourceText("benchmark-queries.json"),
                 mapper.typeFactory.constructCollectionType(List::class.java, BenchmarkQuerySpec::class.java),
             ) as List<BenchmarkQuerySpec>
+            val queries = if (profile == BenchmarkProfile.DIAGNOSTIC) {
+                allQueries.filter { it.label in setOf("minimalWindow", "hierarchyWindow") }
+            } else {
+                allQueries
+            }
             return BenchmarkConfig(datasets = datasets, queries = queries)
         }
 
@@ -279,5 +346,4 @@ data class BenchmarkConfig(
 private data class BenchmarkDatasetProfiles(
     val smoke: List<BenchmarkDatasetSpec>,
     val full: List<BenchmarkDatasetSpec>,
-    val scaling: List<BenchmarkDatasetSpec> = emptyList(),
 )

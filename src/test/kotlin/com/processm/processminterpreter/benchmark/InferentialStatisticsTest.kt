@@ -29,6 +29,14 @@ class InferentialStatisticsTest {
     }
 
     @Test
+    fun `wilcoxon uses exact two sided distribution for ten imports`() {
+        val local = (1..10).map { it.toDouble() }
+        val reference = local.map { it + 10.0 }
+
+        assertEquals(2.0 / 1024.0, InferentialStatistics.wilcoxonSignedRank(local, reference), 1e-12)
+    }
+
+    @Test
     fun `wilcoxon rejects an incomplete pairing`() {
         assertEquals(1.0, InferentialStatistics.wilcoxonSignedRank(listOf(1.0), listOf(2.0, 3.0)))
     }

@@ -1,9 +1,6 @@
 package com.processm.processminterpreter.benchmark
 
 enum class QueryStepKind {
-    /** First execution per (system, dataset, query), recorded with phase `cold`. */
-    COLD,
-
     /** Unrecorded warmup execution. */
     WARMUP,
 
@@ -14,7 +11,7 @@ enum class QueryStepKind {
 data class QueryExecutionStep(
     val systemIndex: Int,
     val kind: QueryStepKind,
-    /** 0 for cold and warmup steps, 1..repetitions for measured steps. */
+    /** 0 for warmup steps, 1..repetitions for measured steps. */
     val run: Int,
 )
 
@@ -23,24 +20,13 @@ const val QUERY_PHASE_WARM = "warm"
 const val QUERY_STATUS_MISMATCH = "MISMATCH"
 
 /**
- * Round passed to the cyclic system ordering for one dataset import.
- *
- * Reversing a list with an odd number of datasets preserves every dataset's index
- * parity. Without the extra offset, the same system would therefore import first
- * for that dataset in both deterministic counterbalanced blocks. For an even list
- * reversal already flips parity, so no offset is needed.
- */
-fun counterbalancedImportRound(
-    datasetIndex: Int,
-    datasetCount: Int,
-    datasetOrder: DatasetOrder,
-): Int = datasetIndex + if (datasetOrder == DatasetOrder.REVERSED) datasetCount % 2 else 0
-
-/**
  * Builds the per-(dataset, query) execution order required by the methodology (section 5.4):
- * 1. one recorded cold execution per system, before any warmup,
- * 2. unrecorded warmups, counterbalanced between systems,
- * 3. recorded repetitions in AB/BA order so neither system is always first.
+ * 1. unrecorded warmups, counterbalanced between systems,
+ * 2. recorded paired repetitions in AB/BA order so neither system is always first.
+ *
+ * The current paired protocol deliberately has no recorded "cold" sample. A first execution after
+ * a global JVM warm-up is neither a reproducible cold start nor part of the warm
+ * distribution used to answer the research question.
  */
 fun buildQueryExecutionPlan(
     systemCount: Int,
@@ -55,9 +41,6 @@ fun buildQueryExecutionPlan(
         fun systemOrder(startOffset: Int): List<Int> =
             (0 until systemCount).map { (initialSystemIndex + startOffset + it) % systemCount }
 
-        systemOrder(0).forEach { systemIndex ->
-            add(QueryExecutionStep(systemIndex, QueryStepKind.COLD, run = 0))
-        }
         repeat(warmups) { warmup ->
             systemOrder(warmup).forEach { systemIndex ->
                 add(QueryExecutionStep(systemIndex, QueryStepKind.WARMUP, run = 0))

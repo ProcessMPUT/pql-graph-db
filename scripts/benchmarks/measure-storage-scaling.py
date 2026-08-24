@@ -38,7 +38,13 @@ HEALTH_TIMEOUT_SECONDS = 180.0
 HEALTH_POLL_SECONDS = 3.0
 UPLOAD_TIMEOUT_SECONDS = 900.0
 LOG_POLL_SECONDS = 1.0
-SCALING_SERIES = {"trace-scaling", "event-scaling", "attribute-scaling", "shape-scaling"}
+SCALING_SERIES = {
+    "size-scaling",
+    "trace-scaling",
+    "event-scaling",
+    "attribute-scaling",
+    "shape-scaling",
+}
 FRESH_STACK_MARKER = Path("tmp/benchmark-stack-ready.json")
 
 NEO4J_SIZE_COMMAND = (

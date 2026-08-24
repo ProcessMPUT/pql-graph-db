@@ -188,7 +188,10 @@ class BenchmarkHttpClient(
         while (System.nanoTime() < deadline) {
             val count = listLogs(dataStoreId).size
             if (count >= expectedCount) return
-            Thread.sleep(1_000)
+            // Import readiness is asynchronous in REFERENCE. A one-second poll
+            // interval dominated small imports and quantized their measured time;
+            // the current protocol caps that observation delay at 100 ms.
+            Thread.sleep(100)
         }
         error("Timed out waiting for $expectedCount log(s) in datastore $dataStoreId")
     }
