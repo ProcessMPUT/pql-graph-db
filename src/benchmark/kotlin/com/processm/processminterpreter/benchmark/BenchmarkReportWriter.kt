@@ -69,6 +69,8 @@ class BenchmarkReportWriter(
         val isFinal = settings.profile in setOf(
             BenchmarkProfile.FULL,
             BenchmarkProfile.BLOCK,
+            BenchmarkProfile.CONTROL,
+            BenchmarkProfile.QUERY,
             BenchmarkProfile.CAMPAIGN,
         )
         val invalid = comparisons.count { it.status != "OK" }
@@ -163,7 +165,7 @@ class BenchmarkReportWriter(
             val sizeInferentialCount = querySpecs.count { it.isInferential && it.isMeasuredFor("size-scaling") }
             val realInferentialCount = querySpecs.count { it.isInferential && it.isMeasuredFor("real-validation") }
             val variantInferentialCount = querySpecs.count { it.isInferential && it.isMeasuredFor("variant-scaling") }
-            appendLine("Testowane są $primaryCount zapytania główne i $controlCount kontrolne. Dwustronne testy Wilcoxona są parowane per dataset; korekta Holma obejmuje wszystkie zapytania inferencyjne wykonane na danym datasecie ($sizeInferentialCount dla rozmiaru, $realInferentialCount dla logów rzeczywistych i $variantInferentialCount dla osi wariantów). Minimalne okno jest wyłącznie opisowym baseline'em.")
+            appendLine("Testowanych jest $primaryCount zapytań głównych i $controlCount kontrolnych. Dwustronne testy Wilcoxona są parowane per dataset; korekta Holma obejmuje wszystkie zapytania inferencyjne wykonane na danym datasecie ($sizeInferentialCount dla rozmiaru, $realInferentialCount dla logów rzeczywistych i $variantInferentialCount dla osi wariantów). Minimalne okno jest wyłącznie opisowym baseline'em.")
             appendLine()
             appendLine("### Jak powstają liczby w tabelach")
             appendLine()
@@ -205,14 +207,34 @@ class BenchmarkReportWriter(
                 })
                 if (!isSmoke && sizeDatasets.size > 2) {
                     appendLine()
-                    appendLine("Wykres efektu obejmuje wszystkie ${sizeDatasets.size} rozmiarów. Tabela w głównej części pokazuje tylko pierwszy i ostatni punkt, aby uwidocznić zmianę między krańcami bez powtarzania całego wykresu; wyniki pośrednie znajdują się w załączniku i CSV.")
+                    appendLine(if (settings.protocolVersion >= 25) {
+                        "Wykresy efektu obejmują wszystkie ${sizeDatasets.size} rozmiarów; każde zapytanie przedstawiono osobno. Tabela w głównej części pokazuje tylko pierwszy i ostatni punkt, aby uwidocznić zmianę między krańcami bez powtarzania wykresów; wyniki pośrednie znajdują się w załączniku i CSV."
+                    } else {
+                        "Wykres efektu obejmuje wszystkie ${sizeDatasets.size} rozmiarów. Tabela w głównej części pokazuje tylko pierwszy i ostatni punkt, aby uwidocznić zmianę między krańcami bez powtarzania całego wykresu; wyniki pośrednie znajdują się w załączniku i CSV."
+                    })
                 }
-                appendLine()
-                appendLine("![Efekty zapytań dla serii rozmiaru](figures/fig-01-query-effect-size.svg)")
-                appendLine()
-                appendLine("Na wykresie czasów baseline jest pokazany jako niepołączone punkty z IQR, ponieważ jego koszt powinien być prawie stały i łączenie drobnych wahań sugerowałoby nieistniejący trend. IQR obejmuje środkowe 50% surowych czasów. Pozostałe linie łączą mediany wyłącznie pomocniczo.")
-                appendLine()
-                appendLine("![Mediany czasów dla serii rozmiaru](figures/fig-02-query-latency-size.svg)")
+                if (settings.protocolVersion >= 25) {
+                    appendLine()
+                    appendLine("Każde zapytanie ma osobny wykres i własną liniową skalę efektu. Dzięki temu duża wartość jednego zapytania nie ściska wyników pozostałych. Zakres osi jest podany na każdym wykresie; położenia punktów z różnych wykresów nie należy porównywać bez odczytania wartości R/L.")
+                    querySpecs.filter { spec ->
+                        spec.isMeasuredFor("size-scaling") &&
+                            sizeQueryRows.any { it.operationLabel == spec.label }
+                    }.forEach { spec ->
+                        appendLine()
+                        appendLine("### ${spec.displayName}")
+                        appendLine()
+                        appendLine(spec.purpose)
+                        appendLine()
+                        appendLine("![${spec.displayName}](figures/${sizeQueryFigureName(spec.label)})")
+                    }
+                } else {
+                    appendLine()
+                    appendLine("![Efekty zapytań dla serii rozmiaru](figures/fig-01-query-effect-size.svg)")
+                    appendLine()
+                    appendLine("Na wykresie czasów baseline jest pokazany jako niepołączone punkty z IQR, ponieważ jego koszt powinien być prawie stały i łączenie drobnych wahań sugerowałoby nieistniejący trend. IQR obejmuje środkowe 50% surowych czasów. Pozostałe linie łączą mediany wyłącznie pomocniczo.")
+                    appendLine()
+                    appendLine("![Mediany czasów dla serii rozmiaru](figures/fig-02-query-latency-size.svg)")
+                }
                 appendLine()
                 appendLine(effectTable(sizeQueryRows.filter { it.datasetName in sizeEndpointNames }, queryTextByLabel))
             }
@@ -268,6 +290,8 @@ class BenchmarkReportWriter(
                 appendLine()
                 appendLine(if (!isFinal) {
                     "Przebieg diagnostyczny wykonuje ${settings.profile.importRepetitions} ${pairNoun(settings.profile.importRepetitions)} importu per dataset. Czas obejmuje wysłanie XES i oczekiwanie, aż log będzie widoczny w API; gotowość jest sprawdzana co 100 ms."
+                } else if (settings.profile.importRepetitions == 1) {
+                    "Import wykonano jednokrotnie jako przygotowanie każdego datasetu do pomiarów zapytań. Te czasy mają charakter opisowy i nie służą do wnioskowania o wydajności importu."
                 } else {
                     "Czas importu obejmuje wysłanie XES i oczekiwanie, aż log będzie widoczny w API; gotowość jest sprawdzana co 100 ms. Statystyczna rodzina importu obejmuje ${sizeImportRows.size} punktów serii rozmiaru."
                 })
@@ -537,6 +561,12 @@ class BenchmarkReportWriter(
 
     private fun bytesPerEvent(value: Double): String = "${number(value, 0)} B/zdarzenie"
 
+    private fun sizeQueryFigureName(label: String): String {
+        val safe = label.lowercase().replace(Regex("[^a-z0-9]+"), "-").trim('-')
+        require(safe.isNotEmpty()) { "Query label cannot form a figure name: $label" }
+        return "fig-query-size-$safe.svg"
+    }
+
     private fun verdictCounts(label: String, rows: List<BenchmarkComparisonResult>): String {
         val counts = rows.groupingBy { it.verdict }.eachCount()
         return "$label (${rows.size}): " +
@@ -548,17 +578,21 @@ class BenchmarkReportWriter(
         val valid = rows.filter { it.status == "OK" }
         val syntheticPrimary = valid.filter { it.role == "primary" && it.series in setOf("size-scaling", "variant-scaling") }
         val realPrimary = valid.filter { it.role == "primary" && it.series == "real-validation" }
-        val like = valid.filter { it.operationLabel == "likeScan" }
+        val likeNoMatch = valid.filter { it.operationLabel == "likeNoMatch" }
+        val likeMatching = valid.filter { it.operationLabel == "likeMatching" }
+        val equality = valid.filter { it.operationLabel == "eventEquality" }
         val ordering = valid.filter { it.operationLabel == "standardAttributesOrder" }
         return buildList {
             if (syntheticPrimary.isNotEmpty()) {
                 add("Dane syntetyczne, zapytania główne: ${compactVerdicts(syntheticPrimary)}.")
             }
             if (realPrimary.isNotEmpty()) add("Logi rzeczywiste, zapytania główne: ${compactVerdicts(realPrimary)}.")
-            if (like.isNotEmpty() || ordering.isNotEmpty()) {
+            if (likeNoMatch.isNotEmpty() || likeMatching.isNotEmpty() || equality.isNotEmpty() || ordering.isNotEmpty()) {
                 add(
                     "Kontrole: " + listOfNotNull(
-                        "LIKE — ${compactVerdicts(like)}".takeIf { like.isNotEmpty() },
+                        "LIKE bez dopasowań — ${compactVerdicts(likeNoMatch)}".takeIf { likeNoMatch.isNotEmpty() },
+                        "LIKE z dopasowaniami — ${compactVerdicts(likeMatching)}".takeIf { likeMatching.isNotEmpty() },
+                        "równość z dopasowaniami — ${compactVerdicts(equality)}".takeIf { equality.isNotEmpty() },
                         "sortowanie — ${compactVerdicts(ordering)}".takeIf { ordering.isNotEmpty() },
                     ).joinToString("; ") + ".",
                 )
@@ -667,7 +701,9 @@ class BenchmarkReportWriter(
             "- **Bramka stabilności czasowej (historyczna)** — osobno dla LOCAL i REFERENCE porównuje medianę pierwszej i ostatniej jednej trzeciej czasów. Iloraz większy niż ${number(TemporalStability.MAX_EARLY_LATE_RATIO, 2)} unieważnia porównanie inferencyjne."
     }
 
-    private fun validityGateExplanation(protocolVersion: Int): String = if (protocolVersion >= 22) {
+    private fun validityGateExplanation(protocolVersion: Int): String = if (protocolVersion >= 25) {
+        "Bramka poprawności nie mierzy szybkości. Sprawdza kompletność danych, semantyczną porównywalność odpowiedzi, round-trip XES oraz dostępność pomiarów zasobów. Dryf pierwszej względem ostatniej części serii jest pokazany jako diagnostyka, ale stały próg 10% nie unieważnia poprawnych par. Baseline nie uczestniczy we wnioskowaniu: jest pokazywany jako opisowy punkt efektu bez p-wartości i werdyktu kierunkowego."
+    } else if (protocolVersion >= 22) {
         "Bramka poprawności nie mierzy szybkości. Sprawdza kompletność danych, semantyczną porównywalność odpowiedzi, round-trip XES oraz dostępność pomiarów zasobów. Dryf pierwszej względem ostatniej części serii jest pokazany jako diagnostyka, ale stały próg 10% nie unieważnia poprawnych par. Baseline nie uczestniczy we wnioskowaniu: jego punkt jest pokazywany bez linii i z IQR."
     } else {
         "Bramka poprawności nie mierzy szybkości. Określa, czy dane z przebiegu są kompletne, semantycznie porównywalne i ustabilizowane w czasie. Trend przekraczający próg unieważnia zapytanie główne lub kontrolne. Baseline nie uczestniczy we wnioskowaniu: jego dryf pozostaje jawnym ostrzeżeniem, a punkt jest pokazywany bez linii i z IQR, lecz nie blokuje poprawnych porównań hipotez."

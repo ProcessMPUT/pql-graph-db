@@ -107,7 +107,7 @@ class ReadablePlotTest(unittest.TestCase):
             unity_positions = re.findall(r'<line x1="([0-9.]+)"[^>]+class="unity"', forest)
             self.assertEqual(2, len(unity_positions))
             self.assertEqual(1, len(set(unity_positions)))
-            self.assertIn("wspólna liniowa oś X", forest)
+            self.assertIn("oś X:", forest)
             self.assertIn("(limit l:1, t:10, e:20)", forest)
             latency = (run / "figures" / "fig-02-query-latency-size.svg").read_text(encoding="utf-8")
             self.assertIn("n=30 sparowanych powtórzeń", latency)
@@ -117,6 +117,12 @@ class ReadablePlotTest(unittest.TestCase):
             self.assertEqual(6, latency.count('class="baseline-iqr"'))
             self.assertIn("(limit l:1, t:10, e:20)", latency)
             self.assertTrue((run / "figures" / "fig-03-query-effect-variants.svg").is_file())
+            import_figure = (run / "figures" / "fig-05-import-effect.svg").read_text(encoding="utf-8")
+            self.assertIn("mediany w s", import_figure)
+            self.assertIn("LOCAL [s]", import_figure)
+            self.assertIn("REFERENCE [s]", import_figure)
+            self.assertIn(">1.00</text>", import_figure)
+            self.assertIn(">2.00</text>", import_figure)
             memory = (run / "figures" / "fig-06-container-memory.svg").read_text(encoding="utf-8")
             self.assertIn("Mediana i maksimum wskazania docker stats", memory)
             self.assertNotIn("Suma delt", memory)
@@ -197,10 +203,140 @@ class ReadablePlotTest(unittest.TestCase):
             figures = sorted((run / "figures").glob("*.svg"))
             self.assertEqual(10, len(figures))
             self.assertTrue((run / "figures" / "fig-05-query-effect-bpi.svg").is_file())
+            real = (run / "figures" / "fig-04-query-effect-real.svg").read_text(encoding="utf-8")
+            bpi = (run / "figures" / "fig-05-query-effect-bpi.svg").read_text(encoding="utf-8")
+            self.assertIn("LOCAL [ms]", real)
+            self.assertIn("REFERENCE [ms]", real)
+            self.assertIn("LOCAL [ms]", bpi)
+            self.assertIn("REFERENCE [ms]", bpi)
             heatmap = (run / "figures" / "fig-06-query-effect-bpi-heatmap.svg").read_text(encoding="utf-8")
             self.assertIn("BPIC11 (Hospital)", heatmap)
+            split = MODULE.generate_split_query_figures(run, "real-validation")
+            self.assertEqual([run / "figures" / "fig-query-real-hierarchywindow.svg"], split)
+            split_content = split[0].read_text(encoding="utf-8")
+            self.assertIn("Logi rzeczywiste — Hierarchy", split_content)
+            self.assertIn("LOCAL [ms]", split_content)
+            self.assertIn(">100.00</text>", split_content)
+            self.assertIn(">200.00</text>", split_content)
             self.assertTrue((run / "figures" / "fig-08-container-memory.svg").is_file())
             self.assertTrue((run / "figures" / "fig-10-container-network-io.svg").is_file())
+
+    def test_protocol_25_gives_each_size_query_an_independent_effect_axis(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run = Path(directory)
+            (run / "environment.json").write_text(
+                json.dumps({"benchmarkProtocolVersion": 25}), encoding="utf-8",
+            )
+            self.write_csv(run / "datasets.csv", ["datasetName", "collection", "collectionOrder"], [])
+            headers = [
+                "metric", "datasetName", "series", "operationLabel", "displayName", "role", "pairs",
+                "localMedianSeconds", "referenceMedianSeconds", "ratioReferenceToLocal", "confidenceLow",
+                "confidenceHigh", "rawPValue", "holmPValue", "verdict", "status", "details",
+            ]
+            self.write_csv(
+                run / "comparison-results.csv", headers,
+                [
+                    ["query", "size-1k", "size-scaling", "hierarchyWindow", "Hierarchy", "primary", 30,
+                     .1, .2, 2, 1.5, 2.5, .001, .005, "LOCAL_FASTER", "OK", ""],
+                    ["query", "size-1k", "size-scaling", "variantGroupCount", "Variants", "primary", 30,
+                     .1, 8, 80, 70, 90, .001, .005, "LOCAL_FASTER", "OK", ""],
+                ],
+            )
+            self.write_csv(
+                run / "queries.csv", ["queryLabel", "pql"],
+                [["hierarchyWindow", "limit l:1"], ["variantGroupCount", "group by ^e:name"]],
+            )
+            self.write_csv(run / "query-summary.csv", ["system", "datasetName", "queryLabel"], [])
+            self.write_csv(run / "memory-summary.csv", ["component", "phase", "medianBytes", "peakBytes"], [])
+            self.write_csv(
+                run / "container-io.csv",
+                ["system", "phase", "component", "blockReadBytes", "blockWriteBytes",
+                 "networkReceiveBytes", "networkTransmitBytes", "status"],
+                [],
+            )
+            figures = run / "figures"
+            figures.mkdir()
+            (figures / "fig-03-query-effect-variants.svg").write_text("stale", encoding="utf-8")
+
+            MODULE.generate(run)
+
+            hierarchy_path = run / "figures" / "fig-query-size-hierarchywindow.svg"
+            variants_path = run / "figures" / "fig-query-size-variantgroupcount.svg"
+            self.assertTrue(hierarchy_path.is_file())
+            self.assertTrue(variants_path.is_file())
+            hierarchy = hierarchy_path.read_text(encoding="utf-8")
+            variants = variants_path.read_text(encoding="utf-8")
+            self.assertIn("0–3.00", hierarchy)
+            self.assertIn("0–100.00", variants)
+            self.assertIn("mediany w ms", hierarchy)
+            self.assertIn("LOCAL [ms]", hierarchy)
+            self.assertIn("REFERENCE [ms]", hierarchy)
+            self.assertIn(">100.00</text>", hierarchy)
+            self.assertIn(">200.00</text>", hierarchy)
+            self.assertFalse((run / "figures" / "fig-01-query-effect-size.svg").exists())
+            self.assertFalse((run / "figures" / "fig-02-query-latency-size.svg").exists())
+            self.assertFalse((run / "figures" / "fig-03-query-effect-variants.svg").exists())
+            self.assertFalse((run / "figures" / "fig-04-query-effect-real.svg").exists())
+            self.assertFalse((run / "figures" / "fig-05-query-effect-bpi.svg").exists())
+            self.assertFalse((run / "figures" / "fig-06-query-effect-bpi-heatmap.svg").exists())
+            self.assertFalse((run / "figures" / "fig-07-import-effect.svg").exists())
+            self.assertEqual(5, len(list((run / "figures").glob("*.svg"))))
+
+    def test_resource_summary_figures_keep_exact_values_beside_ratios(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            size_run = root / "size"
+            size_memory_run = root / "size-memory"
+            variant_run = root / "variants"
+            real_run = root / "real"
+            for run in (size_run, size_memory_run, variant_run, real_run):
+                run.mkdir()
+            mib = 1024 * 1024
+            self.write_csv(
+                size_run / "storage-scaling.csv",
+                ["datasetName", "system", "deltaBytes"],
+                [
+                    ["size-1k", "local", mib],
+                    ["size-1k", "reference", 4 * mib],
+                    ["size-1m", "local", 10 * mib],
+                    ["size-1m", "reference", 20 * mib],
+                ],
+            )
+            for run, multiplier in ((size_run, 1), (variant_run, 2), (real_run, 3)):
+                self.write_csv(
+                    run / "memory-summary.csv",
+                    ["component", "phase", "medianBytes", "peakBytes"],
+                    [
+                        ["local-total", "queries", multiplier * 100 * mib, multiplier * 150 * mib],
+                        ["reference-total", "queries", multiplier * 50 * mib, multiplier * 90 * mib],
+                    ],
+                )
+            self.write_csv(
+                size_memory_run / "memory-summary.csv",
+                ["component", "phase", "medianBytes", "peakBytes"],
+                [
+                    ["local-total", "queries", 700 * mib, 800 * mib],
+                    ["reference-total", "queries", 350 * mib, 400 * mib],
+                ],
+            )
+
+            outputs = MODULE.generate_resource_summary_figures(
+                size_run, variant_run, real_run, size_memory_run,
+            )
+
+            self.assertEqual(2, len(outputs))
+            storage = outputs[0].read_text(encoding="utf-8")
+            self.assertIn("Trwały rozmiar danych", storage)
+            self.assertIn("logarytmiczna oś ilorazu", storage)
+            self.assertIn(">1 tys.</text>", storage)
+            self.assertIn(">1.0</text>", storage)
+            self.assertIn(">4.0</text>", storage)
+            memory = outputs[1].read_text(encoding="utf-8")
+            self.assertIn("Pamięć kontenerowa", memory)
+            self.assertIn("Rozmiar — mediana", memory)
+            self.assertIn("Logi rzeczywiste — maksimum", memory)
+            self.assertIn(">700.0</text>", memory)
+            self.assertIn(">350.0</text>", memory)
 
     @staticmethod
     def write_csv(path: Path, headers: list[str], data: list[list[object]]) -> None:

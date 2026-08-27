@@ -23,7 +23,7 @@ class BenchmarkCampaignAssemblerTest {
         assertTrue(output.resolve("environment.json").readText().contains("\"profile\" : \"campaign\""))
         val comparisons = CsvReader.read(output.resolve("comparison-results.csv"))
             .filter { it["metric"] == "query" }
-        assertEquals(14, comparisons.size)
+        assertEquals(10, comparisons.size)
         assertTrue(comparisons.all { it["pairs"] == "30" })
         assertTrue(comparisons.filter { it["role"] in setOf("primary", "control") }
             .all { it["holmPValue"].orEmpty().isNotBlank() })

@@ -38,10 +38,10 @@ consistent with each other. Use it rather than re-deriving:
 - `run-compatibility-report.py`: orchestrate matrix/dropdown/discovery reports.
 - `benchmarks/plot-benchmark-results.py`: create SVG plots from benchmark
   artifacts and embed them into historical protocol-10/11 reports.
-- `benchmarks/plot-readable-benchmark-results.py`: create ten linear-scale SVG
-  figures from protocol-23 CSVs, including the BPI forest/heatmap, while
-  retaining the historical eight-figure protocol-22 contract. It never changes
-  raw data or the Markdown narrative.
+- `benchmarks/plot-readable-benchmark-results.py`: create independently scaled
+  per-query size figures for protocol 25, including the BPI forest/heatmap,
+  while retaining the historical protocol-22–24 layouts. It never changes raw
+  data or the Markdown narrative.
 - `benchmarks/render-report-html.py`: fold the current protocol's
   `benchmark-report.md`, or a historical `thesis-report-series.md`, and its
   charts into one self-contained HTML file.

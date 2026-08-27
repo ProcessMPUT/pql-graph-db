@@ -1206,6 +1206,23 @@ class CypherCodegenTest {
     }
 
     @Test
+    fun `grouping a cost sequence does not use the activity variant cache`() {
+        val compiler = PqlCompiler(AntlrPqlParser(), EmptyLogRepository, EmptyDataStoreRepository)
+        val plan = compiler.compile(
+            "select count(t:name), count(^e:total) group by ^e:total " +
+                "order by count(t:name) desc limit l:1, t:3",
+            logId = "synthetic-test",
+        ) as LogicalPlan.Select
+
+        val c = codegen.generate(plan).cypher
+
+        assertTrue(c.contains("HAS_EVENT"), c)
+        assertTrue(c.contains("collect(event.cost) AS _trace_variant_"), c)
+        assertFalse(c.contains("processmActivityVariantId"), c)
+        assertFalse(c.contains("processmActivityNonNullCount"), c)
+    }
+
+    @Test
     fun `activity variant cache falls back when grouped event values are selected`() {
         val compiler = PqlCompiler(AntlrPqlParser(), EmptyLogRepository, EmptyDataStoreRepository)
         val plan = compiler.compile(

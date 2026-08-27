@@ -1,6 +1,7 @@
 package com.processm.processminterpreter.benchmark
 
 import com.processm.processminterpreter.pql.ast.PqlQuery
+import com.processm.processminterpreter.pql.ast.PqlExpression
 import com.processm.processminterpreter.pql.parser.AntlrPqlParser
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -17,13 +18,18 @@ class QueryExecutionPlanTest {
     }
 
     @Test
-    fun `standard attribute ordering query has four explicit tie breakers`() {
+    fun `ordering control uses four attributes populated by the synthetic generator`() {
         val spec = BenchmarkConfig.load(BenchmarkProfile.FULL).queries.single {
             it.label == "standardAttributesOrder"
         }
         val parsed = AntlrPqlParser().parse(spec.query) as PqlQuery.Select
 
         assertEquals(4, parsed.orderBy.size)
+        assertTrue(spec.query.contains("e:cost:total"))
+        assertTrue(spec.query.contains("[e:attr_1]"))
+        val customAttribute = parsed.orderBy.last().expression as PqlExpression.AttributeRef
+        assertTrue(customAttribute.wasBracketed)
+        assertEquals("attr_1", customAttribute.name)
     }
 
     @Test
@@ -32,32 +38,36 @@ class QueryExecutionPlanTest {
         val allowed = setOf("size-scaling", "variant-scaling")
 
         assertTrue(specs.values.flatMap { it.scalingSeries }.all { it in allowed })
-        assertEquals(4, specs.values.count { it.role == BenchmarkQueryRole.PRIMARY })
-        assertEquals(2, specs.values.count { it.role == BenchmarkQueryRole.CONTROL })
+        assertEquals(6, specs.values.count { it.role == BenchmarkQueryRole.PRIMARY })
+        assertEquals(4, specs.values.count { it.role == BenchmarkQueryRole.CONTROL })
         assertEquals(1, specs.values.count { it.role == BenchmarkQueryRole.BASELINE })
         assertTrue(specs.getValue("standardAttributesOrder").isMeasuredFor("size-scaling"))
+        assertTrue(!specs.getValue("standardAttributesOrder").isMeasuredFor("real-validation"))
         assertTrue(!specs.getValue("standardAttributesOrder").isMeasuredFor("variant-scaling"))
         assertTrue(specs.getValue("hierarchyCardinality").isMeasuredFor("size-scaling"))
         assertTrue(specs.getValue("hierarchyCardinality").isMeasuredFor("real-validation"))
         assertTrue(!specs.getValue("hierarchyCardinality").isMeasuredFor("variant-scaling"))
-        assertEquals(7, specs.values.count { it.isMeasuredFor("size-scaling") })
-        assertEquals(4, specs.values.count { it.isMeasuredFor("variant-scaling") })
-        assertEquals(7, specs.values.count { it.isMeasuredFor("real-validation") })
+        assertTrue(specs.getValue("globalEventAggregation").isMeasuredFor("real-validation"))
+        assertTrue(!specs.getValue("genericVariantGroup").isMeasuredFor("real-validation"))
+        assertTrue(!specs.getValue("hoistedPositive").isMeasuredFor("real-validation"))
+        assertEquals(11, specs.values.count { it.isMeasuredFor("size-scaling") })
+        assertEquals(3, specs.values.count { it.isMeasuredFor("variant-scaling") })
+        assertEquals(5, specs.values.count { it.isMeasuredFor("real-validation") })
     }
 
     @Test
-    fun `full profile retains its design under modular protocol 23`() {
+    fun `full profile retains its design under modular protocol 25`() {
         val config = BenchmarkConfig.load(BenchmarkProfile.FULL)
         assertEquals(22, config.datasets.size)
         assertEquals(7, config.datasets.count { it.series == "size-scaling" })
         assertEquals(3, config.datasets.count { it.series == "variant-scaling" })
         assertEquals(12, config.datasets.count { it.series == "real-validation" })
         assertEquals(10, config.datasets.count { it.collection == "bpi-challenge" })
-        assertEquals(7, config.queries.size)
+        assertEquals(11, config.queries.size)
         assertEquals(30, BenchmarkProfile.FULL.repetitions)
         assertEquals(10, BenchmarkProfile.FULL.importRepetitions)
         assertEquals(40, BenchmarkProfile.FULL.warmups)
-        assertEquals(23, CURRENT_BENCHMARK_PROTOCOL_VERSION)
+        assertEquals(25, CURRENT_BENCHMARK_PROTOCOL_VERSION)
     }
 
     @Test
@@ -65,10 +75,34 @@ class QueryExecutionPlanTest {
         val config = BenchmarkConfig.load(BenchmarkProfile.BLOCK)
 
         assertEquals(BenchmarkConfig.load(BenchmarkProfile.FULL).datasets, config.datasets)
-        assertEquals(7, config.queries.size)
+        assertEquals(11, config.queries.size)
         assertEquals(40, BenchmarkProfile.BLOCK.warmups)
         assertEquals(30, BenchmarkProfile.BLOCK.repetitions)
         assertEquals(1, BenchmarkProfile.BLOCK.importRepetitions)
+    }
+
+    @Test
+    fun `control profile isolates corrected size series controls`() {
+        val config = BenchmarkConfig.load(BenchmarkProfile.CONTROL)
+
+        assertEquals(
+            listOf("standardAttributesOrder", "eventEquality", "likeNoMatch", "likeMatching"),
+            config.queries.map { it.label },
+        )
+        assertEquals(40, BenchmarkProfile.CONTROL.warmups)
+        assertEquals(30, BenchmarkProfile.CONTROL.repetitions)
+        assertEquals(1, BenchmarkProfile.CONTROL.importRepetitions)
+    }
+
+    @Test
+    fun `query profile contains the complete audited size workload`() {
+        val config = BenchmarkConfig.load(BenchmarkProfile.QUERY)
+
+        assertEquals(BenchmarkConfig.load(BenchmarkProfile.FULL).queries, config.queries)
+        assertTrue(config.queries.all { it.isMeasuredFor("size-scaling") })
+        assertEquals(40, BenchmarkProfile.QUERY.warmups)
+        assertEquals(30, BenchmarkProfile.QUERY.repetitions)
+        assertEquals(1, BenchmarkProfile.QUERY.importRepetitions)
     }
 
     @Test

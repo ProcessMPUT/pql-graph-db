@@ -40,11 +40,15 @@ zapytanie ma z góry określoną rolę.
 | Rola | Nazwa w raporcie | Etykieta | Co pokazuje |
 |---|---|---|---|
 | główne | Pobranie hierarchii log–ślad–zdarzenie | `hierarchyWindow` | odczyt ograniczonego wyniku obejmującego wszystkie trzy poziomy XES |
-| główne | Filtrowanie śladów na podstawie zdarzeń | `hoistedWhere` | warunek w zakresie śladu zależny od atrybutu zdarzenia |
-| główne | Grupowanie wariantów procesu | `variantGroupCount` | grupowanie śladów według sekwencji zdarzeń i obliczenie liczności |
+| główne | Selektywny warunek śladu zależny od zdarzeń | `hoistedPositive` | dodatni warunek między poziomami hierarchii, dopasowujący konkretną aktywność |
+| główne | Grupowanie wariantów procesu | `variantGroupCount` | grupowanie sekwencji nazw z użyciem metadanych wariantu wyliczonych przy imporcie |
+| główne | Grupowanie sekwencji bez bufora wariantu nazw | `genericVariantGroup` | grupowanie po sekwencji kosztów, które nie może użyć metadanych wariantu nazw |
 | główne | Zliczanie elementów hierarchii log–ślad–zdarzenie | `hierarchyCardinality` | pełne zliczenie logów, śladów i zdarzeń przy stałym rozmiarze odpowiedzi |
-| kontrolne | Sortowanie po atrybutach standardowych | `standardAttributesOrder` | operację, dla której reprezentacja grafowa nie gwarantuje przewagi |
-| kontrolne | Skan nazw zdarzeń operatorem LIKE | `likeScan` | pełne sprawdzenie wartości właściwości przy braku dopasowań |
+| główne | Agregacja po wszystkich zdarzeniach | `globalEventAggregation` | pełne zliczenie zdarzeń oraz wyznaczenie skrajnych znaczników czasu |
+| kontrolne | Sortowanie po obecnych atrybutach zdarzeń | `standardAttributesOrder` | sortowanie po czterech kluczach rzeczywiście obecnych w danych syntetycznych |
+| kontrolne | Filtrowanie po równości nazwy zdarzenia | `eventEquality` | dokładne dopasowanie występujące w co dziesiątym zdarzeniu |
+| kontrolne | LIKE bez dopasowań | `likeNoMatch` | koszt wykazania braku pasującej nazwy bez rekonstrukcji wyniku zdarzeń |
+| kontrolne | LIKE z dopasowaniami | `likeMatching` | wyszukanie wielu rzeczywistych trafień i rekonstrukcja ograniczonej odpowiedzi |
 | baseline | Minimalne okno odpowiedzi | `minimalWindow` | opisowy koszt najlżejszej pełnej odpowiedzi; nie testuje hipotezy |
 
 Zapytania główne wynikają bezpośrednio z hipotezy. Kontrolne ograniczają jej
@@ -52,9 +56,11 @@ interpretację: eksperyment ma pokazać, gdzie graf pomaga, a nie udowodnić, ż
 LOCAL jest szybszy dla każdej operacji. Baseline nie jest odejmowany od innych
 czasów, ponieważ poszczególne zapytania mogą przechodzić innymi ścieżkami kodu.
 
-`hierarchyCardinality` jest wykonywane na osi rozmiaru i logach rzeczywistych.
-Nie należy do osi wariantów, ponieważ przy stałej liczbie logów, śladów i zdarzeń
-zmiana samych sekwencji aktywności nie zmienia zliczanych liczności.
+`hierarchyCardinality` i `globalEventAggregation` są wykonywane na osi rozmiaru
+oraz logach rzeczywistych. Nie należą do osi wariantów, ponieważ przy stałej
+liczbie elementów zmiana samych sekwencji aktywności nie zmienia ich pracy.
+Zapytania zależne od wartości generatora (`hoistedPositive`,
+`genericVariantGroup` i kontrole) są ograniczone do danych syntetycznych.
 
 Dokładny tekst PQL, nazwa dla czytelnika, rola i uzasadnienie są wersjonowane w
 `src/benchmark/resources/benchmark-queries.json` i zapisywane w `queries.csv`.
@@ -92,8 +98,9 @@ Generator koduje numer wariantu deterministycznie w pierwszych dwóch nazwach
 aktywności, a w pozostałych 48 pozycjach umieszcza cały wspólny alfabet.
 Dzięki temu rozmiar, długość śladu, liczba aktywności i liczba atrybutów nie są
 konfundowane z liczbą wariantów. Seria nie jest modelem kompletnego „naturalnego
-logu”; izoluje jedną konkretną cechę struktury. Wykonuje się na niej baseline i
-trzy zapytania główne, bez dwóch zapytań kontrolnych niezwiązanych z tą osią.
+logu"; izoluje jedną konkretną cechę struktury. Wykonuje się na niej baseline,
+okno hierarchii i grupowanie wariantów nazw. Pozostałe zapytania nie mają
+związku przyczynowego z tą osią.
 
 ### 4.3 Walidacja na logach rzeczywistych
 

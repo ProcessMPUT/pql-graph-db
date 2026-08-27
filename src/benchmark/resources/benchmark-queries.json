@@ -19,14 +19,14 @@
     "scalingSeries": ["size-scaling", "variant-scaling"]
   },
   {
-    "label": "hoistedWhere",
-    "displayName": "Filtrowanie śladów na podstawie zdarzeń",
-    "query": "where ^e:name is not null limit l:1, t:10, e:20",
+    "label": "hoistedPositive",
+    "displayName": "Selektywny warunek śladu zależny od zdarzeń",
+    "query": "where ^e:name = 'activity-10' limit l:1, t:10, e:20",
     "workload": "window",
     "role": "PRIMARY",
-    "purpose": "Bezpośredni test hipotezy: warunek w zakresie śladu zależy od atrybutu należącego do zdarzeń i wymaga przejścia między poziomami hierarchii.",
-    "measurementSeries": ["size-scaling", "variant-scaling", "real-validation", "smoke-fixture"],
-    "scalingSeries": ["size-scaling", "variant-scaling"]
+    "purpose": "Test przejścia między poziomami hierarchii z dodatnim i selektywnym warunkiem: wybierane są ślady zawierające jedną konkretną nazwę aktywności obecną w generatorze.",
+    "measurementSeries": ["size-scaling"],
+    "scalingSeries": ["size-scaling"]
   },
   {
     "label": "variantGroupCount",
@@ -34,9 +34,19 @@
     "query": "select count(t:name), count(^e:name) group by ^e:name order by count(t:name) desc limit l:1, t:3",
     "workload": "dataDependent",
     "role": "PRIMARY",
-    "purpose": "Bezpośredni test hipotezy dla operacji charakterystycznej dla eksploracji procesów: grupowania śladów według sekwencji zdarzeń i obliczenia liczności.",
+    "purpose": "Test operacji charakterystycznej dla eksploracji procesów: grupowania śladów według sekwencji nazw zdarzeń. LOCAL korzysta tu z identyfikatora wariantu i liczności zdarzeń wyliczonych podczas importu; wynik mierzy całą zaprojektowaną ścieżkę, a nie sam model grafowy.",
     "measurementSeries": ["size-scaling", "variant-scaling", "real-validation", "smoke-fixture"],
     "scalingSeries": ["size-scaling", "variant-scaling"]
+  },
+  {
+    "label": "genericVariantGroup",
+    "displayName": "Grupowanie sekwencji bez bufora wariantu nazw",
+    "query": "select count(t:name), count(^e:total) group by ^e:total order by count(t:name) desc limit l:1, t:3",
+    "workload": "dataDependent",
+    "role": "PRIMARY",
+    "purpose": "Niezależna kontrola grupowania sekwencji zdarzeń po atrybucie kosztu. Zapytanie nie spełnia warunków użycia identyfikatora wariantu nazw obliczanego podczas importu.",
+    "measurementSeries": ["size-scaling"],
+    "scalingSeries": ["size-scaling"]
   },
   {
     "label": "hierarchyCardinality",
@@ -49,23 +59,53 @@
     "scalingSeries": ["size-scaling"]
   },
   {
-    "label": "standardAttributesOrder",
-    "displayName": "Sortowanie po atrybutach standardowych",
-    "query": "order by e:timestamp, e:name, e:org:group, e:org:resource limit l:1, t:10, e:20",
-    "workload": "window",
-    "role": "CONTROL",
-    "purpose": "Przypadek kontrolny: sortowanie wartości nie powinno automatycznie korzystać z przewagi reprezentacji grafowej.",
+    "label": "globalEventAggregation",
+    "displayName": "Agregacja po wszystkich zdarzeniach",
+    "query": "select count(^^e:name), min(^^e:timestamp), max(^^e:timestamp) limit l:1",
+    "workload": "dataDependent",
+    "role": "PRIMARY",
+    "purpose": "Niezależny test pełnego przetworzenia zdarzeń przy stałym wyniku: liczność oraz skrajne znaczniki czasu są obliczane dla całego logu.",
     "measurementSeries": ["size-scaling", "real-validation", "smoke-fixture"],
     "scalingSeries": ["size-scaling"]
   },
   {
-    "label": "likeScan",
-    "displayName": "Skan nazw zdarzeń operatorem LIKE",
+    "label": "standardAttributesOrder",
+    "displayName": "Sortowanie po obecnych atrybutach zdarzeń",
+    "query": "order by e:timestamp, e:name, e:cost:total, [e:attr_1] limit l:1, t:10, e:20",
+    "workload": "window",
+    "role": "CONTROL",
+    "purpose": "Przypadek kontrolny na danych syntetycznych: wszystkie cztery klucze sortowania występują w każdym zdarzeniu, więc pomiar nie opiera się na porównywaniu brakujących wartości.",
+    "measurementSeries": ["size-scaling"],
+    "scalingSeries": ["size-scaling"]
+  },
+  {
+    "label": "eventEquality",
+    "displayName": "Filtrowanie po równości nazwy zdarzenia",
+    "query": "where e:name = 'activity-5' order by e:name, e:timestamp limit l:1, t:10, e:20",
+    "workload": "dataDependent",
+    "role": "CONTROL",
+    "purpose": "Kontrola dodatnia na danych syntetycznych: dokładna wartość występuje w co dziesiątym zdarzeniu. Oddziela koszt licznych trafień i rekonstrukcji odpowiedzi od specyfiki operatora LIKE.",
+    "measurementSeries": ["size-scaling"],
+    "scalingSeries": ["size-scaling"]
+  },
+  {
+    "label": "likeNoMatch",
+    "displayName": "LIKE bez dopasowań",
     "query": "where e:name like '%zzq%' order by e:name, e:timestamp limit l:1, t:10, e:20",
     "workload": "dataDependent",
     "role": "CONTROL",
-    "purpose": "Przypadek kontrolny bez dopasowań: system musi wykazać brak pasującej nazwy, a graf nie powinien z definicji przyspieszać skanu pojedynczej właściwości.",
-    "measurementSeries": ["size-scaling", "real-validation", "smoke-fixture"],
+    "purpose": "Kontrola negatywna: mierzy wyłącznie koszt wykazania braku pasującej nazwy i nie reprezentuje zapytania LIKE zwracającego zdarzenia.",
+    "measurementSeries": ["size-scaling"],
+    "scalingSeries": ["size-scaling"]
+  },
+  {
+    "label": "likeMatching",
+    "displayName": "LIKE z dopasowaniami",
+    "query": "where e:name like '%activity-5%' order by e:name, e:timestamp limit l:1, t:10, e:20",
+    "workload": "dataDependent",
+    "role": "CONTROL",
+    "purpose": "Kontrola pozytywna na danych syntetycznych: wzorzec pasuje do jednej z dziesięciu nazw aktywności, zatem system musi odnaleźć rzeczywiste zdarzenia i zrekonstruować ograniczoną odpowiedź.",
+    "measurementSeries": ["size-scaling"],
     "scalingSeries": ["size-scaling"]
   }
 ]

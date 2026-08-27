@@ -51,6 +51,20 @@ enum class BenchmarkProfile(
         importRepetitions = 1,
         globalWarmupRounds = 200,
     ),
+    /** Thesis-grade correction run containing only the controlled size-series queries. */
+    CONTROL(
+        warmups = 40,
+        repetitions = 30,
+        importRepetitions = 1,
+        globalWarmupRounds = 200,
+    ),
+    /** Thesis-grade query-only size campaign after the workload audit. */
+    QUERY(
+        warmups = 40,
+        repetitions = 30,
+        importRepetitions = 1,
+        globalWarmupRounds = 200,
+    ),
     /** Report-only profile produced by assembling validated [BLOCK] artifacts. */
     CAMPAIGN(
         warmups = 40,
@@ -138,7 +152,7 @@ data class BenchmarkDatasetSpec(
 const val WORKLOAD_FLOOR = "floor"
 const val WORKLOAD_WINDOW = "window"
 const val WORKLOAD_DATA_DEPENDENT = "dataDependent"
-const val CURRENT_BENCHMARK_PROTOCOL_VERSION = 23
+const val CURRENT_BENCHMARK_PROTOCOL_VERSION = 25
 
 enum class BenchmarkQueryRole {
     /** Directly tests the hierarchy-traversal hypothesis. */
@@ -256,6 +270,15 @@ data class BenchmarkSettings(
      * assembly from raw samples. It records dataset/query context on memory samples,
      * reports resource medians for equal-sized blocks instead of duration-dependent
      * campaign totals, and adds separate BPI Challenge forest/heatmap figures.
+     * Version 24 separates negative and positive LIKE controls, restricts them to the
+     * controlled synthetic size series, sorts only by attributes populated by that
+     * generator, and adds a thesis-grade CONTROL profile for rerunning this corrected
+     * control family without repeating unchanged primary-query or import evidence.
+     * Version 25 replaces the nonspecific non-null cross-scope predicate with a
+     * positive selective predicate, adds a global event aggregate, a sequence grouping
+     * that cannot use the import-time activity-variant cache, and an equality control
+     * with real matches. It also gives every size-series query its own effect figure
+     * and axis so one large effect cannot compress the remaining results.
      */
     val protocolVersion: Int = CURRENT_BENCHMARK_PROTOCOL_VERSION,
     /**
@@ -320,7 +343,8 @@ data class BenchmarkConfig(
                 BenchmarkProfile.DIAGNOSTIC -> allDatasets.full.filter {
                     it.name in setOf("size-1k", "size-5k", "size-20k")
                 }
-                BenchmarkProfile.PILOT, BenchmarkProfile.FULL, BenchmarkProfile.BLOCK,
+                BenchmarkProfile.PILOT, BenchmarkProfile.FULL, BenchmarkProfile.BLOCK, BenchmarkProfile.CONTROL,
+                BenchmarkProfile.QUERY,
                 BenchmarkProfile.CAMPAIGN,
                 -> allDatasets.full
             }
@@ -328,10 +352,12 @@ data class BenchmarkConfig(
                 resourceText("benchmark-queries.json"),
                 mapper.typeFactory.constructCollectionType(List::class.java, BenchmarkQuerySpec::class.java),
             ) as List<BenchmarkQuerySpec>
-            val queries = if (profile == BenchmarkProfile.DIAGNOSTIC) {
-                allQueries.filter { it.label in setOf("minimalWindow", "hierarchyWindow") }
-            } else {
-                allQueries
+            val queries = when (profile) {
+                BenchmarkProfile.DIAGNOSTIC ->
+                    allQueries.filter { it.label in setOf("minimalWindow", "hierarchyWindow") }
+                BenchmarkProfile.CONTROL -> allQueries.filter { it.role == BenchmarkQueryRole.CONTROL }
+                BenchmarkProfile.QUERY -> allQueries.filter { it.isMeasuredFor("size-scaling") }
+                else -> allQueries
             }
             return BenchmarkConfig(datasets = datasets, queries = queries)
         }

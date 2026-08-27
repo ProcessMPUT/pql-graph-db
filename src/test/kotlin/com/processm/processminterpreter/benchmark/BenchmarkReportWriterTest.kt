@@ -8,6 +8,73 @@ import kotlin.test.assertTrue
 
 class BenchmarkReportWriterTest {
     @Test
+    fun `protocol 25 report links an independently scaled figure per size query`(
+        @org.junit.jupiter.api.io.TempDir tempDir: Path,
+    ) {
+        val dataset = PreparedDataset(
+            "size-1k", "size-scaling", Path.of("size-1k.xes"), 100, 10, 1_000, 5, 5_000, 1, 1,
+        )
+        val datasets = listOf(
+            dataset,
+            dataset.copy(name = "size-5k", file = Path.of("size-5k.xes"), traces = 500, totalEvents = 5_000),
+            dataset.copy(name = "size-20k", file = Path.of("size-20k.xes"), traces = 2_000, totalEvents = 20_000),
+        )
+        val spec = BenchmarkQuerySpec(
+            label = "variantGroupCount",
+            displayName = "Grupowanie wariantów procesu",
+            query = "group by ^e:name",
+            purpose = "Jawnie opisany test ścieżki wariantów.",
+            role = BenchmarkQueryRole.PRIMARY,
+            measurementSeries = listOf("size-scaling"),
+        )
+        val comparison = BenchmarkComparisonResult(
+            metric = "query",
+            datasetName = dataset.name,
+            series = dataset.series,
+            operationLabel = spec.label,
+            displayName = spec.displayName,
+            role = "primary",
+            pairs = 30,
+            localMedianSeconds = 0.1,
+            referenceMedianSeconds = 8.0,
+            ratioReferenceToLocal = 80.0,
+            confidenceLow = 70.0,
+            confidenceHigh = 90.0,
+            rawPValue = 0.001,
+            holmPValue = 0.001,
+            verdict = "LOCAL_FASTER",
+            status = "OK",
+        )
+        val importComparison = comparison.copy(
+            metric = "import",
+            operationLabel = "import",
+            displayName = "Import XES",
+            role = "primary",
+        )
+        val settings = BenchmarkSettings(
+            BenchmarkProfile.QUERY, "local", "reference", "", "", tempDir,
+            emptySet(), emptySet(), false, "processm-interpreter", protocolVersion = 25,
+        )
+
+        BenchmarkReportWriter(tempDir).write(
+            "run", settings, datasets, listOf(spec), emptyList(), emptyList(),
+            listOf(comparison, importComparison), emptyList(), emptyList(), emptyList(),
+        )
+
+        val report = tempDir.resolve("benchmark-report.md").readText()
+        assertTrue(report.contains("Każde zapytanie ma osobny wykres"))
+        assertTrue(report.contains("Wykresy efektu obejmują"))
+        assertTrue(report.contains("fig-query-size-variantgroupcount.svg"))
+        assertTrue(report.contains("Jawnie opisany test ścieżki wariantów."))
+        assertTrue(report.contains("Te czasy mają charakter opisowy"))
+        assertTrue(report.contains("opisowy punkt efektu bez p-wartości"))
+        assertFalse(report.contains("Statystyczna rodzina importu"))
+        assertFalse(report.contains("jego punkt jest pokazywany bez linii i z IQR"))
+        assertFalse(report.contains("fig-01-query-effect-size.svg"))
+        assertFalse(report.contains("fig-02-query-latency-size.svg"))
+    }
+
+    @Test
     fun `protocol 22 report explains temporal diagnostics and separates the appendix`(@org.junit.jupiter.api.io.TempDir tempDir: Path) {
         val dataset = PreparedDataset("size-1k", "size-scaling", Path.of("size-1k.xes"), 100, 10, 1_000, 5, 5_000, 1, 1)
         val spec = BenchmarkQuerySpec(

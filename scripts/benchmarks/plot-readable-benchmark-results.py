@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Generate protocol-aware linear-scale SVG figures for one benchmark report.
+"""Generate protocol-aware SVG figures for one benchmark report.
 
 The script reads only versioned CSV artifacts from one run directory. It uses
-the Python standard library and never changes raw measurements. Protocol 23+
-adds two BPI Challenge figures to the historical eight-figure contract.
+the Python standard library and never changes raw measurements. Protocol 25
+gives every size-series query its own effect chart, independently selected
+linear axis and exact LOCAL/REFERENCE medians in milliseconds. Older protocol
+layouts remain reproducible.
 """
 from __future__ import annotations
 
@@ -118,8 +120,8 @@ def svg_document(width: int, height: int, title: str, body: list[str]) -> str:
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
         f'viewBox="0 0 {width} {height}" role="img" aria-label="{escape(title)}">\n'
         '<style>text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;fill:#1f2937}'
-        '.title{font-size:22px;font-weight:700}.subtitle{font-size:13px;fill:#64748b}'
-        '.label{font-size:12px}.small{font-size:10px;fill:#64748b}.axis{stroke:#64748b;stroke-width:1}'
+        '.title{font-size:26px;font-weight:700}.subtitle{font-size:17px;fill:#64748b}'
+        '.label{font-size:18px}.small{font-size:15px;fill:#64748b}.axis{stroke:#64748b;stroke-width:1}'
         '.grid{stroke:#dbe3ec;stroke-width:1}.unity{stroke:#111827;stroke-width:1.5;stroke-dasharray:5 4}'
         '</style>\n<rect width="100%" height="100%" fill="white"/>\n'
         + "\n".join(body)
@@ -172,6 +174,26 @@ def dataset_label(dataset: str) -> str:
     return labels.get(dataset, dataset)
 
 
+def query_figure_name(label: str) -> str:
+    safe = re.sub(r"[^a-z0-9]+", "-", label.casefold()).strip("-")
+    if not safe:
+        raise ValueError(f"query label cannot form a figure name: {label!r}")
+    return f"fig-query-size-{safe}.svg"
+
+
+def split_query_figure_name(series: str, label: str) -> str:
+    series_names = {
+        "variant-scaling": "variants",
+        "real-validation": "real",
+    }
+    if series not in series_names:
+        raise ValueError(f"unsupported split series: {series}")
+    safe = re.sub(r"[^a-z0-9]+", "-", label.casefold()).strip("-")
+    if not safe:
+        raise ValueError(f"query label cannot form a figure name: {label!r}")
+    return f"fig-query-{series_names[series]}-{safe}.svg"
+
+
 def size_event_count(dataset: str) -> int:
     match = re.fullmatch(r"size-(\d+)([km])", dataset.casefold())
     if not match:
@@ -193,17 +215,24 @@ def effect_forest(
     out: Path,
     query_by_label: dict[str, str] | None = None,
     dataset_order: dict[str, int] | None = None,
+    show_absolute_medians: bool = False,
+    absolute_unit: str = "ms",
 ) -> None:
+    if absolute_unit not in {"ms", "s"}:
+        raise ValueError(f"unsupported absolute-time unit: {absolute_unit}")
     valid = [r for r in data if number(r, "ratioReferenceToLocal") is not None]
     groups: dict[tuple[str, str], list[dict[str, str]]] = defaultdict(list)
     for row in valid:
         groups[(row.get("displayName") or row["operationLabel"], row["operationLabel"])].append(row)
     query_by_label = query_by_label or {}
-    width, left, right = 1200, 370, 55
+    width, left, right = 1200, 500 if show_absolute_medians else 370, 55
     height = max(
         260,
-        120 + sum(
-            48 + 14 * len(query_lines(query_by_label.get(label))) + 28 * len(values)
+        130 + sum(
+            58
+            + 20 * len(query_lines(query_by_label.get(label)))
+            + (24 if show_absolute_medians else 0)
+            + 34 * len(values)
             for (_name, label), values in groups.items()
         ),
     )
@@ -220,40 +249,103 @@ def effect_forest(
     scale = lambda value: left + value / xmax * plot_width
     body = [
         text(30, 34, title, "title"),
-        text(30, 57, f"Efekt = mediana REFERENCE / mediana LOCAL; wspólna liniowa oś X: 0–{xmax:.2f}", "subtitle"),
-        text(30, 76, "Kropka = efekt; kreska = sparowany 95% CI; zielony = LOCAL szybszy; pomarańczowy = REFERENCE szybszy; niebieski = brak rozstrzygnięcia lub wynik opisowy", "subtitle"),
+        text(
+            30,
+            57,
+            f"Efekt E = mediana REFERENCE / mediana LOCAL; oś X: 0–{xmax:.2f}"
+            + (f"; mediany w {absolute_unit}" if show_absolute_medians else ""),
+            "subtitle",
+        ),
+        text(30, 76, "Punkt = E; kreska = 95% CI; zielony = LOCAL szybciej; pomarańczowy = REFERENCE szybciej; niebieski = brak rozstrzygnięcia", "subtitle"),
     ]
-    y = 114
+    y = 122
     for (group, label), values in groups.items():
         values.sort(key=lambda r: (
             (dataset_order or {}).get(r["datasetName"], 2**31 - 1),
             natural_sort_key(r["datasetName"]),
         ))
         body.append(text(30, y, group, "label"))
-        y += 15
+        y += 21
         for line in query_lines(query_by_label.get(label)):
             body.append(text(30, y, line, "small"))
-            y += 14
+            y += 20
         y += 3
+        if show_absolute_medians:
+            body.append(text(230, y, "Zbiór", "small", "end"))
+            body.append(text(340, y, f"LOCAL [{absolute_unit}]", "small", "end"))
+            body.append(text(460, y, f"REFERENCE [{absolute_unit}]", "small", "end"))
+            body.append(text(left, y, "Efekt R/L", "small"))
+            y += 24
         for value in x_ticks:
             x = scale(value)
-            body.append(f'<line x1="{x:.1f}" y1="{y-5}" x2="{x:.1f}" y2="{y + 28*len(values)-8}" class="grid"/>')
-            body.append(text(x, y + 28 * len(values) + 7, axis_label(value), "small", "middle"))
+            body.append(f'<line x1="{x:.1f}" y1="{y-5}" x2="{x:.1f}" y2="{y + 34*len(values)-8}" class="grid"/>')
+            body.append(text(x, y + 34 * len(values) + 12, axis_label(value), "small", "middle"))
         if xmax >= 1:
             x_unity = scale(1)
-            body.append(f'<line x1="{x_unity:.1f}" y1="{y-5}" x2="{x_unity:.1f}" y2="{y + 28*len(values)-8}" class="unity"/>')
+            body.append(f'<line x1="{x_unity:.1f}" y1="{y-5}" x2="{x_unity:.1f}" y2="{y + 34*len(values)-8}" class="unity"/>')
         for row in values:
-            cy = y + 10
+            cy = y + 13
             point = number(row, "ratioReferenceToLocal") or 0
             low = number(row, "confidenceLow") or point
             high = number(row, "confidenceHigh") or point
             color = GREEN if row.get("verdict") == "LOCAL_FASTER" else ORANGE if row.get("verdict") == "REFERENCE_FASTER" else BLUE
-            body.append(text(left - 12, cy + 4, dataset_label(row["datasetName"]), "label", "end"))
+            if show_absolute_medians:
+                unit_factor = 1000 if absolute_unit == "ms" else 1
+                local_time = (number(row, "localMedianSeconds") or 0) * unit_factor
+                reference_time = (number(row, "referenceMedianSeconds") or 0) * unit_factor
+                body.append(text(230, cy + 4, dataset_label(row["datasetName"]), "label", "end"))
+                body.append(text(340, cy + 4, f"{local_time:.2f}", "label", "end"))
+                body.append(text(460, cy + 4, f"{reference_time:.2f}", "label", "end"))
+            else:
+                body.append(text(left - 12, cy + 4, dataset_label(row["datasetName"]), "label", "end"))
             body.append(f'<line x1="{scale(low):.1f}" y1="{cy}" x2="{scale(high):.1f}" y2="{cy}" stroke="{color}" stroke-width="3"/>')
             body.append(f'<circle cx="{scale(point):.1f}" cy="{cy}" r="5" fill="{color}"/>')
-            y += 28
-        y += 35
+            y += 34
+        y += 42
     out.write_text(svg_document(width, height, title, body), encoding="utf-8")
+
+
+def generate_split_query_figures(run_dir: Path, series: str) -> list[Path]:
+    """Write one primary-query effect figure for each operation in a series."""
+    if series not in {"variant-scaling", "real-validation"}:
+        raise ValueError(f"unsupported split series: {series}")
+    comparisons = rows(run_dir / "comparison-results.csv")
+    query_rows = rows(run_dir / "queries.csv")
+    query_by_label = {
+        row["queryLabel"]: row["pql"]
+        for row in query_rows
+        if row.get("queryLabel") and row.get("pql")
+    }
+    selected = [
+        row for row in comparisons
+        if row.get("metric") == "query"
+        and row.get("series") == series
+        and row.get("role") == "primary"
+        and row.get("status") == "OK"
+    ]
+    labels = [row["queryLabel"] for row in query_rows if row.get("queryLabel")]
+    labels.extend(
+        row["operationLabel"] for row in selected
+        if row.get("operationLabel") not in labels
+    )
+    figures = run_dir / "figures"
+    figures.mkdir(parents=True, exist_ok=True)
+    title_prefix = "Wpływ liczby wariantów" if series == "variant-scaling" else "Logi rzeczywiste"
+    written = []
+    for label in labels:
+        data = [row for row in selected if row.get("operationLabel") == label]
+        if not data:
+            continue
+        output = figures / split_query_figure_name(series, label)
+        effect_forest(
+            data,
+            f"{title_prefix} — {data[0].get('displayName') or label}",
+            output,
+            query_by_label,
+            show_absolute_medians=True,
+        )
+        written.append(output)
+    return written
 
 
 def latency_panels(
@@ -390,6 +482,146 @@ def bar_chart(
     out.write_text(svg_document(width, height, title, body), encoding="utf-8")
 
 
+def resource_ratio_chart(
+    values: list[tuple[str, float, float]],
+    title: str,
+    subtitle: str,
+    unit: str,
+    out: Path,
+    logarithmic_ratio_axis: bool = False,
+) -> None:
+    """Show exact resource values beside their REFERENCE/LOCAL ratio."""
+    width, left, right = 1200, 560, 55
+    row_height = 31
+    height = 154 + row_height * len(values)
+    ratios = [reference / local for _label, local, reference in values if local > 0]
+    if not ratios:
+        raise ValueError("resource chart requires at least one positive LOCAL value")
+
+    if logarithmic_ratio_axis:
+        ticks = [1.0]
+        while ticks[-1] < max(ratios) * 1.05:
+            ticks.append(ticks[-1] * 2)
+        xmax = ticks[-1]
+        scale = lambda value: left + math.log2(max(value, 1)) / math.log2(xmax) * (width - left - right)
+        axis_note = "logarytmiczna oś ilorazu (log₂)"
+    else:
+        ticks = nice_ticks_from_zero(max(1.05, max(ratios) * 1.08))
+        xmax = ticks[-1]
+        scale = lambda value: left + value / xmax * (width - left - right)
+        axis_note = "liniowa oś ilorazu"
+
+    body = [
+        text(30, 34, title, "title"),
+        text(30, 57, f"{subtitle}; {axis_note}", "subtitle"),
+        text(30, 76, "Iloraz = REFERENCE / LOCAL; zielony = mniejsza wartość LOCAL; pomarańczowy = mniejsza wartość REFERENCE", "subtitle"),
+        text(245, 105, "Seria / punkt", "small", "end"),
+        text(365, 105, f"LOCAL [{unit}]", "small", "end"),
+        text(500, 105, f"REFERENCE [{unit}]", "small", "end"),
+        text(left, 105, "Iloraz R/L", "small"),
+    ]
+    plot_bottom = 118 + row_height * len(values)
+    for tick in ticks:
+        x = scale(tick)
+        body.append(f'<line x1="{x:.1f}" y1="112" x2="{x:.1f}" y2="{plot_bottom:.1f}" class="grid"/>')
+        body.append(text(x, plot_bottom + 17, axis_label(tick), "small", "middle"))
+    unity = scale(1)
+    body.append(f'<line x1="{unity:.1f}" y1="112" x2="{unity:.1f}" y2="{plot_bottom:.1f}" class="unity"/>')
+
+    for index, (label, local, reference) in enumerate(values):
+        y = 132 + index * row_height
+        ratio = reference / local
+        color = GREEN if ratio > 1 else ORANGE if ratio < 1 else BLUE
+        body.append(text(245, y, label, "label", "end"))
+        body.append(text(365, y, f"{local:.1f}", "label", "end"))
+        body.append(text(500, y, f"{reference:.1f}", "label", "end"))
+        body.append(f'<line x1="{unity:.1f}" y1="{y-4:.1f}" x2="{scale(ratio):.1f}" y2="{y-4:.1f}" stroke="{color}" stroke-width="3"/>')
+        body.append(f'<circle cx="{scale(ratio):.1f}" cy="{y-4:.1f}" r="5" fill="{color}"/>')
+        body.append(text(scale(ratio) + (8 if ratio >= 1 else -8), y, f"{ratio:.2f}", "small", "start" if ratio >= 1 else "end"))
+    out.write_text(svg_document(width, height, title, body), encoding="utf-8")
+
+
+def memory_rollup(run_dir: Path) -> tuple[float, float, float, float]:
+    memory = rows(run_dir / "memory-summary.csv")
+
+    def values(component: str, key: str) -> list[float]:
+        return [
+            value for row in memory
+            if row.get("component") == component and row.get("phase") == "queries"
+            for value in [number(row, key)] if value is not None
+        ]
+
+    local_medians = values("local-total", "medianBytes")
+    reference_medians = values("reference-total", "medianBytes")
+    local_peaks = values("local-total", "peakBytes")
+    reference_peaks = values("reference-total", "peakBytes")
+    mib = 1024 * 1024
+    return (
+        statistics.median(local_medians) / mib if local_medians else 0,
+        statistics.median(reference_medians) / mib if reference_medians else 0,
+        max(local_peaks, default=0) / mib,
+        max(reference_peaks, default=0) / mib,
+    )
+
+
+def generate_resource_summary_figures(
+    size_run: Path,
+    variant_run: Path,
+    real_run: Path,
+    size_memory_run: Path | None = None,
+) -> list[Path]:
+    """Create compact report-style storage and cross-series memory figures."""
+    figures = size_run / "figures"
+    figures.mkdir(parents=True, exist_ok=True)
+    mib = 1024 * 1024
+    storage_rows = rows(size_run / "storage-scaling.csv")
+    storage_by_dataset: dict[str, dict[str, float]] = defaultdict(dict)
+    for row in storage_rows:
+        delta = number(row, "deltaBytes")
+        if row.get("datasetName") and row.get("system") and delta is not None:
+            storage_by_dataset[row["datasetName"]][row["system"]] = delta / mib
+    storage_values = [
+        (event_axis_label(size_event_count(dataset)), systems["local"], systems["reference"])
+        for dataset, systems in sorted(storage_by_dataset.items(), key=lambda item: natural_sort_key(item[0]))
+        if "local" in systems and "reference" in systems
+    ]
+    if not storage_values:
+        raise ValueError(f"no paired storage values in {size_run / 'storage-scaling.csv'}")
+
+    storage_out = figures / "fig-resource-storage.svg"
+    resource_ratio_chart(
+        storage_values,
+        "Trwały rozmiar danych — wzrost rozmiaru logu",
+        "Przyrost plików po imporcie na osobno odtworzonym stosie; dokładne wartości w MiB",
+        "MiB",
+        storage_out,
+        logarithmic_ratio_axis=True,
+    )
+
+    memory_values: list[tuple[str, float, float]] = []
+    for label, run_dir in (
+        ("Rozmiar", size_memory_run or size_run),
+        ("Warianty", variant_run),
+        ("Logi rzeczywiste", real_run),
+    ):
+        local_median, reference_median, local_peak, reference_peak = memory_rollup(run_dir)
+        if min(local_median, reference_median, local_peak, reference_peak) <= 0:
+            raise ValueError(f"incomplete query-memory summary in {run_dir}")
+        memory_values.extend([
+            (f"{label} — mediana", local_median, reference_median),
+            (f"{label} — maksimum", local_peak, reference_peak),
+        ])
+    memory_out = figures / "fig-resource-memory.svg"
+    resource_ratio_chart(
+        memory_values,
+        "Pamięć kontenerowa podczas zapytań",
+        "Mediana median bloków oraz maksimum wskazania docker stats; dokładne wartości w MiB",
+        "MiB",
+        memory_out,
+    )
+    return [storage_out, memory_out]
+
+
 def effect_heatmap(
     data: list[dict[str, str]], title: str, out: Path, dataset_order: dict[str, int] | None = None,
 ) -> None:
@@ -403,7 +635,7 @@ def effect_heatmap(
         key = (row.get("displayName") or row["operationLabel"], row["operationLabel"])
         if key not in operations:
             operations.append(key)
-    cell_w, cell_h, left, top = 145, 42, 235, 105
+    cell_w, cell_h, left, top = 160, 48, 285, 120
     width = max(900, left + cell_w * max(1, len(operations)) + 40)
     height = max(260, top + cell_h * max(1, len(datasets)) + 75)
     body = [
@@ -414,7 +646,7 @@ def effect_heatmap(
     for column, (display, _label) in enumerate(operations):
         x = left + column * cell_w + cell_w / 2
         for line_index, line in enumerate(wrap(display, width=19)):
-            body.append(text(x, 82 + line_index * 12, line, "small", "middle"))
+            body.append(text(x, 84 + line_index * 17, line, "small", "middle"))
     for row_index, dataset in enumerate(datasets):
         y = top + row_index * cell_h
         body.append(text(left - 10, y + 26, dataset_label(dataset), "label", "end"))
@@ -453,25 +685,66 @@ def generate(run_dir: Path) -> None:
             protocol = int(json.loads(environment_path.read_text(encoding="utf-8")).get("benchmarkProtocolVersion", 1))
         except (ValueError, TypeError, json.JSONDecodeError):
             protocol = 1
+    if protocol >= 25:
+        for stale_figure in figures.glob("*.svg"):
+            stale_figure.unlink()
     contextual = protocol >= 23
-    effect_forest(
-        [r for r in comparisons if r.get("metric") == "query" and r.get("series") == "size-scaling" and r.get("role") != "baseline"],
-        "Efekt zapytań — wzrost rozmiaru danych", figures / "fig-01-query-effect-size.svg", query_by_label,
-    )
-    latency_panels(
-        comparisons,
-        rows(run_dir / "query-summary.csv"),
-        figures / "fig-02-query-latency-size.svg",
-        query_by_label,
-    )
-    effect_forest(
-        [r for r in comparisons if r.get("metric") == "query" and r.get("series") == "variant-scaling" and r.get("role") == "primary"],
-        "Efekt zapytań — 1, 100 i 2000 wariantów przy 100 tys. zdarzeń", figures / "fig-03-query-effect-variants.svg", query_by_label,
-    )
-    effect_forest(
-        [r for r in comparisons if r.get("metric") == "query" and r.get("series") == "real-validation" and r.get("role") != "baseline"],
-        "Efekt zapytań — logi rzeczywiste", figures / "fig-04-query-effect-real.svg", query_by_label,
-    )
+    size_rows = [
+        row for row in comparisons
+        if row.get("metric") == "query" and row.get("series") == "size-scaling"
+    ]
+    if protocol >= 25:
+        ordered_labels = list(query_by_label)
+        ordered_labels.extend(
+            row["operationLabel"] for row in size_rows
+            if row.get("operationLabel") not in ordered_labels
+        )
+        for label in ordered_labels:
+            selected = [row for row in size_rows if row.get("operationLabel") == label]
+            if not selected:
+                continue
+            display_name = selected[0].get("displayName") or label
+            effect_forest(
+                selected,
+                f"Efekt wraz ze wzrostem danych — {display_name}",
+                figures / query_figure_name(label),
+                query_by_label,
+                show_absolute_medians=True,
+            )
+    else:
+        effect_forest(
+            [row for row in size_rows if row.get("role") != "baseline"],
+            "Efekt zapytań — wzrost rozmiaru danych",
+            figures / "fig-01-query-effect-size.svg",
+            query_by_label,
+        )
+        latency_panels(
+            comparisons,
+            rows(run_dir / "query-summary.csv"),
+            figures / "fig-02-query-latency-size.svg",
+            query_by_label,
+        )
+    variant_rows = [
+        r for r in comparisons
+        if r.get("metric") == "query" and r.get("series") == "variant-scaling" and r.get("role") == "primary"
+    ]
+    if protocol < 25 or variant_rows:
+        effect_forest(
+            variant_rows,
+            "Efekt zapytań — 1, 100 i 2000 wariantów przy 100 tys. zdarzeń",
+            figures / "fig-03-query-effect-variants.svg", query_by_label,
+            show_absolute_medians=True,
+        )
+    real_rows = [
+        r for r in comparisons
+        if r.get("metric") == "query" and r.get("series") == "real-validation" and r.get("role") != "baseline"
+    ]
+    if protocol < 25 or real_rows:
+        effect_forest(
+            real_rows,
+            "Efekt zapytań — logi rzeczywiste", figures / "fig-04-query-effect-real.svg", query_by_label,
+            show_absolute_medians=True,
+        )
     figure_offset = 0
     if contextual:
         dataset_rows = rows(run_dir / "datasets.csv")
@@ -488,41 +761,36 @@ def generate(run_dir: Path) -> None:
             row for row in comparisons
             if row.get("metric") == "query" and row.get("datasetName") in bpi_names and row.get("role") != "baseline"
         ]
-        effect_forest(
-            bpi_rows,
-            "Efekt zapytań — BPI Challenge", figures / "fig-05-query-effect-bpi.svg", query_by_label,
-            bpi_order,
-        )
-        effect_heatmap(
-            bpi_rows, "Mapa efektów — BPI Challenge",
-            figures / "fig-06-query-effect-bpi-heatmap.svg", bpi_order,
-        )
+        if protocol < 25 or bpi_rows:
+            effect_forest(
+                bpi_rows,
+                "Efekt zapytań — BPI Challenge", figures / "fig-05-query-effect-bpi.svg", query_by_label,
+                bpi_order,
+                show_absolute_medians=True,
+            )
+            effect_heatmap(
+                bpi_rows, "Mapa efektów — BPI Challenge",
+                figures / "fig-06-query-effect-bpi-heatmap.svg", bpi_order,
+            )
         figure_offset = 2
-    effect_forest(
-        [r for r in comparisons if r.get("metric") == "import" and r.get("series") == "size-scaling"],
-        "Efekt czasu importu — wzrost rozmiaru danych", figures / f"fig-{5 + figure_offset:02d}-import-effect.svg",
-    )
+    import_rows = [
+        r for r in comparisons
+        if r.get("metric") == "import" and r.get("series") == "size-scaling"
+    ]
+    if protocol < 25 or import_rows:
+        effect_forest(
+            import_rows,
+            "Efekt czasu importu — wzrost rozmiaru danych", figures / f"fig-{5 + figure_offset:02d}-import-effect.svg",
+            show_absolute_medians=True,
+            absolute_unit="s",
+        )
 
-    memory = rows(run_dir / "memory-summary.csv")
-    def memory_values(component: str, key: str) -> list[float]:
-        return [
-            value for row in memory
-            if row.get("component") == component and row.get("phase") == "queries"
-            for value in [number(row, key)] if value is not None
-        ]
-    local_medians = memory_values("local-total", "medianBytes")
-    reference_medians = memory_values("reference-total", "medianBytes")
-    local_peaks = memory_values("local-total", "peakBytes")
-    reference_peaks = memory_values("reference-total", "peakBytes")
-    mem_local = statistics.median(local_medians) if local_medians else 0
-    mem_reference = statistics.median(reference_medians) if reference_medians else 0
-    peak_local = max(local_peaks, default=0)
-    peak_reference = max(reference_peaks, default=0)
+    mem_local, mem_reference, peak_local, peak_reference = memory_rollup(run_dir)
     mib = 1024 * 1024
     bar_chart(
         ["mediana", "maksimum"],
-        [mem_local / mib, peak_local / mib],
-        [mem_reference / mib, peak_reference / mib],
+        [mem_local, peak_local],
+        [mem_reference, peak_reference],
         "Pamięć kontenerów podczas zapytań",
         "MiB",
         figures / f"fig-{6 + figure_offset:02d}-container-memory.svg",
@@ -563,14 +831,45 @@ def generate(run_dir: Path) -> None:
         "Network I/O na granicy aplikacji", "MiB (RX + TX)", figures / f"fig-{8 + figure_offset:02d}-container-network-io.svg",
         subtitle="Mediana delty porównywalnego bloku" if contextual else "Suma delt w całym przebiegu",
     )
-    print(f"Wrote {8 + figure_offset} linear-scale SVG figures to {figures}")
+    figure_count = len(list(figures.glob("*.svg")))
+    print(f"Wrote {figure_count} SVG figures to {figures}")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("result_dir", type=Path)
+    parser.add_argument(
+        "--split-series",
+        action="append",
+        choices=("variant-scaling", "real-validation"),
+        default=[],
+        help="add one exact-median/effect figure per primary query for the selected series",
+    )
+    parser.add_argument(
+        "--resource-summary-runs",
+        nargs=2,
+        type=Path,
+        metavar=("VARIANT_RUN", "REAL_RUN"),
+        help="add compact storage and cross-series memory figures, using result_dir as the size run",
+    )
+    parser.add_argument(
+        "--size-memory-run",
+        type=Path,
+        help="optional size-series run supplying memory data when storage comes from a separate fresh-stack run",
+    )
     args = parser.parse_args()
     generate(args.result_dir)
+    for series in args.split_series:
+        written = generate_split_query_figures(args.result_dir, series)
+        print(f"Wrote {len(written)} split {series} SVG figures to {args.result_dir / 'figures'}")
+    if args.resource_summary_runs:
+        written = generate_resource_summary_figures(
+            args.result_dir,
+            args.resource_summary_runs[0],
+            args.resource_summary_runs[1],
+            args.size_memory_run,
+        )
+        print(f"Wrote {len(written)} resource summary SVG figures to {args.result_dir / 'figures'}")
     return 0
 
 

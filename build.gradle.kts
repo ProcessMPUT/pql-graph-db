@@ -165,6 +165,24 @@ tasks.register<JavaExec>("runBenchmarkVariantCampaign") {
     environment("BENCHMARK_SERIES_FILTER", "variant-scaling")
 }
 
+tasks.register<JavaExec>("runBenchmarkControlCampaign") {
+    group = "benchmark"
+    description = "Runs the corrected thesis-grade control queries on the complete size-scaling series."
+    classpath = benchmarkSourceSet.runtimeClasspath
+    mainClass.set("com.processm.processminterpreter.benchmark.BenchmarkRunnerKt")
+    args("control")
+    environment("BENCHMARK_SERIES_FILTER", "size-scaling")
+}
+
+tasks.register<JavaExec>("runBenchmarkQueryCampaign") {
+    group = "benchmark"
+    description = "Runs the audited thesis-grade query workload on the complete size-scaling series."
+    classpath = benchmarkSourceSet.runtimeClasspath
+    mainClass.set("com.processm.processminterpreter.benchmark.BenchmarkRunnerKt")
+    args("query")
+    environment("BENCHMARK_SERIES_FILTER", "size-scaling")
+}
+
 tasks.register<JavaExec>("runBenchmarkPilotDataset") {
     group = "benchmark"
     description = "Runs a non-inferential pilot for one FULL dataset (-Pdataset=<name>)."

@@ -43,7 +43,7 @@ runner must exercise both systems through HTTP as an external client would.
 
 1. Run local and reference ProcessM against equivalent datasets and queries.
 2. Do not optimize, normalize, or special-case results for one known log.
-3. Keep the protocol-23 workload hypothesis-led:
+3. Keep the protocol-25 workload hypothesis-led:
    - `size-scaling` changes total events while holding 10 events/trace and five
      constant-valued custom event attributes fixed, from 1,000 through
      1,000,000 events;
@@ -87,7 +87,7 @@ Before collecting thesis results:
   contention would otherwise make the comparison asymmetric;
 - do not edit or regenerate CSV files manually after a run.
 
-Protocol 23 retains the protocol-22 paired query design: one fixed dataset
+Protocol 25 retains the protocol-23 paired query design: one fixed dataset
 order, 40 per-query warmups and 30 adjacent LOCAL/REFERENCE query pairs in
 AB/BA order. `FULL` retains 10 paired imports into fresh datastores;
 `BLOCK` is the atomic real-log campaign unit and performs one setup/import pair
@@ -96,8 +96,9 @@ because import inference belongs to the complete `size-scaling` run. A final
 predeclared query family. It has no recorded cold sample, idle baseline, post-idle activation
 or declared/reversed/random run variants. Query inference is performed per
 dataset: a paired bootstrap interval for `REFERENCE / LOCAL`, a two-sided paired
-Wilcoxon test and Holm correction across six queries (four primary and two
-control) for size/real datasets and three primary queries for variant datasets.
+Wilcoxon test and Holm correction across ten inferential queries (six primary
+and four controls) for the size series, four primary queries for real datasets,
+and two primary queries for variant datasets.
 No Docker CLI command may run concurrently with or immediately before the
 latency block. After latency collection, replay the same 30-pair system order as
 a separate unmeasured resource block; memory sampling and query I/O snapshots
@@ -110,12 +111,12 @@ cutoff is not a statistical test and must not discard otherwise complete paired
 evidence. Do not substitute the median of individual pair ratios: it is a
 different estimand and is sensitive to the two bands created by alternating
 LR/RL order. Absolute LOCAL and REFERENCE drift and baseline drift also remain
-visible diagnostically. The baseline is drawn as unconnected per-dataset points
-with an IQR error bar and does not invalidate otherwise sound hypothesis tests.
+visible diagnostically. The baseline remains descriptive and does not invalidate
+otherwise sound hypothesis tests.
 Import inference uses the seven `size-scaling`
 datasets as one Holm family; variant and real imports are descriptive validation.
 
-A protocol-23 thesis-grade memory/I/O run must contain
+A protocol-25 thesis-grade memory/I/O run must contain
 `processm-interpreter`, `processm-neo4j`, and `processm-server` from Docker.
 LOCAL and REFERENCE receive equal 6 GiB whole-system cgroup budgets without
 container swap and equal 3 GiB aggregate effective JVM heap ceilings; clean-stack
@@ -241,14 +242,30 @@ The controlled axes remain whole-run units:
 ./gradlew runBenchmarkVariantCampaign
 ```
 
+The audited query workload is a separate whole-series unit. It keeps the full
+40-warmup/30-pair design, imports each size dataset once, and must not be merged
+silently into older CSV files:
+
+```bash
+./gradlew runBenchmarkQueryCampaign
+```
+
+`runBenchmarkControlCampaign` remains available for a focused diagnostic of
+the four controls, but it is not a substitute for the complete protocol-25
+query campaign.
+
 Remove leftover benchmark datastores:
 
 ```bash
 ./gradlew runBenchmarkCleanup
 ```
 
-Protocol 23 generates ten linear-scale SVG charts (including a BPI effect
-forest and heatmap); historical protocol-22 replay retains its eight charts. The runner folds the
+Protocol 25 generates one independently scaled size-series effect figure per
+query. Figures for variant, real-log, BPI and import series are generated only
+when those series are present in the run; resource figures remain part of every
+report.
+Protocols 23 and 24 retain their ten-figure layout; protocol 22 retains eight.
+The runner folds the
 short Markdown report into one self-contained HTML file. Both steps are
 idempotent and can also be rerun manually:
 
@@ -346,7 +363,7 @@ analysis/provenance artifacts or the isolated storage probe is absent. Do not
 add `storage-scaling.csv` to `compare-runs.py`'s per-run `REQUIRED_FILES`: doing
 so would make the two non-anchor runs invalid and prevent selecting the anchor.
 
-Interpret protocol-23 query performance with paired medians, the
+Interpret protocol-25 query performance with paired medians, the
 `REFERENCE / LOCAL` effect, its paired-bootstrap 95% interval and the
 within-dataset Holm-adjusted paired Wilcoxon p-value. Keep raw times, status and
 response size as diagnostics. A directional verdict requires both adjusted
