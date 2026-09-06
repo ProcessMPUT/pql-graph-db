@@ -25,6 +25,43 @@ class HierarchyReconstructorTest {
     private val reconstructor = HierarchyReconstructor()
 
     @Test
+    fun `aggregate row with no selected trace retains log without phantom trace`() {
+        val logs = reconstructor.reconstruct(
+            rows = listOf(mapOf("count_logs" to 1L, "_trace_present_" to false)),
+            columnAliases = mapOf("count_logs" to ColumnAlias("count(log:concept:name)", Scope.LOG)),
+        )
+        assertEquals(1, logs.size)
+        assertEquals(1L, logs.single().customAttributes["count(log:concept:name)"])
+        assertTrue(logs.single().traces.isEmpty())
+    }
+
+    @Test
+    fun `present aggregate placeholder remains a trace even without a name`() {
+        val logs = reconstructor.reconstruct(
+            rows = listOf(mapOf("count_logs" to 1L, "_trace_present_" to true, "_null_event_count_" to 2)),
+            columnAliases = mapOf("count_logs" to ColumnAlias("count(log:concept:name)", Scope.LOG)),
+        )
+        assertEquals(1, logs.single().traces.size)
+        assertNull(logs.single().traces.single().conceptName)
+        assertEquals(2, logs.single().traces.single().nullEventCount)
+        assertTrue(logs.single().traces.single().events.isEmpty())
+    }
+
+    @Test
+    fun `empty event group preserves parent aggregate without a phantom projected event`() {
+        val logs = reconstructor.reconstruct(
+            rows = listOf(mapOf("count_traces" to 1L, "count_events" to null, "_event_present_" to false)),
+            columnAliases = mapOf(
+                "count_traces" to ColumnAlias("count(trace:concept:name)", Scope.TRACE),
+                "count_events" to ColumnAlias("count(event:concept:name)", Scope.EVENT),
+            ),
+        )
+        val trace = logs.single().traces.single()
+        assertEquals(1L, trace.customAttributes["count(trace:concept:name)"])
+        assertTrue(trace.events.isEmpty())
+    }
+
+    @Test
     fun `single row produces one XesLog with one trace and one event`() {
         val rows = listOf(
             mapOf(

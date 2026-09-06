@@ -3,6 +3,8 @@ package com.processm.processminterpreter.processm.log
 import com.processm.processminterpreter.TestcontainersConfiguration
 import com.processm.processminterpreter.pql.ExecutePqlQueryRequest
 import com.processm.processminterpreter.pql.PqlQueryService
+import com.processm.processminterpreter.pql.XesAttributeReadMode
+import com.processm.processminterpreter.web.query.PqlResponseMapper
 import com.processm.processminterpreter.xes.io.OpenXesReader
 import com.processm.processminterpreter.xes.io.OpenXesWriter
 import com.processm.processminterpreter.xes.io.XESLoader
@@ -41,6 +43,9 @@ class XesIdentityIdRoundTripTest {
 
     @Autowired
     private lateinit var executeQuery: PqlQueryService
+
+    @Autowired
+    private lateinit var responseMapper: PqlResponseMapper
 
     @Autowired
     private lateinit var writer: OpenXesWriter
@@ -144,6 +149,44 @@ class XesIdentityIdRoundTripTest {
             listOf("custom activity A", "custom activity B"),
             reread.traces.single().events.map { it.customAttributes["activity"] },
         )
+    }
+
+    @Test
+    fun `JSON responses preserve source log attributes through implicit wildcard and named projections`() {
+        importFixture()
+        val expected = mapOf(
+            "description" to "Description of the source log",
+            "logId" to "custom log id",
+            "dataStoreId" to "custom datastore id",
+            "extensions" to "custom extensions",
+            "classifiers" to "custom classifiers",
+            "traceGlobals" to "custom trace globals",
+            "eventGlobals" to "custom event globals",
+        )
+        val queries = listOf(
+            "limit l:1, t:1, e:2",
+            "select l:*, t:*, e:* limit l:1, t:1, e:2",
+            "select [l:description], [l:logId], [l:dataStoreId], [l:extensions], " +
+                "[l:classifiers], [l:traceGlobals], [l:eventGlobals] limit l:1",
+        )
+        for ((index, query) in queries.withIndex()) {
+            val result = executeQuery.executeRead(
+                ExecutePqlQueryRequest(query = query, logId = LOG_ID, attributeReadMode = XesAttributeReadMode.PROCESSM_JSON),
+            )
+            val jsonLog = responseMapper.toQueryResponse(query, result, "xes").results.single()["log"] as Map<*, *>
+            val attributes = (jsonLog["string"] as List<*>).map { it as Map<*, *> }
+            val strings = attributes.associate { (it["@key"] as String) to (it["@value"] as String) }
+            val expectedStrings = if (index < 2) expected + mapOf(
+                "concept:name" to "IdentityRoundTrip",
+                "name" to "custom log name",
+                "createdAt" to "custom created at",
+            ) else expected
+            assertEquals(expectedStrings, strings, query)
+            assertEquals(expectedStrings.size, attributes.size, "No duplicate XES keys: $query")
+            assertEquals(3, (jsonLog["extension"] as List<*>).size, "Real extensions remain metadata: $query")
+            assertEquals(2, (jsonLog["classifier"] as List<*>).size, "Real classifiers remain metadata: $query")
+            assertFalse("updatedAt" in strings, "Generated storage properties must stay hidden: $query")
+        }
     }
 
     @Test
@@ -283,6 +326,12 @@ class XesIdentityIdRoundTripTest {
                 <string key="logId" value="custom log id"/>
                 <string key="name" value="custom log name"/>
                 <string key="createdAt" value="custom created at"/>
+                <string key="description" value="Description of the source log"/>
+                <string key="dataStoreId" value="custom datastore id"/>
+                <string key="extensions" value="custom extensions"/>
+                <string key="classifiers" value="custom classifiers"/>
+                <string key="traceGlobals" value="custom trace globals"/>
+                <string key="eventGlobals" value="custom event globals"/>
                 <trace>
                     <string key="concept:name" value="Case 1"/>
                     <id key="identity:id" value="11111111-1111-1111-1111-111111111111"/>

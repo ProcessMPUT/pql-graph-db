@@ -39,6 +39,17 @@ internal class CypherBuildState(
         complexAggregationAliasByExpr[exprKey] = alias
     }
 
+    fun <T> withExpressionAliases(aliases: Map<String, String>, block: () -> T): T {
+        val previous = complexAggregationAliasByExpr.toMap()
+        complexAggregationAliasByExpr.putAll(aliases)
+        return try {
+            block()
+        } finally {
+            complexAggregationAliasByExpr.clear()
+            complexAggregationAliasByExpr.putAll(previous)
+        }
+    }
+
     fun orderAlias(exprKey: String): String? =
         orderAliasByExpr[exprKey]
 
@@ -95,6 +106,21 @@ internal class CypherBuildState(
             block()
         } finally {
             renderingAggregationArgument = previous
+        }
+    }
+
+    private var attributeNodeVariables: Map<Pair<Scope, Scope>, String> = emptyMap()
+
+    fun attributeNodeVariable(baseScope: Scope, effectiveScope: Scope): String? =
+        attributeNodeVariables[baseScope to effectiveScope]
+
+    fun <T> withAttributeNodeVariables(variables: Map<Pair<Scope, Scope>, String>, block: () -> T): T {
+        val previous = attributeNodeVariables
+        attributeNodeVariables = variables
+        return try {
+            block()
+        } finally {
+            attributeNodeVariables = previous
         }
     }
 

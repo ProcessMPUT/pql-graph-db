@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from pathlib import Path
 import html
+import json
 import re
 
 from _common import ScriptError, repo_root
@@ -27,6 +28,7 @@ class Query:
     group: str = ""
     source: str = ""
     cases: tuple[str, ...] | None = None
+    minimum_logs: int = 0
 
     def applies_to(self, case_name: str) -> bool:
         return self.cases is None or case_name in self.cases
@@ -105,34 +107,41 @@ def compatibility_queries(profile: str = "quick") -> list[Query]:
 def multi_log_compatibility_queries() -> list[Query]:
     source = "multi-log"
     return [
-        Query("multiLogAllAttachedLogs", "select l:name limit l:10", source=source),
+        Query("multiLogAllAttachedLogs", "select l:name limit l:10", source=source, minimum_logs=2),
         Query(
             "multiLogHierarchyWindow",
             "select l:name, t:name, e:name limit l:10, t:3, e:3",
-            source=source,
+            source=source, minimum_logs=2,
         ),
         Query(
             "multiLogPrimaryWhere",
             "select l:name, t:name, e:name where l:name='{PrimaryLogName}' limit l:10, t:3, e:3",
-            source=source,
+            source=source, minimum_logs=1,
         ),
         Query(
             "multiLogSecondaryWhere",
             "select l:name, t:name, e:name where l:name='{SecondaryLogName}' limit l:10, t:3, e:3",
-            source=source,
+            source=source, minimum_logs=1,
         ),
         Query(
             "multiLogEventWhereAcrossLogs",
             "select l:name, t:name, e:name where e:name='ER Registration' "
             "or e:name='invite reviewers' limit l:10, t:3, e:3",
-            source=source,
+            source=source, minimum_logs=2,
         ),
         Query(
             "multiLogImplicitGroupFromSelect",
             "select l:*, t:*, avg(e:total), min(e:timestamp), max(e:timestamp) limit l:1",
-            source=source,
+            source=source, minimum_logs=1,
         ),
     ]
+
+
+def thesis_queries() -> list[Query]:
+    """Frozen 69 named cases used in the thesis; independent of UI changes."""
+    path = Path(__file__).with_name("thesis-compatibility-queries.json")
+    definitions = json.loads(path.read_text(encoding="utf-8"))
+    return [Query(source="thesis-v1", **definition) for definition in definitions]
 
 
 def discovery_queries() -> list[Query]:

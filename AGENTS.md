@@ -8,7 +8,7 @@ for hierarchical XES logs. The primary goals are:
 - match original ProcessM query semantics and API contracts;
 - preserve XES data through import, query reconstruction, and export;
 - keep feature packages cohesive and their boundaries explicit (see
-  *Architecture*; the former layered split was removed on purpose);
+  *Architecture*);
 - provide reproducible compatibility and performance evidence.
 
 Do not optimize the implementation for one fixture such as teleclaims. Changes
@@ -52,8 +52,7 @@ If none is available, say so rather than guessing at reference behavior.
 
 ## Architecture
 
-Package-by-feature under `com.processm.processminterpreter` (the former
-`domain`/`application`/`infrastructure` layering was intentionally removed):
+Package-by-feature under `com.processm.processminterpreter`:
 
 - `pql`: the whole PQL feature — unified AST (`pql.ast.PqlExpression` /
   `PqlQuery`: parser emits surface nodes, the resolver rewrites them in place
@@ -76,8 +75,8 @@ Package-by-feature under `com.processm.processminterpreter` (the former
 
 Interfaces exist only at real substitution boundaries: `LogRepository`,
 `DataStoreRepository` (Neo4j, faked in tests) and `RemoteProcessMGateway`
-(HTTP). Everything else is a concrete class — do not reintroduce
-single-implementation ports or layer ceremony. One top-level type per file;
+(HTTP). Use concrete classes elsewhere rather than single-implementation ports.
+One top-level type per file;
 sealed hierarchies keep variants nested in the sealed parent.
 
 ## Change Discipline
@@ -108,6 +107,30 @@ changes:
   identity attributes are not equivalent;
 - verify single-log and multi-log datastores.
 
+For grouped queries, preserve ProcessM's two-stage evaluation: `WHERE` selects
+component identities at the aggregate's effective scope, then aggregate arguments
+read those components and their descendants. A lower-scope filter does not prune
+the descendants read by a hoisted aggregate. For example, `count(^t:name)` and
+`count(t:name)` can count different populations under the same event predicate.
+Implicit log aggregation combines matching logs before applying the log window.
+Grouped `ORDER BY` expressions use the membership-selection rows, so a hoisted
+aggregate used for ordering cannot blindly reuse its projected aggregate value.
+Regression coverage must check aggregate values and descendant placeholder shape.
+
+ProcessM streams XES XML as JSON and can repeat child-element fields such as
+`float` when attributes of another type occur between them. Use the shared
+`ProcessMXesJsonParser` for response bodies: ordinary map/tree parsing silently keeps
+only the last field. Preserve every attribute, including duplicate XES keys;
+do not emulate the parser's data loss in LOCAL's JSON converter.
+
+Grouped REFERENCE metadata has a separate limitation: `TranslatedQuery` assigns
+ordinal IDs to result log groups but returns physical `log_id` values for
+extensions/classifiers. `DBHierarchicalXESInputStream` compares those values
+directly, so metadata can disappear depending on member order and physical IDs.
+Keep such a response a strict MISMATCH; do not erase LOCAL metadata or relax the
+comparator to manufacture compatibility. Matching aggregate values alone do not
+make the full response eligible for timing comparisons.
+
 If XML parsing or persistence representation changes, previously imported logs
 must be deleted and imported again before manual comparisons are meaningful.
 
@@ -120,9 +143,9 @@ order as provided by the data source"
 (`docs/pql.md`, https://github.com/ProcessMPUT/processm/blob/master/docs/pql.md).
 Do not replace this with timestamp order.
 
-Do **not**, however, use that rule to diagnose the three real-log benchmark
-MISMATCHes for `group by ^e:name order by count(t:name) desc`. A source-and-data
-audit on 2026-08-16 disproved the earlier timestamp explanation:
+For `group by ^e:name order by count(t:name) desc`, the Hospital,
+JournalReview and Sepsis fixtures have ties at the trace-group window boundary.
+Differences in the returned hierarchy must not be attributed to timestamp order:
 
 - Hospital, JournalReview and Sepsis are already nondecreasing by timestamp inside
   every trace; stable timestamp sorting changes none of their event-name sequences;
@@ -131,14 +154,11 @@ audit on 2026-08-16 disproved the earlier timestamp explanation:
 - the REST trace limit is 30, while `count(t:name) desc` is not a total order. At
   the 30th variant Hospital has 13 variants tied for 5 places, JournalReview 93
   tied for 27 places, and Sepsis 35 tied for 3 places;
-- both observed event totals are exactly obtainable by selecting different members
-  of those tied sets. A targeted live replay reproduced the same selections.
+- selecting different members of those tied sets can produce different event totals.
 
-Consequently these pairs are genuine strict-response MISMATCHes and remain excluded
-from timing comparisons, but they prove neither a REFERENCE bug nor a LOCAL fix.
-The reproducible audit is `scripts/benchmarks/verify-hoisted-group-mismatches.py`;
-generated evidence is stored beside a final benchmark report. Future workloads
-should project only values invariant under the boundary tie (for example
+Such pairs are strict-response MISMATCHes and are excluded from timing comparisons;
+they do not establish a query-semantics defect in either system. Benchmark queries
+must project only values invariant under the boundary tie (for example
 `select count(t:name) ...`) or otherwise define a total trace-group order.
 
 ## Platform And Commands
@@ -155,15 +175,22 @@ slashes. Translate per host instead of hardcoding one platform:
 Gradle task names are identical everywhere; read them from `build.gradle.kts`
 rather than assuming.
 
-Everything under `scripts/` is Python 3 and standard library only — no
-virtualenv, no `requirements.txt`, no `pip install` step, and no PowerShell.
-Keep it that way: a new third-party import turns a script that runs anywhere
-into one that runs after a setup ritual. `scripts/_common.py` holds the shared
-plumbing (repository root, HTTP, process and port handling, output
-conventions); reach for it before writing a fresh variant.
+Everything under `scripts/` uses Python 3 and the standard library only.
+Keep scripts runnable without third-party dependencies or a virtual environment.
+`scripts/_common.py` holds shared repository-path, HTTP, process, port and output
+helpers; reuse them instead of duplicating this functionality.
 
 One host prerequisite is easy to miss: `gradlew` must be executable
 (`chmod +x gradlew` on a fresh POSIX clone).
+
+## Thesis publication
+
+The thesis and its final report describe one completed study based on one
+final evidence package. Describe the measured method, results and limitations.
+Preserve execution provenance in the evidence metadata, and keep incomplete
+previews explicitly incomplete. Update methodology, numbers, tables, figures
+and conclusions together from the same final report. Every numerical claim must
+be supported by the recorded evidence for that study.
 
 ## Verification
 
@@ -182,7 +209,7 @@ Run focused tests for the changed area, then the full suite before a checkpoint:
 A change is not finished while the suite is red. If a test fails, fix the cause
 or state plainly that it fails and why — do not weaken the assertion, do not
 mark it `@Disabled`, and do not report the work as complete. Pre-existing
-skips are recorded in the relevant guide; new ones need an explicit reason.
+skips must be checked in the test sources; new ones need an explicit reason.
 
 For compatibility-sensitive work, also run the repository compatibility report
 and require zero strict problems. Do not treat HTTP 200 or equal payload sizes

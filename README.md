@@ -1,462 +1,273 @@
-# ProcessM Interpreter - Neo4j Implementation
+# ProcessM Interpreter — Neo4j
 
-**Alternatywny interpreter języka PQL** (Process Query Language) dla systemu [ProcessM](https://processm.cs.put.poznan.pl), wykorzystujący **Neo4j graph database** zamiast PostgreSQL do wydajniejszego przechowywania i przetwarzania hierarchicznych logów procesów w formacie XES.
+A standalone REST service that executes ProcessM's Process Query Language (PQL)
+over XES event logs stored in Neo4j. It translates PQL into Cypher, reconstructs
+the log–trace–event hierarchy, and exposes XES JSON and XML results.
 
-## 🎯 Cel Projektu
+The project investigates an alternative to ProcessM's PostgreSQL implementation.
+Compatibility and performance are checked against the reference system; a graph
+representation does not imply that every query is faster.
 
-Stworzenie **standalone REST component** dla ProcessM, który:
-- Zastępuje nieefektywny PostgreSQL-based interpreter
-- Wykorzystuje graph database (Neo4j) lepiej dopasowaną do hierarchical event data
-- Udostępnia operacje CRUD na logach XES
-- Interpretuje i wykonuje zapytania PQL
-- **Zwraca wyniki w formacie XES** (zgodnie z IEEE 1849-2016)
+- [API reference](docs/api.md): requests, formats, limits and implementation caveats.
+- [Benchmark guide](docs/benchmark-study.md): preparation, collection, recovery and reports.
+- [Measurement methodology](src/benchmark/METHODOLOGY.md): workloads, metrics and inference.
 
-**Original ProcessM Interpreter (PostgreSQL):**
-- Repository: [TranslatedQuery.kt](https://github.com/ProcessMPUT/processm/blob/master/processm.core/src/main/kotlin/processm/core/log/hierarchical/TranslatedQuery.kt)
-- Problem: tłumaczy PQL na serię zapytań SQL → nieefektywne dla hierarchical data
+## Requirements
 
-**Ten projekt:** Wykorzystuje Neo4j Cypher dla native graph operations
+- **JDK 26**, as declared in [build.gradle.kts](build.gradle.kts). The configured
+  toolchain resolver can download it if another suitable JVM is available to
+  start Gradle; the wrapper still requires Java to start.
+- **Docker with Compose v2** for Neo4j, reference ProcessM and integration tests.
+- **Python 3.10 or newer** for the scripts, which use the standard library only.
+- No global Gradle installation is needed: the wrapper pins **Gradle 9.5.0**.
 
-## 🔗 ProcessM References
+Commands run from the repository root. On Windows, replace `./gradlew` with
+`.\gradlew.bat` and `python3` with `python`. Shell examples use POSIX syntax.
+If needed on macOS/Linux, make the wrapper executable with `chmod +x gradlew`.
 
-### ProcessM System
-- **Official Website:** https://processm.cs.put.poznan.pl
-- **Main Repository:** https://github.com/ProcessMPUT/processm
-- **PQL Specification:** [ProcessM PQL specification](https://github.com/ProcessMPUT/processm/blob/master/docs/pql.md)
+## Run locally
 
-### ProcessM Implementation (Reference)
-- **Parser Grammar (ANTLR4):** [processm.core/...​/querylanguage](https://github.com/ProcessMPUT/processm/tree/master/processm.core/src/main/antlr4/processm/core/querylanguage)
-- **Query Model (Kotlin):** [Query.kt](https://github.com/ProcessMPUT/processm/blob/master/processm.core/src/main/kotlin/processm/core/querylanguage/Query.kt)
-- **Original Interpreter (PostgreSQL):** [TranslatedQuery.kt](https://github.com/ProcessMPUT/processm/blob/master/processm.core/src/main/kotlin/processm/core/log/hierarchical/TranslatedQuery.kt)
-
-### ProcessM Tests (Required for Compatibility)
-- **Parser Tests:** [processm.core/.../querylanguage](https://github.com/ProcessMPUT/processm/tree/master/processm.core/src/test/kotlin/processm/core/querylanguage)
-  - AttributeTests, FunctionTests, LiteralTests, OrderDirectionTests, **QueryTests** (71 tests), ScopeTests
-- **Interpreter Tests:** [processm.core/.../hierarchical](https://github.com/ProcessMPUT/processm/tree/master/processm.core/src/test/kotlin/processm/core/log/hierarchical)
-  - DBHierarchicalXESInputStreamTests, WithQueryTests, WithSelectQueryTests, WithWhereQueryTests
-
-### Data & Standards
-- **Example XES Logs:** [processm/xes-logs](https://github.com/ProcessMPUT/processm/tree/master/xes-logs)
-  - BPIC series, Hospital, Road Traffic Fine, Sepsis Cases, CoSeLoG WABO (100+ files)
-- **XES Standard (IEEE 1849-2016):** http://www.xes-standard.org/
-- **OpenXES Library:** http://www.openxes.org/
-
-## Architektura
-
-Kod jest zorganizowany **wg funkcji (package-by-feature)**, nie warstwowo.
-Każdy pakiet skupia jeden obszar odpowiedzialności:
-
-- **`pql`** — cała obsługa języka PQL: ujednolicone AST (`pql.ast`), katalog
-  atrybutów/funkcji (`pql.catalog`, `pql.semantics`), plan logiczny
-  (`pql.plan`), adapter ANTLR (`pql.parser`), generacja Cypher (`pql.cypher`)
-  oraz `PqlQueryService` (wykonanie / walidacja / eksport / metadane).
-- **`neo4j`** — dostęp do bazy: repozytoria, import XES, schemat,
-  `Neo4jQueryPlanExecutor`, rekonstrukcja hierarchii wyników (`neo4j.query.result`).
-- **`xes`** — model logu/datastore i usługi (`LogService`, `DataStoreService`),
-  wejście/wyjście XES XML (`xes.io`).
-- **`processm`** — klient zdalnego ProcessM, formatowanie XES-JSON (`processm.json`),
-  porównywanie/weryfikacja zgodności (`processm.compat`).
-- **`web`** — kontrolery REST i DTO (kontrakt API).
-
-Potok wykonania zapytania (bez wzorca Visitor — to zwykłe fazy kompilatora):
-
-```
-PQL string
-  -> AntlrPqlParser        (pql.parser)      surface AST (PqlExpression / PqlQuery)
-  -> Resolver              (pql.semantics)   nazwy, typy, hoisting w miejscu
-  -> Validator             (pql.semantics)   reguły semantyczne (parytet z ProcessM)
-  -> Planner               (pql.semantics)   plan logiczny (LogicalPlan)
-  -> CypherCodegen         (pql.cypher)      parametryzowany Cypher
-  -> Neo4jQueryPlanExecutor(neo4j.query)     wykonanie na Neo4j
-  -> HierarchyReconstructor(neo4j.query.result) wynik jako zagnieżdżony XesLog
-```
-
-Interfejsy (porty) istnieją tylko na realnych granicach podmiany:
-`LogRepository`, `DataStoreRepository` (Neo4j) i `RemoteProcessMGateway` (HTTP).
-Reszta to konkretne klasy — bez ceremonii warstwowej.
-
-> **Źródło prawdy o architekturze i regułach zmian to `AGENTS.md`** — w root oraz
-> trzy przewodniki per-obszar: `scripts/AGENTS.md`, `src/benchmark/AGENTS.md`
-> i `src/test/kotlin/com/processm/processminterpreter/processm/AGENTS.md`
-> (testy portowane z oryginalnego ProcessM). Są to jedyne wersjonowane
-> instrukcje dla agentów i celowo niezależne od narzędzia — pliki notatek
-> specyficzne dla konkretnego asystenta są gitignorowane (sekcja
-> `### AI Agents ###` w `.gitignore`), więc nie przetrwają świeżego klonu.
-> Metodologia testów wydajnościowych: `src/benchmark/METODOLOGIA.md`.
-
-## Model danych Neo4j
-
-```
-Nodes:
-- DataStore (properties: dataStoreId, name)
-- Log        (properties: logId, name, classifiers, extensions,
-              traceGlobals, eventGlobals, atrybuty niestandardowe)
-- Trace      (properties: traceId, caseId, atrybuty niestandardowe)
-- Event      (properties: eventId, activity, timestamp, resource,
-              atrybuty niestandardowe)
-
-Relationships:
-- DataStore -[CONTAINS_LOG]-> Log
-- Log       -[CONTAINS]->     Trace
-- Trace     -[HAS_EVENT]->    Event
-- Event     -[FOLLOWS]->      Event (sekwencja zdarzeń w śladzie)
-```
-
-**DataStore jest korzeniem zakresu zapytań.** Każde zapytanie PQL startuje od
-`MATCH (:DataStore {dataStoreId: $dataStoreId})-[:CONTAINS_LOG]->(log:Log)`, co
-odwzorowuje model ProcessM: jeden datastore może zawierać wiele logów, a
-zapytania wielologowe (`select l:name limit l:10`) działają w obrębie datastore'u.
-
-## Wymagania
-
-- **JDK 26** — `build.gradle.kts` ustawia `jvmToolchain(26)`; Gradle pobierze
-  odpowiedni toolchain, jeśli nie masz go lokalnie
-- Docker + Docker Compose (v2, `docker compose`)
-- Python 3 — skrypty operacyjne w `scripts/` (tylko biblioteka standardowa,
-  bez `pip install`)
-- Gradle **nie jest wymagany globalnie** — używaj wrappera (`./gradlew`,
-  na Windows `.\gradlew.bat`), który przypina wersję 9.5.0
-
-Na świeżym klonie na macOS/Linux nadaj wrapperowi prawo wykonywania:
-`chmod +x gradlew`.
-
-## Uruchomienie środowiska deweloperskiego
-
-### 1. Uruchomienie Neo4j
+For development, start Neo4j in Docker and the application on the host:
 
 ```bash
-# Uruchomienie całego środowiska: Neo4j + referencyjny ProcessM + seed danych
-docker compose up -d
-
-# Sprawdzenie statusu
-docker compose ps
-
-# Logi Neo4j
-docker compose logs -f neo4j
-```
-
-Neo4j będzie dostępne pod adresami:
-- **Neo4j Browser**: http://localhost:7474
-- **Bolt Protocol**: bolt://localhost:7687
-- **Credentials**: neo4j / password123
-
-### 2. Uruchomienie aplikacji
-
-```bash
-# Kompilacja i uruchomienie
+docker compose up -d --wait neo4j
 ./gradlew bootRun
-
-# Lub w trybie deweloperskim z hot reload
-./gradlew bootRun --continuous
 ```
 
-Aplikacja będzie dostępna pod adresem: http://localhost:8080/api
+Open the comparison UI at [localhost:8080](http://localhost:8080/).
+REST endpoints are under `http://localhost:8080/api`; see the
+[API reference](docs/api.md) for a create–import–query example.
 
-### 3. Zatrzymanie środowiska
+To enable comparisons with ProcessM, also start the reference and its initializer:
 
 ```bash
-# Zatrzymanie wszystkich serwisów
-docker compose down
-
-# Zatrzymanie z usunięciem volumes (UWAGA: usuwa dane!)
-docker compose down -v
+docker compose up -d processm processm-init
+docker compose logs -f processm-init
 ```
 
-## API Endpoints
+The initializer creates the reference account and imports Hospital, JournalReview,
+Sepsis and teleclaims, plus a JournalReview + Sepsis datastore. Wait for it to
+finish before comparing results. It seeds **REFERENCE only**: import the same
+files into LOCAL through the UI or API.
 
-### Datastore'y (zakres zapytań)
+| Service | Address | Development credentials |
+|---|---|---|
+| Interpreter UI / API | `http://localhost:8080/` / `/api` | No local login required |
+| Neo4j Browser / Bolt | `http://localhost:7474/` / `bolt://localhost:7687` | `neo4j` / `password123` |
+| Reference ProcessM | `http://localhost:80/` | `admin@example.com` / `Admin1234` |
 
-```http
-POST /api/data-stores
-Content-Type: application/json
-{ "name": "My Datastore" }
-# Tworzy datastore; zwraca { "id": ... } używane dalej jako dataStoreId
+### Run the application in Docker
 
-GET /api/data-stores
-# Lista datastore'ów
+Stop any host application using port 8080 first, then build the JAR before
+building the application image:
 
-GET /api/data-stores/{dataStoreId}
-# Metadane pojedynczego datastore'u
-
-GET /api/data-stores/{dataStoreId}/log-summaries
-# Skrócone podsumowania logów w datastorze
-
-PATCH /api/data-stores/{dataStoreId}
-Content-Type: application/json
-{ "name": "Nowa nazwa" }
-# Zmiana nazwy
-
-DELETE /api/data-stores/{dataStoreId}
-# Usunięcie datastore'u wraz z zawartością
-
-POST /api/data-stores/{dataStoreId}/logs
-Content-Type: multipart/form-data
-# Parametry: file (MultipartFile) — .xes lub .xes.gz
-# Import logu XES do datastore'u (ścieżka zgodna z API ProcessM)
-
-GET /api/data-stores/{dataStoreId}/logs
-# Parametry: query (PQL, domyślnie ""), includeTraces, includeEvents
-# Wykonanie zapytania PQL w zakresie datastore'u — endpoint zgodny z ProcessM
-
-DELETE /api/data-stores/{dataStoreId}/logs/{logId}
-# Usunięcie pojedynczego logu z datastore'u
+```bash
+./gradlew bootJar
+docker compose up -d --build
+docker compose ps
 ```
 
-### Zarządzanie logami
+The Dockerfile expects `build/libs/processm-interpreter.jar`. Rebuild the JAR
+and image after changing application code. The application reaches Neo4j and
+ProcessM by their Compose service names inside the Docker network.
 
-```http
-POST /api/logs/upload
-Content-Type: multipart/form-data
-# Parametry: file (MultipartFile), logId (opcjonalny)
-# Upload pliku XES
+This Compose setup is for development. Use the
+[benchmark controller](docs/benchmark-study.md) for measured runs: it prepares
+the resource limits, verifies image identities and controls seeding.
 
-POST /api/logs/load-sample
-# Parametry: resourcePath (domyślnie: logs/sample_process.xes), logId, dataStoreId
-# Ładuje przykładowy log z zasobów aplikacji
+### Stop and inspect services
 
-GET /api/logs/samples
-# Lista przykładowych logów dostępnych w zasobach (src/main/resources/logs)
-
-POST /api/logs
-Content-Type: application/json
-{ "logId": "my-log", "name": "My Log", "attributes": {} }
-# Tworzy nowy pusty log
-
-GET /api/logs
-# Parametry: includeStatistics (domyślnie: false)
-# Lista wszystkich logów
-
-GET /api/logs/{logId}
-# Pobranie metadanych logu
-
-GET /api/logs/{logId}/statistics
-# Statystyki logu (liczba traces, events)
-
-POST /api/logs/search
-Content-Type: application/json
-{ "name": "...", "createdAfter": "...", "attributeKey": "...", "attributeValue": "..." }
-# Wyszukiwanie logów po kryteriach
-
-PUT /api/logs/{logId}
-Content-Type: application/json
-{ "name": "New Name", "attributes": {} }
-# Aktualizacja metadanych logu
-
-DELETE /api/logs/{logId}
-# Parametry: deleteAllData (domyślnie: TRUE) — usuwa też traces i events
-# Usunięcie logu. Uwaga: domyślne zachowanie jest destrukcyjne — żeby zostawić
-# dane potomne, trzeba jawnie przekazać deleteAllData=false
-
-HEAD /api/logs/{logId}
-# Sprawdzenie czy log istnieje (200 / 404)
-
-GET /api/logs/generate-id
-# Generuje unikalny logId
+```bash
+docker compose logs --tail=100 neo4j
+docker compose logs --tail=100 app
+docker compose stop
 ```
 
-### Wykonywanie zapytań PQL
+Use `Ctrl+C` to stop a foreground `bootRun`. `docker compose stop` retains the
+containers; `docker compose start` starts them again. `docker compose down`
+removes containers, and adding `-v` also removes the declared volumes, including
+Neo4j data. The reference service has no explicitly configured persistent data
+volume in this Compose file; do not rely on its datastores surviving recreation.
 
-```http
-POST /api/query/execute?format=json
-Content-Type: application/json
-# Parametr format: "json" (domyślnie) lub "xes" — XES jako JSON structure
-# Zakres: podaj dataStoreId (zalecane, zgodne z ProcessM) albo logId
-{
-  "query": "select e:name, e:timestamp where e:name = 'Task A'",
-  "dataStoreId": "ds-123",
-  "logId": null,
-  "timeout": null,
-  "maxResults": null
-}
+If startup fails, check Docker health, available memory, occupied ports and the
+configured Neo4j credentials. Avoid running the host application and the Compose
+`app` service on port 8080 at the same time.
 
-POST /api/query/execute-xes
-Content-Type: application/json
-# Parametry: compress (domyślnie: false — gzip), logName (domyślnie: "Query Result Log")
-# Zwraca wyniki jako plik XES XML do pobrania (Content-Disposition: attachment)
-{
-  "query": "select e:name, e:timestamp",
-  "logId": "log-123"
-}
+## PQL examples
 
-POST /api/query/validate
-Content-Type: application/json
-{ "query": "select e:name" }
-# Walidacja składni PQL bez wykonywania
+A request supplies the datastore or log to query. Within PQL, `l:`, `t:` and
+`e:` refer to log, trace and event attributes. Standard shorthand such as
+`e:name` resolves to `event:concept:name`; custom attributes use brackets,
+for example `[e:attr_1]`.
 
-GET /api/query/statistics
-# Statystyki wykonanych zapytań (liczba, czasy, błędy)
-
-GET /api/query/features
-# Lista obsługiwanych funkcji PQL, operatorów i ograniczeń
-
-POST /api/query/verify
-Content-Type: application/json
-# Parametry: format ("full" domyślnie lub "light")
-# Porównuje wyniki z ProcessM (wymaga skonfigurowanego serwera ProcessM).
-# To endpoint, na którym opiera się raport kompatybilności — porównanie jest
-# semantyczne, a nie po statusie HTTP czy rozmiarze odpowiedzi.
-{
-  "query": "select e:name",
-  "dataStoreId": "lokalny-ds",
-  "remoteDataStoreId": "ds-w-referencyjnym-processm",
-  "logId": null,
-  "logName": null,
-  "includeTraces": true,
-  "includeEvents": true
-}
-
-POST /api/query/processm/upload
-Content-Type: multipart/form-data
-# Parametry: file (MultipartFile), logName
-# Wysyła log do referencyjnego ProcessM (przygotowanie porównania)
-
-GET /api/query/processm/data-stores
-# Lista datastore'ów po stronie referencyjnego ProcessM
-```
-
-## Przykłady PQL
-
-PQL nie ma klauzuli `FROM` — zakres (log/trace/event) wynika z prefiksu atrybutu
-(`l:` / `t:` / `e:`). Limity są hierarchiczne (`l:` / `t:` / `e:`).
-
-### Podstawowe
 ```sql
--- Nazwy zdarzeń z okna hierarchii: 1 log, 10 śladów, 20 zdarzeń
+-- At most one log, ten traces per log and twenty events per trace
 select e:name limit l:1, t:10, e:20
 
--- Liczba śladów i zdarzeń w logu
-select count(t:name), count(e:name)
+-- Filter events by their activity name
+where e:name = 'Task A' limit l:1, t:10, e:20
 
--- Filtr po nazwie logu
-where l:name = 'teleclaims.mxml'
+-- Count named events at log scope, with timestamp bounds
+select count(^^e:name), min(^^e:timestamp), max(^^e:timestamp) limit l:1, t:1
+
+-- Group traces by their event-name sequence and return group counts
+select count(t:name) group by ^e:name order by count(t:name) desc limit l:1, t:3
 ```
 
-### Zaawansowane
-```sql
--- Częstość aktywności: grupowanie po nazwie zdarzenia, sortowanie po liczniku
-select e:name, count(e:name) group by e:name order by count(e:name) desc
+The `^` operator lifts an attribute by one level in the hierarchy;
+`^^e:name` lifts it to log scope. Hoisting changes the scope of filters,
+grouping and aggregates. `count(attribute)` counts non-null values, so counting
+names equals counting components only when each component has a name.
 
--- Agregaty czasowe
-select min(e:timestamp), max(e:timestamp), count(e:name)
+Limits apply separately at each hierarchy level. In particular, `e:20` means
+twenty events **per returned trace**, not twenty events in the entire response.
+The ProcessM-compatible datastore endpoint also applies default upper limits;
+the local execution endpoints have different defaults. See the
+[API reference](docs/api.md#hierarchical-limits).
 
--- Dopasowanie podłańcucha (semantyka PostgreSQL `~`, jak w oryginale)
-where e:name matches 'consult'
+## Configuration
 
--- Grupowanie po atrybucie zdarzenia podniesionym do zakresu śladu (hoisting)
-select count(e:name) group by ^e:name order by count(e:name) desc
+Defaults are in [application.yml](src/main/resources/application.yml).
+Use environment variables to override them:
+
+| Setting | Default | Environment variable |
+|---|---|---|
+| HTTP port | `8080` | `SERVER_PORT` |
+| Neo4j URI | `bolt://localhost:7687` | `SPRING_NEO4J_URI` |
+| Neo4j username | `neo4j` | `SPRING_NEO4J_AUTHENTICATION_USERNAME` |
+| Neo4j password | `password123` | `SPRING_NEO4J_AUTHENTICATION_PASSWORD` |
+| Reference API | `http://localhost:80/api` | `PROCESSM_API_URL` |
+| Reference login / password | `admin@example.com` / `Admin1234` | `PROCESSM_LOGIN` / `PROCESSM_PASSWORD` |
+
+The application accepts `.xes` and `.xes.gz` uploads. Spring's multipart file
+and request limits default to 500 MB. The reference
+system's upload limit is separate; the benchmark verifies that its inputs fit
+the stock reference limit.
+
+Compatibility limits default to 10 logs, 30 traces per log and 90 events per
+trace. Request fields named `timeout` and `maxResults` are currently not enforced
+by the local execution service; use PQL limits to bound results. The API reference
+documents these and other placeholder fields.
+
+## Architecture and storage
+
+Source packages under `com.processm.processminterpreter` group code by feature:
+
+| Package | Responsibility |
+|---|---|
+| `pql` | AST, attribute/function catalog, parser, semantic analysis, logical plans, Cypher generation and query service |
+| `neo4j` | Schema, repositories, XES import, query execution and hierarchy reconstruction |
+| `xes` | Datastore/log model, services and XES XML input/output |
+| `processm` | Reference HTTP client, XES JSON conversion and semantic comparison |
+| `web` | REST controllers and request/response DTOs |
+
+The main query path is:
+
+```text
+PQL → ANTLR parser → Resolver → Validator → Planner
+    → CypherCodegen → Neo4j driver → HierarchyReconstructor → JSON or XES XML
 ```
 
-## Konfiguracja
+`PqlCompiler` coordinates parsing and semantic preparation. Neo4j access uses
+the driver directly. The repositories and remote ProcessM gateway are the
+substitution boundaries used by services and tests.
 
-Główne ustawienia znajdują się w `src/main/resources/application.yml`:
+The persistent hierarchy is:
 
-```yaml
-spring:
-  neo4j:
-    uri: bolt://localhost:7687
-    authentication:
-      username: neo4j
-      password: password123
-  servlet:
-    multipart:
-      max-file-size: 500MB
-
-processm:
-  xes:
-    upload:
-      max-file-size: 500MB
-  query:
-    timeout: PT5M
-    max-results: 10000
-  api:
-    url: http://localhost:80/api
+```text
+(:DataStore)-[:CONTAINS_LOG]->(:Log)-[:CONTAINS]->(:Trace)-[:HAS_EVENT]->(:Event)
 ```
 
-## Testowanie
+A datastore can contain multiple logs. Node identifiers and parent identifiers
+support scoping; `importOrder` preserves source order. Standard XES attributes
+map to physical properties such as `Event.activity` and `Event.timestamp`.
+The persistence layer also keeps custom/nested attributes and log metadata for
+reconstruction and export.
 
-Jeden task uruchamia cały suite — testy jednostkowe i integracyjne (te ostatnie
-same podnoszą kontener Neo4j przez Testcontainers, więc wymagany jest Docker):
+An optional `FOLLOWS` relationship can be written during import, but it is
+disabled by default (`processm.neo4j.persist-follows=false`) and is not used
+to execute PQL. It does not determine PQL's default event order.
+
+Other source locations:
+
+- `src/main/resources/static/`: comparison UI.
+- `src/main/resources/logs/`: bundled XES fixtures, mostly gzip-compressed.
+- `src/test/`: unit and integration tests, including tests ported from ProcessM.
+- `src/benchmark/`: HTTP measurement collector and declared workloads.
+- `scripts/`: development, compatibility and benchmark tools.
+- `tmp/`: generated reports, evidence and local working files; ignored by Git.
+
+## Verification and development
+
+Compile application, test and benchmark sources before running a broad suite:
 
 ```bash
+./gradlew compileKotlin compileTestKotlin compileBenchmarkKotlin
 ./gradlew test
 ```
 
-Bramka zgodności semantycznej z oryginałem (raport kompatybilności, wymagane zero
-problemów ścisłych) opisana jest w `AGENTS.md` i uruchamiana skryptem
-`scripts/run-compatibility-report.py`.
-
-## Rozwój
-
-### Struktura projektu
-
-```
-src/
-├── main/kotlin/com/processm/processminterpreter/
-│   ├── pql/          # AST, semantyka, plan, parser ANTLR, generacja Cypher, PqlQueryService
-│   ├── neo4j/        # repozytoria, import XES, wykonanie zapytań, rekonstrukcja wyników
-│   ├── xes/          # model logu/datastore, usługi, wejście/wyjście XES XML (xes.io)
-│   ├── processm/     # klient zdalnego ProcessM, XES-JSON, weryfikacja zgodności
-│   └── web/          # kontrolery REST + DTO
-├── main/resources/
-│   ├── logs/         # przykładowe logi XES (gzip); listowane przez GET /api/logs/samples
-│   └── static/       # UI porównawcze: index.html + js/ (app.js, json-viewer.js) + css/
-├── test/             # testy; podpakiet .../processm/* to porty z oryginalnego ProcessM
-└── benchmark/        # osobny source set: benchmark do pracy (patrz src/benchmark/AGENTS.md)
-
-scripts/             # narzędzia operacyjne (Python 3, tylko stdlib) — patrz scripts/AGENTS.md
-```
-
-Lista zapytań w rozwijanym menu UI (`static/index.html`, `#sampleQueriesSelect`)
-jest domyślnym źródłem zapytań raportu kompatybilności — dodanie tam zapytania
-automatycznie obejmuje je testem zgodności.
-
-### Dodawanie nowych funkcji
-
-Nie używamy Spring Data Neo4j (`@Node` / `Neo4jRepository`) — dostęp do bazy idzie
-bezpośrednio przez sterownik (`org.neo4j.driver.Driver`) w klasach `neo4j/`.
-
-1. **Semantyka PQL**: rozszerz fazy w `pql/semantics` (Resolver/Validator/Planner);
-   zmiany walidacji sprawdzaj z oryginałem (`Query.kt`). Repozytorium referencyjne
-   ProcessM wskazuje zmienna `PROCESSM_REFERENCE_REPO`, checkout obok tego repo
-   (`../processm`) albo GitHub — szczegóły w `AGENTS.md`.
-2. **Generacja Cypher**: dodaj/zmień renderer w `pql/cypher` (bez interpolacji
-   wartości — tylko parametry).
-3. **Persystencja**: repozytoria i zapis/odczyt w `neo4j/`.
-4. **REST**: cienki kontroler w `web/` delegujący do usługi feature'owej
-   (`PqlQueryService`, `LogService`, `DataStoreService`).
-5. **Testy**: jednostkowe w pakiecie feature; parytet semantyczny w `test/.../processm`.
-
-Przed każdą zmianą przeczytaj `AGENTS.md` — opisuje dyscyplinę zmian i bramkę
-zgodności (raport kompatybilności = zero problemów ścisłych).
-
-### Debugowanie Neo4j
+The test task includes Neo4j integration tests that start containers through
+Testcontainers, so Docker is required. It does not run the full thesis study.
+Benchmark analysis and reporting have a separate offline test suite:
 
 ```bash
-# Połączenie z Neo4j CLI (nazwa kontenera: processm-neo4j)
-docker exec -it processm-neo4j cypher-shell -u neo4j -p password123
+python3 -m unittest discover -s scripts/benchmarks -p 'test_*.py' -v
 ```
 
-## Troubleshooting
+### Compare with reference ProcessM
 
-### Neo4j nie startuje
+Start both systems and import identical input files into corresponding
+datastores. Copy the tracked case templates to machine-local files:
+
 ```bash
-# Sprawdź logi
-docker compose logs neo4j
-
-# Sprawdź czy port 7687 jest wolny (macOS/Linux)
-lsof -nP -iTCP:7687 -sTCP:LISTEN
-
-# Windows
-netstat -ano | findstr 7687
+cp scripts/verify-compatibility.cases.example.json scripts/verify-compatibility.cases.local.json
+cp scripts/verify-compatibility.multi-log.cases.example.json scripts/verify-compatibility.multi-log.cases.local.json
 ```
 
-### Problemy z pamięcią
+Replace the placeholder IDs with the real LOCAL and REFERENCE datastore IDs.
+The multi-log case also needs the actual log names. Then run:
+
 ```bash
-# Zwiększ limity pamięci w docker-compose.yml
-NEO4J_server_memory_heap_max__size: "2G"
+python3 scripts/run-compatibility-report.py \
+  --query-source dropdown \
+  --include-multi-log-checks \
+  --measure-payload-size
 ```
 
-### Błędy połączenia
-- Sprawdź czy Neo4j jest uruchomiony: `docker compose ps`
-- Sprawdź konfigurację w `application.yml`
-- Sprawdź czy hasło jest poprawne (password123)
+The default query source is the UI's query menu. `--query-source thesis` uses
+the frozen thesis compatibility cases instead. Reports are written under
+`tmp/compatibility-reports/`; exit code 1 means strict problems were found.
+`INFO` cases and matching rejections are reported separately from matching
+successful responses. Equal status codes or payload sizes do not prove
+semantic equality.
+
+### Contributing
+
+Read [AGENTS.md](AGENTS.md) and the guide for the affected subtree:
+[scripts](scripts/AGENTS.md), [benchmark](src/benchmark/AGENTS.md), or
+[ported ProcessM tests](src/test/kotlin/com/processm/processminterpreter/processm/AGENTS.md).
+They describe semantic invariants, ownership and verification requirements.
+
+Preserve the reference semantics when changing parsing, scope, grouping,
+ordering, XES data or response reconstruction. Use parametrized Cypher and
+keep REST controllers focused on mapping requests to services. Changes to
+persistence or XML parsing require freshly imported data for meaningful
+compatibility checks.
+
+Shared project instructions live in the tracked `AGENTS.md` files.
+Tool-specific settings, including `.codex/`, remain local and ignored.
+
+## Reference sources
+
+- [ProcessM project](https://processm.cs.put.poznan.pl) and
+  [source repository](https://github.com/ProcessMPUT/processm).
+- [PQL specification](https://github.com/ProcessMPUT/processm/blob/master/docs/pql.md),
+  [ANTLR grammar](https://github.com/ProcessMPUT/processm/tree/master/processm.core/src/main/antlr4/processm/core/querylanguage),
+  [Query.kt](https://github.com/ProcessMPUT/processm/blob/master/processm.core/src/main/kotlin/processm/core/querylanguage/Query.kt)
+  and [TranslatedQuery.kt](https://github.com/ProcessMPUT/processm/blob/master/processm.core/src/main/kotlin/processm/core/log/hierarchical/TranslatedQuery.kt).
+- Reference [parser tests](https://github.com/ProcessMPUT/processm/tree/master/processm.core/src/test/kotlin/processm/core/querylanguage),
+  [hierarchical interpreter tests](https://github.com/ProcessMPUT/processm/tree/master/processm.core/src/test/kotlin/processm/core/log/hierarchical)
+  and [XES logs](https://github.com/ProcessMPUT/processm/tree/master/xes-logs).
+
+For a local reference checkout, set `PROCESSM_REFERENCE_REPO` or place the
+ProcessM repository at `../processm`. Otherwise use the linked upstream sources.

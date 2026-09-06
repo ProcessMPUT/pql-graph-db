@@ -4,6 +4,6 @@
     "localDataStoreId": "replace-local-multi-log-data-store-id",
     "remoteDataStoreId": "replace-remote-multi-log-data-store-id",
     "primaryLogName": "JournalReview",
-    "secondaryLogName": "Sepsis"
+    "secondaryLogName": "Sepsis Cases - Event Log"
   }
 ]

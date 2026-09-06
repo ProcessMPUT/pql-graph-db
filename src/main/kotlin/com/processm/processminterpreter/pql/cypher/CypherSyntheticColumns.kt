@@ -14,6 +14,8 @@ internal const val SYNTHETIC_EVENT_ALIAS = "event"
 internal const val SYNTHETIC_GROUPED_EVENT_ALIAS = "_grouped_event_"
 internal const val SYNTHETIC_NULL_EVENT_COUNT_ALIAS = "_null_event_count_"
 internal const val SYNTHETIC_TRACE_COUNT_ALIAS = "_trace_count_"
+internal const val SYNTHETIC_TRACE_PRESENT_ALIAS = "_trace_present_"
+internal const val SYNTHETIC_EVENT_PRESENT_ALIAS = "_event_present_"
 internal const val TRACE_GROUP_ORDER_ALIAS = "_trace_group_order_"
 
 internal fun logMetadataProjection(): String =

@@ -36,15 +36,8 @@ object XESJsonConverter {
 
     private val logger = LoggerFactory.getLogger(XESJsonConverter::class.java)
 
-    private val LOG_INTERNAL_ATTRIBUTES =
+    private val LOG_STANDARD_ATTRIBUTES =
         setOf(
-            "traceGlobals",
-            "eventGlobals",
-            "extensions",
-            "classifiers",
-            "dataStoreId",
-            "logId",
-            "description",
             ATTR_CONCEPT_NAME,
             ATTR_LIFECYCLE_MODEL,
             ATTR_IDENTITY_ID,
@@ -150,7 +143,6 @@ object XESJsonConverter {
         result.putAll(
             processMJsonAttributeView(logAttributes(log, isProjectedQuery, logSelectAll, projectedLogAttrs)),
         )
-        appendLogIdentityId(result, log, isProjectedQuery, logSelectAll)
         appendTraces(result, log, isProjectedQuery, projectedTraceAttrs, includeTraces, includeEvents)
 
         return result
@@ -220,18 +212,22 @@ object XESJsonConverter {
     ): Map<String, Any?> {
         val attributes = linkedMapOf<String, Any?>()
 
-        if (isProjectedQuery && !logSelectAll) {
-            log.conceptName
-                ?.takeIf { it != UNKNOWN_CONCEPT_NAME }
-                ?.let { attributes[ATTR_CONCEPT_NAME] = it }
-        } else {
+        log.conceptName
+            ?.takeIf { it != UNKNOWN_CONCEPT_NAME }
+            ?.let { attributes[ATTR_CONCEPT_NAME] = it }
+        if (!isProjectedQuery || logSelectAll) {
             log.lifecycleModel?.let { attributes[ATTR_LIFECYCLE_MODEL] = it }
+            attributes[ATTR_IDENTITY_ID] = log.identityId
+                ?: log.customAttributes[ATTR_IDENTITY_ID]
+                ?: syntheticLogIdentityId(log)
         }
 
         logger.debug("convertLog - log.customAttributes keys: {}", log.customAttributes.keys)
+        // Reconstruction already separates storage metadata from source XES keys.
+        // Custom attributes such as "description" or "logId" are user data here.
         log.customAttributes.forEach { (key, value) ->
             if (
-                key !in LOG_INTERNAL_ATTRIBUTES ||
+                key !in LOG_STANDARD_ATTRIBUTES ||
                 shouldEmitProjectedLogAttribute(key, isProjectedQuery, logSelectAll, projectedLogAttrs)
             ) {
                 attributes[key] = value
@@ -248,18 +244,6 @@ object XESJsonConverter {
         projectedLogAttrs: Set<String>,
     ): Boolean =
         isProjectedQuery && !logSelectAll && key in projectedLogAttrs
-
-    private fun appendLogIdentityId(
-        result: MutableMap<String, Any>,
-        log: XesLog,
-        isProjectedQuery: Boolean,
-        logSelectAll: Boolean,
-    ) {
-        if (isProjectedQuery && !logSelectAll) return
-        if (log.customAttributes.containsKey(ATTR_IDENTITY_ID)) return
-        val identityId = log.identityId ?: syntheticLogIdentityId(log)
-        result["id"] = mapOf("@key" to ATTR_IDENTITY_ID, "@value" to identityId.toString())
-    }
 
     private fun syntheticLogIdentityId(log: XesLog): UUID {
         val seed = buildString {
@@ -376,33 +360,18 @@ object XESJsonConverter {
         )
 
     /**
-     * ProcessM's JSON endpoint is produced by streaming XES XML through StAXON.
-     * Repeated sibling tags are only preserved within the last contiguous run of
-     * a given tag name; an earlier `string` run followed by `float` and another
-     * `string` run gets overwritten. This is a wire-compatibility concern only;
-     * the domain model and XES export still retain the full attribute set.
+     * ProcessM may emit repeated JSON fields for separated runs of one XES tag.
+     * Represent those same siblings as one single-or-array field, retaining every
+     * attribute instead of reproducing a last-field-wins JSON reader's data loss.
      */
     private fun processMJsonAttributeView(values: Map<String, Any?>): Map<String, Any> {
-        val lastRunByType = linkedMapOf<String, MutableList<Map<String, String>>>()
-        var previousType: String? = null
-        var currentRun: MutableList<Map<String, String>>? = null
-
+        val attributesByType = linkedMapOf<String, MutableList<Map<String, String>>>()
         for (key in values.keys.sorted()) {
             val scalarValue = (values[key] as? XesAttributeValue)?.value ?: values[key]
-            val type = attributeType(scalarValue)
-            val run = if (type != previousType) {
-                mutableListOf<Map<String, String>>().also {
-                    currentRun = it
-                    lastRunByType[type] = it
-                    previousType = type
-                }
-            } else {
-                checkNotNull(currentRun)
-            }
-            run.add(mapOf("@key" to key, "@value" to attributeValue(scalarValue)))
+            attributesByType.getOrPut(attributeType(scalarValue), ::mutableListOf)
+                .add(mapOf("@key" to key, "@value" to attributeValue(scalarValue)))
         }
-
-        return lastRunByType.mapValuesTo(linkedMapOf()) { (_, attrs) -> toSingleOrArray(attrs) }
+        return attributesByType.mapValuesTo(linkedMapOf()) { (_, attrs) -> toSingleOrArray(attrs) }
     }
 
     private fun attributeType(value: Any?): String = when (value) {

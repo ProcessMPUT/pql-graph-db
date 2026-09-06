@@ -6,6 +6,7 @@ import com.processm.processminterpreter.processm.ProcessMUploadResponse
 import com.processm.processminterpreter.processm.RemoteProcessMDataStore
 import com.processm.processminterpreter.processm.RemoteProcessMGateway
 import com.processm.processminterpreter.processm.RemoteQueryExecutionResult
+import com.processm.processminterpreter.processm.json.ProcessMXesJsonParser
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.core.io.ByteArrayResource
@@ -208,7 +209,7 @@ class RemoteProcessMClient(
         }
 
         val rawJson = response.body()
-        val root = json.readTree(rawJson)
+        val root = ProcessMXesJsonParser.parse(rawJson)
         val data = if (root.isArray) root else root["data"]
         val results =
             when {

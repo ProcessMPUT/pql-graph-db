@@ -1,7 +1,7 @@
 package com.processm.processminterpreter.benchmark
 
 import com.fasterxml.jackson.databind.JsonNode
-import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import com.processm.processminterpreter.processm.json.ProcessMXesJsonParser
 
 data class XesJsonCounts(
     val logs: Int,
@@ -22,23 +22,22 @@ data class XesJsonCounts(
  * ProcessM XES-JSON single-or-array convention handled by the compatibility reader.
  */
 object XesJsonCounting {
-    private val mapper = jacksonObjectMapper()
+    fun count(body: String): XesJsonCounts =
+        runCatching { count(ProcessMXesJsonParser.parse(body)) }.getOrDefault(XesJsonCounts.EMPTY)
 
-    fun count(body: String): XesJsonCounts {
-        if (body.isBlank()) return XesJsonCounts.EMPTY
-        val root = runCatching { mapper.readTree(body) }.getOrNull() ?: return XesJsonCounts.EMPTY
+    fun count(root: JsonNode): XesJsonCounts {
         val documents = if (root.isArray) root.toList() else listOf(root)
         var logs = 0
         var traces = 0
         var events = 0
         documents.forEach { document ->
-            val log = document.get("log") ?: return@forEach
-            if (!log.isObject) return@forEach
-            logs++
-            val traceNodes = collectNodes(log.get("trace"), "trace")
-            traces += traceNodes.size
-            traceNodes.forEach { trace ->
-                events += collectNodes(trace.get("event"), "event").size
+            collectNodes(document.get("log"), "log").forEach { log ->
+                logs++
+                val traceNodes = collectNodes(log.get("trace"), "trace")
+                traces += traceNodes.size
+                traceNodes.forEach { trace ->
+                    events += collectNodes(trace.get("event"), "event").size
+                }
             }
         }
         return XesJsonCounts(logs = logs, traces = traces, events = events)

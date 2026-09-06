@@ -7,7 +7,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 
 /**
- * Collects the environment facts METODOLOGIA §2.4/§5.1 promises in every run's
+ * Collects the environment facts specified in src/benchmark/METHODOLOGY.md in each run's
  * `environment.json`: host hardware plus, per measured container, the Docker
  * resource limits, JVM version, and the database memory configuration exposed
  * through the container environment. Best-effort — a failed probe records

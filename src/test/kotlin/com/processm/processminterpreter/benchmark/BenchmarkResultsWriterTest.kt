@@ -1,167 +1,49 @@
 package com.processm.processminterpreter.benchmark
 
-import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertTrue
+import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
+import java.nio.file.Files
 import java.nio.file.Path
-import kotlin.io.path.readLines
-import kotlin.io.path.readText
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class BenchmarkResultsWriterTest {
     @Test
-    fun `writes query results with phase and count columns plus memory files`(
-        @TempDir tempDir: Path,
-    ) {
-        val settings = BenchmarkSettings(
-            profile = BenchmarkProfile.SMOKE,
-            localApi = "http://localhost:8080/api",
-            referenceApi = "http://localhost:80/api",
-            processMLogin = "admin@example.com",
-            processMPassword = "secret",
-            outputRoot = tempDir,
-            datasetFilter = emptySet(),
-            systemFilter = emptySet(),
-            keepBenchmarkDataStores = false,
-            localAppContainer = "processm-interpreter",
-        )
-        val querySample = QueryBenchmarkResult(
-            system = "local",
-            datasetName = "trace-100",
-            queryLabel = "hierarchyWindow",
-            run = 0,
-            seconds = 0.123,
-            status = "OK",
-            responseBytes = 456,
-            phase = QUERY_PHASE_COLD,
-            logCount = 1,
-            traceCount = 10,
-            eventCount = 100,
-        )
-        val mismatchSamples = listOf("local", "reference").map { system ->
-            querySample.copy(
-                system = system,
-                queryLabel = "hoistedGroup",
-                run = 1,
-                phase = QUERY_PHASE_WARM,
-                status = QUERY_STATUS_MISMATCH,
-            )
+    fun `checkpoint retains raw evidence and never turns a failure into zero latency`(@TempDir out: Path) {
+        val success = QueryBenchmarkResult("local", "d", "q", 1, .123, "OK", 10,
+            executionIndex = 1, responsePath = "responses/a.json")
+        val samples = listOf(success, success.copy(run = 2, status = "ERROR", seconds = 0.0),
+            success.copy(run = 3, status = "MISMATCH", seconds = .456))
+        BenchmarkResultsWriter(out).checkpoint(emptyList(), emptyList(), emptyList(), samples, emptyList(),
+            listOf(MemorySample("t", "queries", "processm-server", 100, activeSystem = "reference", withinWindow = false)),
+            emptyList())
+        val rows = Files.readAllLines(out.resolve("query-results.csv")).map { it.split(',') }
+        val time = rows.first().indexOf("seconds")
+        assertEquals(listOf("0.123", "", "0.456"), rows.drop(1).map { it[time] })
+        assertTrue(Files.readString(out.resolve("query-results.csv")).contains("responses/a.json"))
+        assertTrue(Files.readString(out.resolve("memory-results.csv")).contains("reference,false"))
+        Files.list(out).use { files ->
+            assertEquals(setOf("datasets.csv", "queries.csv", "import-results.csv", "query-results.csv",
+                "roundtrip-results.csv", "memory-results.csv", "container-io.csv"), files.map { it.fileName.toString() }.toList().toSet())
         }
-        val memorySample = MemorySample(
-            timestamp = "2026-07-02T10:00:00Z",
-            phase = MEMORY_PHASE_IDLE,
-            component = "processm-neo4j",
-            bytes = 1_073_741_824,
-        )
-        val memorySummary = MemorySummary(
-            component = "processm-neo4j",
-            phase = MEMORY_PHASE_IDLE,
-            medianBytes = 1_073_741_824,
-            peakBytes = 2_147_483_648,
-        )
-
-        BenchmarkResultsWriter(tempDir).write(
-            settings = settings,
-            datasets = emptyList(),
-            imports = emptyList(),
-            queries = listOf(querySample) + mismatchSamples,
-            querySummaries = emptyList(),
-            storage = listOf(
-                StorageBenchmarkResult(
-                    system = "local",
-                    datasetName = "trace-100",
-                    beforeBytes = null,
-                    afterBytes = null,
-                    deltaBytes = null,
-                    deltaToXesRatio = null,
-                    deltaToGzipRatio = null,
-                    status = STORAGE_STATUS_UNAVAILABLE,
-                ),
-            ),
-            roundtrips = emptyList(),
-            cleanup = emptyList(),
-            memorySamples = listOf(memorySample),
-            memorySummaries = listOf(memorySummary),
-        )
-
-        val queryLines = tempDir.resolve("query-results.csv").readLines()
-        assertEquals(
-            "system,datasetName,queryLabel,run,phase,seconds,status,responseBytes,logCount,traceCount,eventCount,details",
-            queryLines[0],
-        )
-        assertEquals("local,trace-100,hierarchyWindow,0,cold,0.123,OK,456,1,10,100,", queryLines[1])
-
-        val memoryLines = tempDir.resolve("memory-results.csv").readLines()
-        assertEquals("timestamp,phase,datasetName,operationLabel,component,bytes", memoryLines[0])
-        assertEquals("2026-07-02T10:00:00Z,idle,,,processm-neo4j,1073741824", memoryLines[1])
-
-        val summaryLines = tempDir.resolve("memory-summary.csv").readLines()
-        assertEquals("datasetName,operationLabel,component,phase,medianBytes,peakBytes", summaryLines[0])
-        assertEquals(",,processm-neo4j,idle,1073741824,2147483648", summaryLines[1])
-        assertTrue(tempDir.resolve("environment.json").readText()
-            .contains("\"localAppContainer\" : \"processm-interpreter\""))
-
-        val markdown = tempDir.resolve("summary.md").readLines()
-        assertTrue(markdown.contains("- Query samples: 3, errors: 0, mismatch samples: 2 across 1 (dataset, query) pairs"))
-        assertTrue(markdown.contains("- Storage measurements: 1, errors: 1, non-OK diagnostics: 0"))
     }
 
     @Test
-    fun `summarize uses only successful warm samples`() {
-        fun sample(
-            run: Int,
-            seconds: Double,
-            phase: String = QUERY_PHASE_WARM,
-            status: String = "OK",
-        ) = QueryBenchmarkResult(
-            system = "local",
-            datasetName = "trace-100",
-            queryLabel = "hierarchyWindow",
-            run = run,
-            seconds = seconds,
-            status = status,
-            responseBytes = 1,
-            phase = phase,
-        )
-
-        val summaries = QueryStatistics.summarize(
-            listOf(
-                sample(run = 0, seconds = 9.0, phase = QUERY_PHASE_COLD),
-                sample(run = 1, seconds = 1.0),
-                sample(run = 2, seconds = 2.0),
-                sample(run = 3, seconds = 3.0),
-                sample(run = 4, seconds = 8.0, status = QUERY_STATUS_MISMATCH),
-            ),
-        )
-
-        assertEquals(1, summaries.size)
-        assertEquals(3, summaries.single().samples)
-        assertEquals(2.0, summaries.single().medianSeconds)
-        assertTrue(summaries.single().maxSeconds == 3.0, "cold/mismatch samples must not reach the summary")
-    }
-
-    @Test
-    fun `summary quantiles use the same type-7 estimator as the thesis tables`() {
-        fun sample(
-            run: Int,
-            seconds: Double,
-        ) = QueryBenchmarkResult(
-            system = "local",
-            datasetName = "trace-100",
-            queryLabel = "hierarchyWindow",
-            run = run,
-            seconds = seconds,
-            status = "OK",
-            responseBytes = 1,
-            phase = QUERY_PHASE_WARM,
-        )
-
-        val seconds = listOf(1.0, 2.0, 3.0, 10.0)
-        val summary = QueryStatistics.summarize(seconds.mapIndexed(::sample)).single()
-
-        // Even sample count: a nearest-rank floor estimator would report 2.0 / 3.0 here.
-        assertEquals(ThesisStatistics.quantile(seconds, 0.50), summary.medianSeconds)
-        assertEquals(2.5, summary.medianSeconds)
-        assertEquals(ThesisStatistics.quantile(seconds, 0.95), summary.p95Seconds)
+    fun `environment records actual job counts and source evidence without credentials`(@TempDir out: Path) {
+        val job = StudyJob("pilot", "pilot", "pilot", "a".repeat(64), "draft", listOf("size-100k"),
+            listOf("minimalWindow"), 91, 7, 8, 3, 11, 13, 5, "q", "d",
+            resourceProbe = StudyResourceProbe("size-100k", "minimalWindow"))
+        BenchmarkResultsWriter(out).writeEnvironment(job, BenchmarkSettings("local-api", "ref-api", "secret-login", "secret-password"),
+            mapOf("source" to mapOf("gitCommit" to "revision")))
+        val text = Files.readString(out.resolve("environment.json"))
+        val json = jacksonObjectMapper().readTree(text)
+        for ((key, value) in mapOf("warmups" to 7, "repetitions" to 8, "importRepetitions" to 3,
+            "globalWarmupRounds" to 11, "resourceWindowSeconds" to 13, "resourceMinimumSamples" to 5, "datasetOrderSeed" to 91)) {
+            assertEquals(value, json[key].asInt())
+        }
+        assertEquals("revision", json["source"]["gitCommit"].asText())
+        assertFalse(text.contains("secret"))
     }
 }
