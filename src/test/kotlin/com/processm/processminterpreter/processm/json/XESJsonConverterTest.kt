@@ -3,6 +3,7 @@ package com.processm.processminterpreter.processm.json
 import com.processm.processminterpreter.processm.json.QueryJsonProjection
 import com.processm.processminterpreter.xes.model.AttributeScope
 import com.processm.processminterpreter.xes.model.Classifier
+import com.processm.processminterpreter.xes.model.Extension
 import com.processm.processminterpreter.xes.model.GlobalAttribute
 import com.processm.processminterpreter.xes.model.XesEvent
 import com.processm.processminterpreter.xes.model.XesLog
@@ -41,7 +42,7 @@ class XESJsonConverterTest {
                 lifecycleModel = "standard",
                 customAttributes =
                     mapOf(
-                        "dataStoreId" to "store-1",
+                        "dataStoreId" to "source datastore id",
                         "concept:name" to "teleclaims.mxml",
                         "lifecycle:model" to "standard",
                     ),
@@ -80,8 +81,9 @@ class XESJsonConverterTest {
         val traceNode = logNode["trace"].asMap()
         val eventNode = traceNode["event"].asMap()
 
-        assertFalse(flatAttributes(logNode).containsKey("dataStoreId"))
-        assertFalse(flatAttributes(logNode).containsKey("concept:name"))
+        assertEquals("source datastore id", flatAttributes(logNode)["dataStoreId"])
+        assertEquals(1, attributeCount(logNode, "concept:name"))
+        assertEquals("teleclaims.mxml", flatAttributes(logNode)["concept:name"])
         assertEquals("standard", flatAttributes(logNode)["lifecycle:model"])
         assertEquals(1, attributeCount(traceNode, "concept:name"))
         assertEquals(1, attributeCount(eventNode, "concept:name"))
@@ -130,7 +132,7 @@ class XESJsonConverterTest {
     }
 
     @Test
-    fun `implicit hierarchy does not emit ProcessM filtered log description`() {
+    fun `implicit hierarchy preserves source log description`() {
         val log =
             XesLog(
                 customAttributes = mapOf("description" to "Simulated process"),
@@ -139,7 +141,7 @@ class XESJsonConverterTest {
         val json = XESJsonConverter.convertToXESJson(listOf(log))
         val logNode = json["log"].asMap()
 
-        assertFalse(flatAttributes(logNode).containsKey("description"))
+        assertEquals("Simulated process", flatAttributes(logNode)["description"])
     }
 
     @Test
@@ -170,8 +172,64 @@ class XESJsonConverterTest {
         assertEquals("00000000-0000-0000-0000-000000000001", flatAttributes(logNode)["identity:id"])
         assertEquals("standard", flatAttributes(logNode)["lifecycle:model"])
         assertEquals("CPN Tools simulation", flatAttributes(logNode)["source"])
-        assertFalse(flatAttributes(logNode).containsKey("concept:name"))
-        assertFalse(flatAttributes(logNode).containsKey("description"))
+        assertEquals(1, attributeCount(logNode, "concept:name"))
+        assertEquals("teleclaims.mxml", flatAttributes(logNode)["concept:name"])
+        assertEquals("Simulated process", flatAttributes(logNode)["description"])
+    }
+
+    @Test
+    fun `formatter preserves source log attributes named like storage fields in multiple logs`() {
+        val descriptions = listOf("Log file created in CPN Tools", "Simulated process")
+        val logs = descriptions.mapIndexed { index, description ->
+            XesLog(
+                conceptName = "log-$index",
+                identityId = UUID(0, index + 1L),
+                lifecycleModel = "standard",
+                extensions = listOf(Extension("Concept", "concept", "urn:concept")),
+                classifiers = listOf(Classifier("Activity", listOf("concept:name"))),
+                traceGlobals = listOf(GlobalAttribute(AttributeScope.TRACE, "concept:name", "DEFAULT")),
+                customAttributes = mapOf(
+                    "description" to description,
+                    "traceGlobals" to index + 10,
+                    "eventGlobals" to (index == 0),
+                    "extensions" to Instant.parse("2026-09-06T00:00:00Z"),
+                    "classifiers" to index + 0.5,
+                    "dataStoreId" to UUID(1, index.toLong()),
+                    "logId" to "source-log-$index",
+                    "concept:name" to "log-$index",
+                    "lifecycle:model" to "standard",
+                ),
+            )
+        }
+        val customTypes = mapOf("description" to "string", "traceGlobals" to "int", "eventGlobals" to "boolean",
+            "extensions" to "date", "classifiers" to "float", "dataStoreId" to "id", "logId" to "string")
+        for (explicitWildcard in listOf(false, true)) {
+            val documents = ProcessMXesJsonFormatter().formatAsXesJson(QueryJsonProjection(
+                logs = logs,
+                hasExplicitSelect = explicitWildcard,
+                selectAllScopes = if (explicitWildcard) setOf(Scope.LOG) else emptySet(),
+            ))
+            assertEquals(2, documents.size)
+            documents.zip(logs).forEach { (document, source) ->
+                val node = document["log"].asMap()
+                val values = flatAttributes(node)
+                customTypes.forEach { (key, type) ->
+                    assertEquals(type, typeOfAttribute(node, key), key)
+                    assertEquals(source.customAttributes.getValue(key).toString(), values[key], key)
+                    assertEquals(1, attributeCount(node, key), key)
+                }
+                assertEquals(source.conceptName, values["concept:name"])
+                assertEquals("standard", values["lifecycle:model"])
+                assertEquals(source.identityId.toString(), values["identity:id"])
+                assertEquals("id", typeOfAttribute(node, "identity:id"))
+                listOf("concept:name", "lifecycle:model", "identity:id").forEach {
+                    assertEquals(1, attributeCount(node, it), it)
+                }
+                assertEquals(listOf(mapOf("@name" to "Concept", "@prefix" to "concept", "@uri" to "urn:concept")), node["extension"])
+                assertEquals(listOf(mapOf("@name" to "Activity", "@scope" to "event", "@keys" to "concept:name")), node["classifier"])
+                assertEquals(listOf(mapOf("@scope" to "trace", "string" to mapOf("@key" to "concept:name", "@value" to "DEFAULT"))), node["global"])
+            }
+        }
     }
 
     @Test
@@ -290,7 +348,7 @@ class XESJsonConverterTest {
     }
 
     @Test
-    fun `event compatibility json keeps only the last contiguous same-type run like ProcessM`() {
+    fun `event compatibility json preserves attributes across separated type runs`() {
         val log =
             XesLog(
                 traces =
@@ -318,6 +376,8 @@ class XESJsonConverterTest {
 
         assertEquals(
             mapOf(
+                "concept:name" to "with-both",
+                "cost:currency" to "EUR",
                 "lifecycle:transition" to "complete",
                 "cost:total" to "1.0",
                 "time:timestamp" to "2026-05-15T00:03:00Z",
@@ -327,14 +387,15 @@ class XESJsonConverterTest {
     }
 
     @Test
-    fun `compatibility json applies the same last-run rule to log trace and event attributes`() {
+    fun `compatibility json preserves every type run at each hierarchy scope`() {
         val log =
             XesLog(
                 lifecycleModel = "standard",
                 customAttributes = mapOf(
                     "alpha" to "A",
                     "beta" to 1.0,
-                    "gamma" to "G",
+                    "alpha" to "A",
+                "gamma" to "G",
                 ),
                 traces =
                     listOf(
@@ -353,6 +414,7 @@ class XESJsonConverterTest {
 
         assertEquals(
             mapOf(
+                "alpha" to "A",
                 "gamma" to "G",
                 "lifecycle:model" to "standard",
                 "beta" to "1.0",
@@ -361,6 +423,7 @@ class XESJsonConverterTest {
         )
         assertEquals(
             mapOf(
+                "concept:name" to "case",
                 "zzz" to "tail",
                 "cost:total" to "2.0",
             ),
@@ -401,7 +464,7 @@ class XESJsonConverterTest {
         val log =
             XesLog(
                 conceptName = "Hospital_log",
-                customAttributes = mapOf("logId" to "log-1"),
+                customAttributes = mapOf("logId" to "source log id"),
             )
 
         val first = XESJsonConverter.convertToXESJson(listOf(log))["log"].asMap()
@@ -409,6 +472,7 @@ class XESJsonConverterTest {
         val projected = XESJsonConverter.convertToXESJson(listOf(log), isProjectedQuery = true)["log"].asMap()
 
         assertEquals("id", typeOfAttribute(first, "identity:id"))
+        assertEquals("source log id", flatAttributes(first)["logId"])
         assertEquals(flatAttributes(first)["identity:id"], flatAttributes(second)["identity:id"])
         assertFalse(flatAttributes(projected).containsKey("identity:id"))
     }

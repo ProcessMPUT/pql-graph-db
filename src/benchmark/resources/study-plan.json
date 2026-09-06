@@ -1,0 +1,70 @@
+{
+  "studyId": "thesis-pql-27",
+  "protocolVersion": 27,
+  "status": "draft",
+  "analysis": "focused-sign-v1",
+  "budgetSeconds": null,
+  "maxAttemptsPerJob": 2,
+  "seed": 270905,
+  "queryDefinitionsSha256": "5745620986d2518bcb3c14901b3e6ccdd919e83699047f4661979fa57d20cf0b",
+  "datasetDefinitionsSha256": "80877e38db7bbe8002bc06b0e2faf35d2df6236b322da66b1bb3520d21b87ff7",
+  "primary": {
+    "datasets": [
+      "size-100k",
+      "size-1m"
+    ],
+    "queries": [
+      "hierarchyWindow",
+      "hoistedPositive",
+      "hierarchyCardinality"
+    ],
+    "replicates": 12,
+    "baseline": "minimalWindow"
+  },
+  "latency": {
+    "warmups": 40,
+    "pairs": 30,
+    "globalWarmupRounds": 200
+  },
+  "resources": {
+    "warmups": 5,
+    "windowSeconds": 10,
+    "minimumSamples": 3,
+    "globalWarmupRounds": 20,
+    "datasets": [
+      "size-1k",
+      "size-100k",
+      "size-1m",
+      "variants-1",
+      "variants-2000",
+      "real-sepsis",
+      "real-hospital"
+    ]
+  },
+  "imports": {
+    "pairs": 5
+  },
+  "pilot": {
+    "datasets": [
+      "size-1k",
+      "size-1m",
+      "variants-2000",
+      "real-road-traffic",
+      "variants-1",
+      "selectivity-100k-1pct",
+      "selectivity-100k-10pct",
+      "selectivity-100k-100pct",
+      "trace-length-10",
+      "trace-length-1000"
+    ],
+    "warmups": 1,
+    "pairs": 2,
+    "globalWarmupRounds": 2,
+    "budgetSeconds": 1800,
+    "resourceProbe": {
+      "dataset": "size-1k",
+      "query": "hierarchyWindow"
+    }
+  },
+  "pilotEvidence": null
+}

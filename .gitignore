@@ -43,15 +43,13 @@ out/
 ### Kotlin ###
 .kotlin
 
-### DOCS ###
-docs/
-
 ### AI Agents ###
 junie.md
 claude.md
 .agent/
 .agents/
 .claude/
+.codex/
 
 ### Large Data Files ###
 # Uncompressed XES stays out of the repo; fixtures live as .xes.gz under

@@ -108,7 +108,7 @@ internal class CypherExpressionRenderer(
         val physicalScope = a.baseScope
         val hoisted = physicalScope == Scope.EVENT && a.effectiveScope != Scope.EVENT
         val hoistedNodeVar = state?.hoistedEventNodeVar
-        val nodeVar = if (hoisted && hoistedNodeVar != null) {
+        val nodeVar = state?.attributeNodeVariable(a.baseScope, a.effectiveScope) ?: if (hoisted && hoistedNodeVar != null) {
             hoistedNodeVar
         } else {
             nodeVarFor(physicalScope)

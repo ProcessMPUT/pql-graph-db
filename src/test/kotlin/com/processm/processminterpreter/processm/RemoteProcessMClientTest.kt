@@ -135,6 +135,22 @@ class RemoteProcessMClientTest {
     }
 
     @Test
+    fun `query response preserves noncontiguous repeated XES type fields`() {
+        val transport = transportFor(
+            mapOf(
+                "/api/users/session" to { stubResponse(200, """{"authorizationToken":"t"}""") },
+                "/api/data-stores/ds-1/logs" to {
+                    stubResponse(200, """[{"log":{"float":{"@key":"avg(^^event:cost:total)","@value":"3.5"},"string":{"@key":"concept:name","@value":"L"},"float":{"@key":"sum(^^event:cost:total)","@value":"21.0"}}}]""")
+                },
+            ),
+        )
+        val result = client(transport).executeQuery("select avg(^^e:total), sum(^^e:total)", "ds-1", true, true)
+        assertTrue(result.success, result.message)
+        val floats = (result.results.single()["log"] as Map<*, *>)["float"] as List<*>
+        assertEquals(listOf("3.5", "21.0"), floats.map { (it as Map<*, *>)["@value"] })
+    }
+
+    @Test
     fun `uploadLog creates remote data store and posts multipart file through injected rest client`() {
         val transport = transportFor(
             mapOf(

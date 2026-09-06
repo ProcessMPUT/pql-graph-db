@@ -9,6 +9,8 @@ import com.processm.processminterpreter.pql.cypher.SYNTHETIC_LOG_METADATA_ALIAS
 import com.processm.processminterpreter.pql.cypher.SYNTHETIC_LOG_NODE_ALIAS
 import com.processm.processminterpreter.pql.cypher.SYNTHETIC_NULL_EVENT_COUNT_ALIAS
 import com.processm.processminterpreter.pql.cypher.SYNTHETIC_TRACE_COUNT_ALIAS
+import com.processm.processminterpreter.pql.cypher.SYNTHETIC_TRACE_PRESENT_ALIAS
+import com.processm.processminterpreter.pql.cypher.SYNTHETIC_EVENT_PRESENT_ALIAS
 
 internal class ProjectedRowHierarchyBuilder {
     fun reconstruct(
@@ -39,6 +41,7 @@ internal class ProjectedRowHierarchyBuilder {
 
         fun absorb(row: Map<String, Any?>) {
             val logBuilder = absorbLog(row)
+            if (row[SYNTHETIC_TRACE_PRESENT_ALIAS] == false) return
             val traceBuilder = absorbTrace(row, logBuilder)
             traceBuilder.absorbTraceCount(row)
             traceBuilder.absorbNullEventCount(row)
@@ -87,6 +90,7 @@ internal class ProjectedRowHierarchyBuilder {
         }
 
         private fun TraceBuilder.absorbEvent(row: Map<String, Any?>) {
+            if (row[SYNTHETIC_EVENT_PRESENT_ALIAS] == false) return
             if (!aliases.shouldMaterializeEvent(row, hasUserEventProjection)) return
             val eventBuilder = EventBuilder()
             if (Scope.EVENT in selectAllScopes) eventBuilder.absorbNode(row.nodeProperties("event"))

@@ -1,9 +1,4 @@
 {
-  "smoke": [
-    { "type": "SYNTHETIC", "name": "size-1k", "series": "size-scaling", "traces": 100, "eventsPerTrace": 10, "attributesPerEvent": 5 },
-    { "type": "SYNTHETIC", "name": "variants-100", "series": "variant-scaling", "traces": 2000, "eventsPerTrace": 50, "attributesPerEvent": 5, "activityCount": 48, "variantCount": 100 },
-    { "type": "FIXTURE", "name": "fixture-sample-process", "series": "smoke-fixture", "resourcePath": "src/main/resources/logs/sample_process.xes" }
-  ],
   "full": [
     { "type": "SYNTHETIC", "name": "size-1k", "series": "size-scaling", "traces": 100, "eventsPerTrace": 10, "attributesPerEvent": 5 },
     { "type": "SYNTHETIC", "name": "size-5k", "series": "size-scaling", "traces": 500, "eventsPerTrace": 10, "attributesPerEvent": 5 },
@@ -16,6 +11,14 @@
     { "type": "SYNTHETIC", "name": "variants-1", "series": "variant-scaling", "traces": 2000, "eventsPerTrace": 50, "attributesPerEvent": 5, "activityCount": 48, "variantCount": 1 },
     { "type": "SYNTHETIC", "name": "variants-100", "series": "variant-scaling", "traces": 2000, "eventsPerTrace": 50, "attributesPerEvent": 5, "activityCount": 48, "variantCount": 100 },
     { "type": "SYNTHETIC", "name": "variants-2000", "series": "variant-scaling", "traces": 2000, "eventsPerTrace": 50, "attributesPerEvent": 5, "activityCount": 48, "variantCount": 2000 },
+
+    { "type": "SYNTHETIC", "name": "selectivity-100k-1pct", "series": "selectivity-scaling", "traces": 10000, "eventsPerTrace": 10, "attributesPerEvent": 5, "activityCount": 10, "matchingTracePercent": 1 },
+    { "type": "SYNTHETIC", "name": "selectivity-100k-10pct", "series": "selectivity-scaling", "traces": 10000, "eventsPerTrace": 10, "attributesPerEvent": 5, "activityCount": 10, "matchingTracePercent": 10 },
+    { "type": "SYNTHETIC", "name": "selectivity-100k-100pct", "series": "selectivity-scaling", "traces": 10000, "eventsPerTrace": 10, "attributesPerEvent": 5, "activityCount": 10, "matchingTracePercent": 100 },
+
+    { "type": "SYNTHETIC", "name": "trace-length-10", "series": "trace-length-scaling", "traces": 10000, "eventsPerTrace": 10, "attributesPerEvent": 5, "activityCount": 10, "costCycleLength": 10 },
+    { "type": "SYNTHETIC", "name": "trace-length-100", "series": "trace-length-scaling", "traces": 1000, "eventsPerTrace": 100, "attributesPerEvent": 5, "activityCount": 10, "costCycleLength": 10 },
+    { "type": "SYNTHETIC", "name": "trace-length-1000", "series": "trace-length-scaling", "traces": 100, "eventsPerTrace": 1000, "attributesPerEvent": 5, "activityCount": 10, "costCycleLength": 10 },
 
     { "type": "REAL", "name": "real-sepsis", "series": "real-validation", "resourcePath": "src/main/resources/logs/Sepsis.xes.gz", "sourceDoi": "10.4121/uuid:915d2bfb-7e84-49ad-a286-dc35f063a460" },
     { "type": "REAL", "name": "real-bpic15-1", "series": "real-validation", "resourcePath": "src/main/resources/logs/BPIC15_1.xes.gz", "sourceDoi": "10.4121/uuid:a0addfda-2044-4541-a450-fdcc9fe16d17", "collection": "bpi-challenge", "collectionOrder": 2015 },

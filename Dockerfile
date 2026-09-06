@@ -1,5 +1,5 @@
 # Runs the interpreter in a container so the benchmark measures both systems the
-# same way (METODOLOGIA §2.4): with the application on the host, every request
+# same way (see src/benchmark/METHODOLOGY.md): with the application on the host, every request
 # from the benchmark client reached LOCAL without crossing the Docker VM boundary
 # while REFERENCE always paid that crossing, and conversely LOCAL paid it on every
 # Cypher round trip. Measured at ~1 ms per crossing — enough to matter for queries

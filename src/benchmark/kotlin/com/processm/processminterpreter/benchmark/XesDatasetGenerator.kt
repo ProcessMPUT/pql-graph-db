@@ -41,6 +41,17 @@ class XesDatasetGenerator {
         require(traces > 0) { "Synthetic dataset ${spec.name} must contain at least one trace" }
         require(eventsPerTrace > 0) { "Synthetic dataset ${spec.name} must contain events" }
         require(activityCount > 0) { "Synthetic dataset ${spec.name} must contain activities" }
+        require(attributesPerEvent >= 0)
+        spec.matchingTracePercent?.let { percent ->
+            require(percent in 1..100 && traces % 100 == 0 && attributesPerEvent >= 1) {
+                "Selectivity requires 1..100 percent, a multiple of 100 traces and attr_1"
+            }
+        }
+        spec.costCycleLength?.let { cycle ->
+            require(cycle > 0 && eventsPerTrace % cycle == 0) {
+                "Cost cycle must divide the trace length to preserve the value distribution"
+            }
+        }
         require(variantCount in 1..traces) {
             "Synthetic dataset ${spec.name} requests $variantCount variants for $traces traces"
         }
@@ -73,10 +84,15 @@ class XesDatasetGenerator {
                     writer.appendLine("    <event>")
                     writer.appendLine("""      <string key="concept:name" value="activity-${activityIndex + 1}"/>""")
                     writer.appendLine("""      <date key="time:timestamp" value="$timestamp"/>""")
-                    writer.appendLine("""      <float key="cost:total" value="${(eventIndex + 1) * 1.25}"/>""")
+                    val costPosition = eventIndex % (spec.costCycleLength ?: eventsPerTrace)
+                    writer.appendLine("""      <float key="cost:total" value="${(costPosition + 1) * 1.25}"/>""")
                     repeat(attributesPerEvent) { attrIndex ->
+                        val value = if (attrIndex == 0 && spec.matchingTracePercent != null) {
+                            val percent = spec.matchingTracePercent
+                            if ((traceIndex + 1) * percent / 100 > traceIndex * percent / 100) "hit" else "out"
+                        } else "v-${attrIndex + 1}"
                         writer.appendLine(
-                            """      <string key="attr_${attrIndex + 1}" value="v-${attrIndex + 1}"/>""",
+                            """      <string key="attr_${attrIndex + 1}" value="$value"/>""",
                         )
                     }
                     writer.appendLine("    </event>")

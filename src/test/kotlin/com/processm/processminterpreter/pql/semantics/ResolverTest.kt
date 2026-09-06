@@ -234,6 +234,18 @@ class ResolverTest {
     }
 
     @Test
+    fun `bracketed logId resolves as a source custom attribute`() {
+        val r = resolveAttr(ref("logId", scopeHint = "l", wasBracketed = true), from = Scope.EVENT)
+
+        assertEquals(AttributeKind.CUSTOM, r.kind)
+        assertEquals(Scope.LOG, r.baseScope)
+        assertEquals(Scope.LOG, r.effectiveScope)
+        assertEquals("logId", r.name)
+        assertNull(r.xesStandardName)
+        assertEquals(Type.UNKNOWN, r.type)
+    }
+
+    @Test
     fun `classifier reference preserves CLASSIFIER kind`() {
         val r = resolveAttr(
             ref("c:Activity"),

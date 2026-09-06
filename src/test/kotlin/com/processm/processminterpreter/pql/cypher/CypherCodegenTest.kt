@@ -9,6 +9,7 @@ import com.processm.processminterpreter.pql.XesAttributeReadMode
 import com.processm.processminterpreter.xes.datastore.DataStore
 import com.processm.processminterpreter.xes.model.Log
 import com.processm.processminterpreter.neo4j.property.NestedAttributePathCodec
+import com.processm.processminterpreter.neo4j.xes.schema.Neo4jXesCustomAttributeCodec
 import com.processm.processminterpreter.pql.catalog.BinaryOperator
 import com.processm.processminterpreter.pql.catalog.OrderDirection
 import com.processm.processminterpreter.pql.catalog.AttributeKind
@@ -36,6 +37,33 @@ import java.time.ZonedDateTime
 class CypherCodegenTest {
     private val loc = SourceLocation(1, 0)
     private val codegen = CypherCodegen(PhysicalAttributeMapper())
+
+    @Test
+    fun `bracketed log id reads the custom property in projection filtering and ordering`() {
+        // ProcessM Attribute.kt treats bracketed names as custom attributes.
+        // LOCAL's unbracketed l:logId extension continues to address its storage id.
+        val compiler = PqlCompiler(AntlrPqlParser(), EmptyLogRepository, EmptyDataStoreRepository)
+        for ((reference, kind) in listOf("[l:logId]" to AttributeKind.CUSTOM, "l:logId" to AttributeKind.SYSTEM)) {
+            val plan = compiler.compile(
+                "select $reference where $reference = 'selected' order by $reference",
+                logId = "physical-log-id",
+            ) as LogicalPlan.Select
+            val column = plan.projection.columns.single()
+            assertEquals(kind, (column.expression as PqlExpression.Attribute).kind)
+            assertEquals(kind, ((plan.filter as PqlExpression.Binary).left as PqlExpression.Attribute).kind)
+            assertEquals(kind, (plan.orderBy.single().expression as PqlExpression.Attribute).kind)
+
+            val property = if (kind == AttributeKind.CUSTOM) {
+                Neo4jXesCustomAttributeCodec.physicalName(Scope.LOG, "logId")
+            } else {
+                "logId"
+            }
+            val query = codegen.generate(plan)
+            assertTrue(query.cypher.contains("log.$property AS ${column.alias}"), query.cypher)
+            assertEquals("physical-log-id", query.parameters["logId"])
+            assertTrue("selected" in query.parameters.values)
+        }
+    }
 
     @Test
     fun `ProcessM JSON log hydration excludes nested and internal properties before transfer`() {
@@ -593,7 +621,7 @@ class CypherCodegenTest {
      * them — but optionally.
      */
     @Test
-    fun `trace-scope aggregation expands events optionally so empty traces survive`() {
+    fun `trace-scope aggregation reads trace members without requiring child events`() {
         val traceName = stdAttr(Scope.TRACE, "concept:name")
         val q = codegen.generate(
             selectPlan(
@@ -609,7 +637,8 @@ class CypherCodegenTest {
             ).copy(materializedScopes = setOf(Scope.LOG, Scope.TRACE, Scope.EVENT)),
         )
 
-        assertTrue(q.cypher.contains("OPTIONAL MATCH (trace)-[:HAS_EVENT]->(event:Event)"), q.cypher)
+        assertTrue(q.cypher.contains("WITH _member AS _component, _member.caseId AS _value"), q.cypher)
+        assertTrue(q.cypher.contains("RETURN count(_value)"), q.cypher)
         assertFalse(q.cypher.contains("(trace:Trace)-[:HAS_EVENT]->"), q.cypher)
     }
 
@@ -943,13 +972,12 @@ class CypherCodegenTest {
             ),
         )
 
-        assertTrue(q.cypher.contains("log.logId AS _log_id_"), q.cypher)
+        assertTrue(q.cypher.contains("_log_id_"), q.cypher)
         assertTrue(q.cypher.contains("_log_meta_"), q.cypher)
-        assertTrue(!q.cypher.contains("trace.traceId AS _trace_id_"), q.cypher)
-        assertTrue(q.cypher.contains("MATCH (log)-[:CONTAINS]->(_placeholder_trace:Trace)"), q.cypher)
-        assertTrue(q.cypher.contains("OPTIONAL MATCH (_placeholder_trace)-[:HAS_EVENT]->(_placeholder_event:Event)"), q.cypher)
-        assertTrue(q.cypher.contains("max(_trace_event_count_) AS _null_event_count_"), q.cypher)
-        assertTrue(q.cypher.contains("min(log.name) AS min_0"), q.cypher)
+        assertTrue(q.cypher.contains("collect(trace) AS _trace_members"), q.cypher)
+        assertTrue(q.cypher.contains("coalesce(max(_event_count), 0) AS _null_event_count_"), q.cypher)
+        assertTrue(q.cypher.contains("OPTIONAL MATCH (_member)<-[:CONTAINS]-(_argument_log_log:Log)"), q.cypher)
+        assertTrue(q.cypher.contains("min(_value) AS _scope_agg_0"), q.cypher)
         assertEquals("trace:min(log:concept:name)", q.columnAliases["min_0"]?.pqlExpression)
         assertEquals(Scope.TRACE, q.columnAliases["min_0"]?.scope)
         assertEquals(Scope.TRACE, q.columnAliases["_null_event_count_"]?.scope)
@@ -991,16 +1019,11 @@ class CypherCodegenTest {
             ),
         )
 
-        assertTrue(q.cypher.contains("MATCH (log)-[:CONTAINS]->(_placeholder_trace:Trace)"), q.cypher)
-        // One placeholder row per trace: null events travel as a count, never as
-        // one row per event (an event-less trace still shows a single null event).
-        assertTrue(
-            q.cypher.contains("COUNT { (_placeholder_trace)-[:HAS_EVENT]->(:Event) }"),
-            q.cypher,
-        )
-        assertTrue(q.cypher.contains("AS _null_event_count_"), q.cypher)
-        assertTrue(!q.cypher.contains("OPTIONAL MATCH (_placeholder_trace)"), q.cypher)
-        assertTrue(!q.cypher.contains("{} AS event"), q.cypher)
+        assertTrue(q.cypher.contains("collect(log) AS _log_members"), q.cypher)
+        assertTrue(q.cypher.contains("collect(trace) AS _trace_members"), q.cypher)
+        assertTrue(q.cypher.contains("RETURN count(event) AS _event_count"), q.cypher)
+        assertTrue(q.cypher.contains("coalesce(max(_event_count), 0) AS _null_event_count_"), q.cypher)
+        assertFalse(q.cypher.contains("{} AS event"), q.cypher)
         assertTrue(q.cypher.contains("_log_meta_"), q.cypher)
         assertTrue(q.columnAliases["_null_event_count_"]?.synthetic == true, q.columnAliases.toString())
         assertEquals(Scope.TRACE, q.columnAliases["_null_event_count_"]?.scope)
@@ -1019,23 +1042,12 @@ class CypherCodegenTest {
             ).copy(defaultLimits = HierarchicalLimits(trace = 5)),
         )
 
-        assertTrue(
-            q.cypher.contains(
-                "CALL (log) {" +
-                    " MATCH (_placeholder_trace:Trace {parentLogId: log.logId})" +
-                    " WHERE _placeholder_trace.importOrder IS NOT NULL" +
-                    " WITH _placeholder_trace" +
-                    " ORDER BY _placeholder_trace.parentLogId, _placeholder_trace.importOrder" +
-                    " LIMIT \$placeholderTracePrefixLimit" +
-                    " RETURN _placeholder_trace }",
-            ),
-            q.cypher,
-        )
-        // Kotlin applies OFFSET once after reconstruction, so Cypher returns the
-        // prefix offset + min(explicit limit, default limit) and never uses SKIP.
-        assertEquals(8L, q.parameters["placeholderTracePrefixLimit"])
-        assertTrue(!q.cypher.contains(" SKIP "), q.cypher)
-        assertTrue(!q.cypher.contains("MATCH (log)-[:CONTAINS]->(_placeholder_trace:Trace)"), q.cypher)
+        val aggregate = q.cypher.indexOf("RETURN avg(_value)")
+        val prefix = q.cypher.indexOf("LIMIT $" + "aggregateTracePrefix")
+        assertTrue(aggregate >= 0 && prefix > aggregate, q.cypher)
+        assertEquals(8L, q.parameters["aggregateTracePrefix"])
+        assertFalse(q.cypher.contains(" SKIP "), q.cypher)
+
     }
 
     @Test
@@ -1050,8 +1062,10 @@ class CypherCodegenTest {
             ),
         )
 
-        assertTrue(q.cypher.contains("MATCH (log)-[:CONTAINS]->(_placeholder_trace:Trace)"), q.cypher)
-        assertTrue("placeholderTracePrefixLimit" !in q.parameters)
+        assertTrue(q.cypher.contains("OPTIONAL CALL (_log_members)"), q.cypher)
+        assertEquals(1L, q.parameters["aggregateTracePrefix"])
+        assertFalse(q.cypher.contains(" LIMIT 0"), q.cypher)
+
     }
 
     @Test
@@ -1170,13 +1184,15 @@ class CypherCodegenTest {
         )
 
         val c = q.cypher
-        assertTrue(c.contains("collect(event.activity) AS _trace_variant_"), c)
-        assertTrue(c.contains("UNWIND range(0, size(_selected_values_0) - 1) AS _event_idx_"), c)
-        assertTrue(c.contains("min(trace.importOrder) AS _trace_variant_key_"), c)
-        assertTrue(c.contains("_trace_variant_key_ AS _trace_variant_key_"), c)
-        assertTrue(c.contains("_log_meta_"), c)
-        assertEquals(Scope.TRACE, q.columnAliases["_trace_variant_key_"]!!.scope)
-        assertTrue(q.columnAliases["_trace_variant_key_"]!!.synthetic)
+
+        assertTrue(c.contains("_group_event_event.activity AS _group_value"), c)
+        assertTrue(c.contains("collect({value: _group_value})"), c)
+        assertTrue(c.contains("collect(trace) AS _trace_members"), c)
+        assertTrue(c.contains("collect(event) AS _event_members"), c)
+        assertTrue(c.contains("_event_position AS _event_group_order_"), c)
+        assertEquals(Scope.TRACE, q.columnAliases["_trace_id_"]!!.scope)
+        assertTrue(q.columnAliases["_trace_id_"]!!.synthetic)
+
     }
 
     @Test
@@ -1217,9 +1233,11 @@ class CypherCodegenTest {
         val c = codegen.generate(plan).cypher
 
         assertTrue(c.contains("HAS_EVENT"), c)
-        assertTrue(c.contains("collect(event.cost) AS _trace_variant_"), c)
+        assertTrue(c.contains("_group_event_event.cost AS _group_value"), c)
+        assertTrue(c.contains("collect({value: _group_value})"), c)
         assertFalse(c.contains("processmActivityVariantId"), c)
         assertFalse(c.contains("processmActivityNonNullCount"), c)
+
     }
 
     @Test
@@ -1234,8 +1252,10 @@ class CypherCodegenTest {
         val c = codegen.generate(plan).cypher
 
         assertTrue(c.contains("HAS_EVENT"), c)
-        assertTrue(c.contains("collect(event.activity) AS _trace_variant_"), c)
+        assertTrue(c.contains("_group_event_event.activity AS _group_value"), c)
+        assertTrue(c.contains("collect(event) AS _event_members"), c)
         assertFalse(c.contains("processmActivityVariantId"), c)
+
     }
 
     @Test
@@ -1326,14 +1346,15 @@ class CypherCodegenTest {
         )
 
         val c = q.cypher
+
         assertTrue(c.contains("trace.caseId AS _trace_group_0"), c)
-        assertTrue(c.contains("collect(event.activity) AS _trace_variant_"), c)
-        assertTrue(c.contains("_trace_group_0 AS _trace_group_0"), c)
+        assertTrue(c.contains("_group_sequence_1 AS _trace_group_1"), c)
+        assertTrue(c.contains("collect(trace) AS _trace_members"), c)
         assertTrue(c.contains("_log_meta_"), c)
-        assertTrue(c.contains("UNWIND range(0, size(_selected_values_0) - 1) AS _event_idx_"), c)
-        assertTrue(!c.contains("event.activity AS _gb_1"), c)
-        assertEquals(Scope.TRACE, q.columnAliases["_trace_group_0"]!!.scope)
-        assertTrue(q.columnAliases["_trace_group_0"]!!.synthetic)
+        assertTrue(c.contains("collect(event) AS _event_members"), c)
+        assertEquals(Scope.TRACE, q.columnAliases["_trace_id_"]!!.scope)
+        assertTrue(q.columnAliases["_trace_id_"]!!.synthetic)
+
     }
 
     @Test
@@ -1358,10 +1379,12 @@ class CypherCodegenTest {
         )
 
         val c = q.cypher
+
         assertTrue(
-            c.contains("ORDER BY _order_0 DESC, _trace_group_0 ASC, _trace_group_order_, _event_idx_"),
-            "expected trace scoped tiebreaker in final variant ordering: $c",
+            c.contains("_scope_order_1 DESC, trace.caseId ASC, _trace_order_"),
+            "expected independent aggregate ordering followed by trace attribute tiebreaker: $c",
         )
+
     }
 
     @Test
@@ -1428,12 +1451,14 @@ class CypherCodegenTest {
         )
 
         val c = q.cypher
-        assertTrue(c.contains("collect(event.activity) AS _trace_variant_"), c)
-        assertTrue(c.contains("min(event.timestamp) AS _variant_agg_0"), c)
-        assertTrue(c.contains("min(_variant_agg_0) AS _variant_agg_0"), c)
-        assertTrue(c.contains("_variant_agg_0 AS min_timestamp"), c)
-        assertTrue(c.contains("ORDER BY _variant_agg_0 ASC"), c)
-        assertTrue(!c.contains("trace.traceId AS _trace_id_"), c)
+
+        assertTrue(c.contains("_group_event_event.activity AS _group_value"), c)
+        assertTrue(c.contains("collect(event) AS _event_members"), c)
+        assertTrue(c.contains("min(_value) AS _scope_agg_"), c)
+        assertTrue(c.contains("min(_value) AS _scope_order_"), c)
+        assertTrue(c.contains("AS min_timestamp"), c)
+        assertTrue(c.contains("_scope_order_1 ASC"), c)
+
     }
 
     @Test
@@ -1506,15 +1531,15 @@ class CypherCodegenTest {
         )
 
         val c = q.cypher
-        assertTrue(c.contains("trace.caseId AS _gb_0"), c)
-        assertTrue(c.contains("_null_event_count_"), c)
-        assertTrue(c.contains("toFloat(duration.inSeconds(_cagg_1, _cagg_0).seconds) / 86400.0 AS duration"), c)
-        assertTrue(c.contains("_gb_0 AS _trace_group_0"), c)
-        assertTrue(!c.contains("trace.traceId AS _trace_id_"), c)
-        assertEquals(Scope.TRACE, q.columnAliases["_trace_group_0"]!!.scope)
-        assertTrue(q.columnAliases["_trace_group_0"]!!.synthetic)
+        assertTrue(c.contains("trace.caseId AS _trace_group_0"), c)
+        assertTrue(c.contains("collect(trace) AS _trace_members"), c)
+        assertTrue(c.contains("toFloat(duration.inSeconds(_scope_agg_1, _scope_agg_0).seconds) / 86400.0 AS duration"), c)
+        assertTrue(c.contains("[member IN coalesce(_trace_members, []) | member.traceId] AS _trace_id_"), c)
+        assertEquals(Scope.TRACE, q.columnAliases["_trace_id_"]!!.scope)
+        assertTrue(q.columnAliases["_trace_id_"]!!.synthetic)
         assertEquals(Scope.TRACE, q.columnAliases["_null_event_count_"]!!.scope)
         assertTrue(q.columnAliases["_null_event_count_"]!!.synthetic)
+
     }
 
     @Test
@@ -1538,8 +1563,9 @@ class CypherCodegenTest {
         )
 
         val c = q.cypher
-        assertTrue(c.contains("min(trace.importOrder) AS _trace_group_order_"), c)
-        assertTrue(c.contains("ORDER BY _trace_group_order_, _gb_0"), c)
+        assertTrue(c.contains("ORDER BY trace.importOrder, trace.traceId"), c)
+        assertTrue(c.contains("min(_position) AS _trace_position"), c)
+        assertTrue(c.contains("ORDER BY _log_order_, _log_id_, _trace_order_"), c)
     }
 
     @Test
@@ -1553,16 +1579,16 @@ class CypherCodegenTest {
         val q = codegen.generate(plan.copy(materializedScopes = setOf(Scope.LOG, Scope.TRACE, Scope.EVENT)))
         val c = q.cypher
 
-        assertTrue(c.contains("log.logId AS _log_id_"), c)
+        assertTrue(c.contains("_log_id_"), c)
         assertTrue(c.contains("_log_meta_"), c)
-        assertTrue(c.contains("trace.caseId AS _gb_0"), c)
-        assertTrue(c.contains("max(event.timestamp) AS _cagg_0"), c)
-        assertTrue(c.contains("min(event.timestamp) AS _cagg_1"), c)
-        assertTrue(c.contains("_gb_0 AS _trace_group_0"), c)
-        assertTrue(c.contains("toFloat(duration.inSeconds(_cagg_1, _cagg_0).seconds) / 86400.0 AS col_0"), c)
-        assertTrue(c.contains("ORDER BY toFloat(duration.inSeconds(_cagg_1, _cagg_0).seconds) / 86400.0 DESC, _gb_0"), c)
-        assertTrue(!c.contains("trace.traceId AS _trace_id_"), c)
-        assertTrue(!c.contains("RETURN log, trace, event"), c)
+        assertTrue(c.contains("trace.caseId AS _trace_group_0"), c)
+        assertTrue(c.contains("max(_value) AS _scope_agg_0"), c)
+        assertTrue(c.contains("min(_value) AS _scope_agg_1"), c)
+        assertTrue(c.contains("toFloat(duration.inSeconds(_scope_agg_1, _scope_agg_0).seconds) / 86400.0 AS col_0"), c)
+        assertTrue(c.contains("duration.inSeconds(_scope_order_3, _scope_order_2)"), c)
+        assertFalse(c.contains("RETURN log, trace, event"), c)
+        assertFalse(c.contains("aggregateTracePrefix"), c)
+
     }
 
     @Test
@@ -1577,13 +1603,14 @@ class CypherCodegenTest {
         val q = codegen.generate(plan.copy(materializedScopes = setOf(Scope.LOG, Scope.TRACE, Scope.EVENT)))
         val c = q.cypher
 
-        assertTrue(c.contains("CALL { WITH trace MATCH (trace)-[:HAS_EVENT]->(_trace_agg_event:Event)"), c)
-        assertTrue(c.contains("max(_trace_agg_event.timestamp) AS _cagg_0"), c)
-        assertTrue(c.contains("min(_trace_agg_event.timestamp) AS _cagg_1"), c)
-        assertTrue(c.contains("WITH log, trace, event, _cagg_0, _cagg_1, trace.caseId AS _gb_0, event.activity AS _gb_1"), c)
-        assertTrue(c.contains("RETURN log.logId AS _log_id_, trace.traceId AS _trace_id_, trace.importOrder AS _trace_order_, min(event.importOrder) AS _event_group_order_"), c)
-        assertTrue(c.contains("toFloat(duration.inSeconds(_cagg_1, _cagg_0).seconds) / 86400.0 AS col_2"), c)
-        assertTrue(c.contains("ORDER BY _log_id_, _trace_order_, _event_group_order_"), c)
+        val traceAggregate = c.indexOf("max(_value) AS _scope_agg_0")
+        val eventGrouping = c.indexOf("event.activity AS _event_group_0")
+        assertTrue(traceAggregate >= 0 && eventGrouping > traceAggregate, c)
+        assertTrue(c.contains("UNWIND coalesce(_trace_members, []) AS _member"), c)
+        assertTrue(c.contains("UNWIND coalesce(_event_members, []) AS _member"), c)
+        assertTrue(c.contains("toFloat(duration.inSeconds(_scope_agg_1, _scope_agg_0).seconds) / 86400.0 AS col_2"), c)
+        assertTrue(c.contains("ORDER BY _log_order_, _log_id_, _trace_order_, _event_group_order_"), c)
+
     }
 
     @Test
@@ -2058,6 +2085,54 @@ class CypherCodegenTest {
         assertTrue(q.cypher.contains("\$param0 AS now_2"), q.cypher)
         assertEquals(1, q.parameters.size)
         assertTrue(q.parameters["param0"] is ZonedDateTime)
+    }
+
+    @Test
+    fun `hoisted log aggregate chooses logs before reading all descendant values`() {
+        val compiler = PqlCompiler(AntlrPqlParser(), EmptyLogRepository, EmptyDataStoreRepository)
+        val plan = compiler.compile(
+            "select count(^t:name), sum(^^e:total), avg(^^e:total) where e:name = 'hit'",
+            logId = null,
+        )
+        val generated = codegen.generate(plan)
+        val cypher = generated.cypher
+        assertTrue(cypher.contains("collect(log) AS _log_members"), cypher)
+        assertTrue(cypher.contains("WHERE EXISTS { WITH log"), cypher)
+        assertTrue(cypher.contains("UNWIND coalesce(_log_members, []) AS _member"), cypher)
+        assertTrue(cypher.contains("WITH _argument_event_log AS _component"), cypher)
+        assertTrue(cypher.contains("avg(_value)"), cypher)
+        assertFalse(cypher.contains("sum(DISTINCT"), cypher)
+    }
+
+    @Test
+    fun `scope membership keeps normal and hoisted event paths separate`() {
+        val compiler = PqlCompiler(AntlrPqlParser(), EmptyLogRepository, EmptyDataStoreRepository)
+        val plan = compiler.compile(
+            "select count(^e:name) where e:name = 'A' and ^e:name = 'B'",
+            logId = "log-1",
+        )
+        val cypher = codegen.generate(plan).cypher
+        assertTrue(cypher.contains("_filter_event_event"), cypher)
+        assertTrue(cypher.contains("_filter_event_trace"), cypher)
+        assertTrue(cypher.contains("OPTIONAL MATCH"), cypher)
+        assertTrue(cypher.contains("WITH * WHERE"), cypher)
+    }
+
+    @Test
+    fun `trace aggregate keeps complete membership before limiting placeholder rows`() {
+        val compiler = PqlCompiler(AntlrPqlParser(), EmptyLogRepository, EmptyDataStoreRepository)
+        val plan = compiler.compile(
+            "select count(t:name), sum(^e:total) where ^e:name = 'A' limit t:1, e:2",
+            logId = "log-1",
+        )
+        val generated = codegen.generate(plan)
+        val cypher = generated.cypher
+        val memberCollection = cypher.indexOf("collect(trace) AS _trace_members")
+        val traceLimit = cypher.indexOf("LIMIT ${'$'}aggregateTracePrefix")
+        assertTrue(memberCollection >= 0 && traceLimit > memberCollection, cypher)
+        assertTrue(cypher.contains("coalesce(max(_event_count), 0) AS _null_event_count_"), cypher)
+        assertEquals(1L, generated.parameters["aggregateTracePrefix"])
+        assertEquals(2L, generated.parameters["aggregateEventPrefix"])
     }
 
     private object EmptyLogRepository : LogRepository {

@@ -53,7 +53,7 @@ internal class SelectPlanFacts(private val plan: LogicalPlan.Select) {
         is PqlExpression.Unary -> scopesOf(e.operand)
         is PqlExpression.Call -> e.scope?.let { setOf(it) } ?: e.arguments.flatMap { scopesOf(it) }.toSet()
         is PqlExpression.InList -> e.values.flatMap { scopesOf(it) }.toSet()
-        is PqlExpression.Aggregation -> scopesOf(e.argument)
+        is PqlExpression.Aggregation -> e.scope?.let { setOf(it) } ?: scopesOf(e.argument)
         is PqlExpression.Literal -> e.scope?.let { setOf(it) } ?: emptySet()
         is PqlExpression.AttributeRef ->
             error("Internal error: unresolved attribute reference reached the Cypher planner facts")

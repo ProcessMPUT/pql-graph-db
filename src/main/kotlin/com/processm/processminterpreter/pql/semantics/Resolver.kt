@@ -167,7 +167,7 @@ class Resolver {
      *  - apply hoisting via [HoistingResolver]
      *  - recognize classifier-prefixed names (`c:*`, `classifier:*`) as CLASSIFIER
      *  - look up the name in the standard-attribute catalog (expanding shorthand like `name` -> `concept:name`)
-     *  - look up PQL-visible system attributes such as `l:logId`
+     *  - look up unbracketed PQL-visible system attributes such as `l:logId`
      *  - reject unbracketed non-standard names (ProcessM-compatible NoSuchAttribute)
      *  - accept bracketed non-standard names as CUSTOM
      */
@@ -272,7 +272,7 @@ class Resolver {
             }
 
             val system = systemAttributes.lookup(baseScope, raw.name)
-            if (system != null) {
+            if (system != null && !raw.wasBracketed) {
                 return PqlExpression.Attribute(
                     name = system.name,
                     baseScope = baseScope,

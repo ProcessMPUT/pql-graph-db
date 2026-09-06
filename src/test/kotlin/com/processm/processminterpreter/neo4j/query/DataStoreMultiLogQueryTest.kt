@@ -206,7 +206,7 @@ class DataStoreMultiLogQueryTest : BaseInterpreterTest() {
     }
 
     @Test
-    fun `aggregate placeholder trace window preserves full counts for every log`() {
+    fun `implicit log aggregate combines logs before windowing placeholder traces`() {
         val result = executeDataStoreQuery(
             "select count(l:name), count(^t:name), count(^^e:name)" +
                 " limit l:10, t:1 offset t:1",
@@ -214,16 +214,16 @@ class DataStoreMultiLogQueryTest : BaseInterpreterTest() {
         )
 
         assertTrue(result.success, "Query should succeed: ${result.error}")
-        assertEquals(2, result.logs.size)
-
-        // l:name is aggregated rather than projected, so identify the otherwise
-        // anonymous logs by their full event counts.
-        val alpha = result.logs.single { it.aggregateCount("count(^^event:concept:name)") == 3L }
-        val beta = result.logs.single { it.aggregateCount("count(^^event:concept:name)") == 2L }
-        assertEquals(1, alpha.traces.size, "Alpha should retain its second placeholder trace")
-        assertEquals(0, beta.traces.size, "Beta has no second trace after applying the offset")
-        assertAggregateCounts(alpha, traces = 2L, events = 3L)
-        assertAggregateCounts(beta, traces = 1L, events = 2L)
+        // ProcessM groupIdsQuery(Log) forms one group for implicit log aggregation.
+        // Descendant traces are grouped by their position inside each source log;
+        // after skipping position zero only Alpha's second trace remains.
+        val log = result.logs.single()
+        assertEquals(2L, log.aggregateCount("count(log:concept:name)"))
+        assertEquals(3L, log.aggregateCount("count(^trace:concept:name)"))
+        assertEquals(5L, log.aggregateCount("count(^^event:concept:name)"))
+        assertEquals(1, log.traces.size)
+        assertEquals(1, log.traces.single().nullEventCount)
+        assertTrue(log.traces.single().events.isEmpty())
     }
 
     private fun writeAndAttach(
@@ -266,12 +266,6 @@ class DataStoreMultiLogQueryTest : BaseInterpreterTest() {
         log.traces
             .flatMap { trace -> trace.events }
             .mapTo(mutableSetOf<String>()) { event -> assertNotNull(event.conceptName) }
-
-    private fun assertAggregateCounts(log: XesLog, traces: Long, events: Long) {
-        assertEquals(1L, log.aggregateCount("count(log:concept:name)"))
-        assertEquals(traces, log.aggregateCount("count(^trace:concept:name)"))
-        assertEquals(events, log.aggregateCount("count(^^event:concept:name)"))
-    }
 
     private fun XesLog.aggregateCount(name: String): Long =
         (customAttributes[name] as Number).toLong()

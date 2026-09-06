@@ -3,9 +3,8 @@
 
 Every point is isolated: remove volumes, start both applications without fixture
 seeding, record baselines, import the same XES into both systems, wait until the log
-is visible, checkpoint, and record durable bytes.  The regression intercept absorbs
-per-stack initialization; no dataset can inherit a file-extension jump from the
-dataset imported before it.
+is visible, checkpoint, and record durable bytes.  Each point subtracts its own baseline; no dataset inherits a file-extension
+jump from a previously imported dataset.
 
 The command is destructive and delegates stack creation to
 prepare-benchmark-stack.py. Pass --confirm-destroy-volumes explicitly.
@@ -38,13 +37,6 @@ HEALTH_TIMEOUT_SECONDS = 180.0
 HEALTH_POLL_SECONDS = 3.0
 UPLOAD_TIMEOUT_SECONDS = 900.0
 LOG_POLL_SECONDS = 1.0
-SCALING_SERIES = {
-    "size-scaling",
-    "trace-scaling",
-    "event-scaling",
-    "attribute-scaling",
-    "shape-scaling",
-}
 FRESH_STACK_MARKER = Path("tmp/benchmark-stack-ready.json")
 
 NEO4J_SIZE_COMMAND = (
@@ -66,14 +58,14 @@ IMAGE_COLUMNS = {
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--datasets-dir", type=Path, default=None)
-    parser.add_argument("--out-csv", type=Path, default=Path("tmp/storage-scaling.csv"))
+    parser.add_argument("--datasets-dir", type=Path, required=True)
+    parser.add_argument("--out-csv", type=Path, required=True)
     parser.add_argument("--local-api", default="http://localhost:8080/api")
     parser.add_argument("--reference-api", default="http://localhost:80/api")
     parser.add_argument("--processm-login", default="admin@example.com")
     parser.add_argument("--processm-password", default="Admin1234")
     parser.add_argument("--confirm-destroy-volumes", action="store_true")
-    parser.add_argument("--resume", action="store_true", help="retain completed two-row datasets in the output CSV")
+    parser.add_argument("--dataset", required=True, help="one planned isolated point, for the resumable study scheduler")
     return parser.parse_args()
 
 
@@ -84,29 +76,13 @@ def docker(*args: str, timeout: float = 300.0) -> str:
     return output.strip()
 
 
-def resolve_datasets_dir(explicit: Path | None) -> Path:
-    if explicit:
-        path = explicit.resolve()
-        if not path.is_dir():
-            raise ScriptError(f"datasets directory does not exist: {path}")
-        return path
-    runs_root = repo_root() / "tmp" / "benchmark-results"
-    candidates = sorted(
-        (child for child in runs_root.iterdir() if (child / "generated-datasets").is_dir()),
-        key=lambda child: child.name,
-    ) if runs_root.is_dir() else []
-    if not candidates:
-        raise ScriptError("no generated-datasets found; pass --datasets-dir")
-    return candidates[-1] / "generated-datasets"
-
-
 def dataset_names(datasets_dir: Path) -> list[str]:
     manifest = datasets_dir.parent / "datasets.csv"
     if not manifest.is_file():
         raise ScriptError(f"missing dataset manifest next to generated files: {manifest}")
     with manifest.open(newline="", encoding="utf-8-sig") as handle:
         rows = list(csv.DictReader(handle))
-    names = [row["datasetName"] for row in rows if row.get("series") in SCALING_SERIES]
+    names = [row["datasetName"] for row in rows if row.get("series") == "size-scaling"]
     missing = [name for name in names if not (datasets_dir / f"{name}.xes.gz").is_file()]
     if missing:
         raise ScriptError("missing generated XES files: " + ", ".join(missing))
@@ -147,7 +123,7 @@ def prepare_clean_stack(args: argparse.Namespace, expected_local_image_id: str) 
     code, output = run_capture(command, timeout=1_800.0)
     if code != 0:
         raise ScriptError(f"clean stack preparation failed:\n{output.strip()}")
-    # This stack is consumed by the storage probe, not by BenchmarkRunner. Remove
+    # This stack is consumed by the storage probe, not by StudyCollector. Remove
     # the single-use benchmark marker so a later timing run cannot mistake a used
     # storage-probe stack for a pristine one.
     marker = repo_root() / FRESH_STACK_MARKER
@@ -241,113 +217,76 @@ def ratio(delta: int, baseline: int) -> str:
     return f"{delta / baseline:.6f}".rstrip("0").rstrip(".")
 
 
-def resumable_rows(
-    path: Path,
-    git_commit: str,
-    expected_image_ids: dict[str, str],
-) -> list[dict[str, str]]:
-    if not path.is_file():
-        return []
-    with path.open(newline="", encoding="utf-8-sig") as handle:
-        rows = list(csv.DictReader(handle))
-    by_name: dict[str, list[dict[str, str]]] = {}
-    for row in rows:
-        by_name.setdefault(row.get("datasetName", ""), []).append(row)
-    retained: list[dict[str, str]] = []
-    for dataset_rows in by_name.values():
-        proof_ids = {row.get("stackPreparationId", "") for row in dataset_rows}
-        if (
-            len(dataset_rows) == 2
-            and {row.get("system") for row in dataset_rows} == {"local", "reference"}
-            and all(row.get("measurementMode") == "isolated-fresh-stack" for row in dataset_rows)
-            and len(proof_ids) == 1
-            and "" not in proof_ids
-            and all(row.get("stackPreparedAtUtc") for row in dataset_rows)
-            and all(row.get("gitCommit") == git_commit for row in dataset_rows)
-            and all(
-                row.get(column) == expected_image_ids[component]
-                for row in dataset_rows
-                for column, component in IMAGE_COLUMNS.items()
-            )
-            and all((float(row.get("deltaBytes", "0")) if row.get("deltaBytes", "").isdigit() else 0) > 0 for row in dataset_rows)
-        ):
-            retained.extend(dataset_rows)
-    return retained
-
-
 def main() -> int:
     args = parse_args()
     if not args.confirm_destroy_volumes:
         raise ScriptError("pass --confirm-destroy-volumes; every measured point recreates Docker volumes")
-    datasets_dir = resolve_datasets_dir(args.datasets_dir)
-    names = dataset_names(datasets_dir)
+    datasets_dir = args.datasets_dir.resolve()
+    name = args.dataset
+    if name not in dataset_names(datasets_dir):
+        raise ScriptError(f"dataset is absent from the size-series anchor manifest: {name}")
+    xes = datasets_dir / f"{name}.xes"
+    gz = datasets_dir / f"{name}.xes.gz"
+    if not xes.is_file() or not gz.is_file():
+        raise ScriptError(f"missing plain or compressed XES input for {name}")
     expected_image_ids, expected_git_commit = anchor_provenance(datasets_dir)
     out_path = args.out_csv if args.out_csv.is_absolute() else repo_root() / args.out_csv
     out_path.parent.mkdir(parents=True, exist_ok=True)
     git_code, git_commit = run_capture(["git", "rev-parse", "HEAD"], timeout=30.0)
     if git_code != 0 or not git_commit.strip():
-        raise ScriptError("cannot resolve the Git commit for storage-resume validation")
+        raise ScriptError("cannot resolve the Git commit for storage validation")
     if git_commit.strip() != expected_git_commit:
         raise ScriptError(
             f"current Git commit differs from the anchor run: "
             f"expected {expected_git_commit}, got {git_commit.strip()}"
         )
-    retained = resumable_rows(out_path, git_commit.strip(), expected_image_ids) if args.resume else []
-    done = {row["datasetName"] for row in retained}
-    with out_path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=CSV_HEADER)
-        writer.writeheader()
-        writer.writerows({field: row.get(field, "") for field in CSV_HEADER} for row in retained)
-
-    for index, name in enumerate(names, start=1):
-        if name in done:
-            info(f"[{index}/{len(names)}] {name}: already complete, skipping")
-            continue
-        xes = datasets_dir / f"{name}.xes"
-        gz = datasets_dir / f"{name}.xes.gz"
-        info(f"[{index}/{len(names)}] {name}: preparing isolated stack")
-        proof = prepare_clean_stack(args, expected_image_ids["processm-interpreter"])
-        if proof.get("gitCommit") != expected_git_commit:
-            raise ScriptError(
-                f"isolated stack Git commit differs from the anchor run: "
-                f"expected {expected_git_commit}, got {proof.get('gitCommit')}"
-            )
-        if proof.get("imageIds") != expected_image_ids:
-            raise ScriptError(
-                f"isolated stack image IDs differ from the anchor run: "
-                f"expected {expected_image_ids}, got {proof.get('imageIds')}"
-            )
-        local_before = measure_local_bytes()
-        reference_before = measure_reference_bytes()
-        import_dataset(args, name, gz)
-        local_after = measure_local_bytes()
-        reference_after = measure_reference_bytes()
-        xes_bytes = xes.stat().st_size
-        gz_bytes = gz.stat().st_size
-        rows = []
-        for system, before, after in (
-            ("local", local_before, local_after),
-            ("reference", reference_before, reference_after),
-        ):
-            delta = after - before
-            if delta <= 0:
-                raise ScriptError(f"isolated {system}/{name} produced non-positive durable delta {delta} B")
-            rows.append([
-                name, system, "isolated-fresh-stack", proof.get("preparationId", ""),
-                proof.get("preparedAtUtc", ""), proof.get("gitCommit", ""),
-                proof["imageIds"]["processm-interpreter"],
-                proof["imageIds"]["processm-neo4j"],
-                proof["imageIds"]["processm-server"],
-                before, after, delta,
-                xes_bytes, gz_bytes, ratio(delta, xes_bytes), ratio(delta, gz_bytes),
-            ])
-        with out_path.open("a", encoding="utf-8", newline="") as handle:
-            csv.writer(handle).writerows(rows)
-        info(
-            f"[{index}/{len(names)}] {name}: "
-            f"local +{local_after - local_before:,} B; "
-            f"reference +{reference_after - reference_before:,} B"
+    if out_path.exists():
+        raise ScriptError(f"storage result already exists: {out_path}; resume through benchmark-study.py")
+    info(f"{name}: preparing isolated stack")
+    proof = prepare_clean_stack(args, expected_image_ids["processm-interpreter"])
+    if proof.get("gitCommit") != expected_git_commit:
+        raise ScriptError(
+            f"isolated stack Git commit differs from the anchor run: "
+            f"expected {expected_git_commit}, got {proof.get('gitCommit')}"
         )
+    if proof.get("imageIds") != expected_image_ids:
+        raise ScriptError(
+            f"isolated stack image IDs differ from the anchor run: "
+            f"expected {expected_image_ids}, got {proof.get('imageIds')}"
+        )
+    local_before = measure_local_bytes()
+    reference_before = measure_reference_bytes()
+    import_dataset(args, name, gz)
+    local_after = measure_local_bytes()
+    reference_after = measure_reference_bytes()
+    xes_bytes = xes.stat().st_size
+    gz_bytes = gz.stat().st_size
+    rows = []
+    for system, before, after in (
+        ("local", local_before, local_after),
+        ("reference", reference_before, reference_after),
+    ):
+        delta = after - before
+        if delta <= 0:
+            raise ScriptError(f"isolated {system}/{name} produced non-positive durable delta {delta} B")
+        rows.append([
+            name, system, "isolated-fresh-stack", proof.get("preparationId", ""),
+            proof.get("preparedAtUtc", ""), proof.get("gitCommit", ""),
+            proof["imageIds"]["processm-interpreter"],
+            proof["imageIds"]["processm-neo4j"],
+            proof["imageIds"]["processm-server"],
+            before, after, delta,
+            xes_bytes, gz_bytes, ratio(delta, xes_bytes), ratio(delta, gz_bytes),
+        ])
+    with out_path.open("x", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(CSV_HEADER)
+        writer.writerows(rows)
+    info(
+        f"{name}: "
+        f"local +{local_after - local_before:,} B; "
+        f"reference +{reference_after - reference_before:,} B"
+    )
 
     info(f"Storage measurements written to {out_path}")
     return 0

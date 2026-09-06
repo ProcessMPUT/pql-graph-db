@@ -11,6 +11,8 @@ import com.processm.processminterpreter.pql.cypher.CypherQuery
 import com.processm.processminterpreter.pql.cypher.SYNTHETIC_LOG_KEY_ALIAS
 import com.processm.processminterpreter.pql.cypher.SYNTHETIC_LOG_METADATA_ALIAS
 import com.processm.processminterpreter.pql.cypher.SYNTHETIC_LOG_NODE_ALIAS
+import com.processm.processminterpreter.pql.cypher.SYNTHETIC_TRACE_PRESENT_ALIAS
+import com.processm.processminterpreter.pql.cypher.SYNTHETIC_EVENT_PRESENT_ALIAS
 import com.processm.processminterpreter.neo4j.query.result.HierarchicalWindowing
 import com.processm.processminterpreter.neo4j.query.result.HierarchyReconstructor
 import com.processm.processminterpreter.neo4j.query.result.NodeRowHierarchyBuilder
@@ -324,7 +326,8 @@ class Neo4jQueryPlanExecutor(
     private fun LogicalPlan.Select.projectedRecordKeys(cypher: CypherQuery): Set<String> {
         val selectAllNodeColumns = projection.selectAll.filterValues { it }.keys.map { it.nodeColumnName() }
         return cypher.columnAliases.keys + selectAllNodeColumns +
-            SYNTHETIC_LOG_METADATA_ALIAS + SYNTHETIC_LOG_NODE_ALIAS + SYNTHETIC_LOG_KEY_ALIAS
+            SYNTHETIC_LOG_METADATA_ALIAS + SYNTHETIC_LOG_NODE_ALIAS + SYNTHETIC_LOG_KEY_ALIAS +
+            SYNTHETIC_TRACE_PRESENT_ALIAS + SYNTHETIC_EVENT_PRESENT_ALIAS
     }
 
     private fun Record.toProjectedRow(allowedKeys: Set<String>): Map<String, Any?> {

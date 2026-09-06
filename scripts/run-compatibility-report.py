@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 import argparse
 import csv
+import hashlib
 import json
 import re
 import sys
@@ -43,6 +44,7 @@ from compatibility_query_set import (  # noqa: E402
     discovery_queries,
     multi_log_compatibility_queries,
     multi_log_discovery_queries,
+    thesis_queries,
 )
 
 PAYLOAD_WARNING_PERCENT = 20.0
@@ -53,7 +55,7 @@ FIELDS = [
     "Group", "Source", "Status", "Seconds", "Details", "LocalSuccess", "RemoteSuccess",
     "Match", "LocalJsonLines", "RemoteJsonLines", "LineDelta", "LineDeltaPercent",
     "LocalJsonBytes", "RemoteJsonBytes", "ByteDelta", "ByteDeltaPercent",
-    "PayloadWarning", "SnapshotPath",
+    "PayloadWarning", "SnapshotPath", "SnapshotKind", "LocalCount", "RemoteCount", "MinimumLogs",
 ]
 
 EMPTY_PAYLOAD = {
@@ -75,7 +77,7 @@ def parse_args() -> argparse.Namespace:
         default=Path(__file__).resolve().parent / "verify-compatibility.cases.local.json",
         help="cases file; generate from verify-compatibility.cases.example.json",
     )
-    parser.add_argument("--query-source", choices=("dropdown", "matrix", "discovery"), default="dropdown")
+    parser.add_argument("--query-source", choices=("dropdown", "matrix", "discovery", "thesis"), default="dropdown")
     parser.add_argument("--profile", choices=("quick", "extended"), default="extended")
     parser.add_argument("--index-html", type=Path, default=default_index_html())
     parser.add_argument("--output-root", type=Path, default=repo_root() / "tmp" / "compatibility-reports")
@@ -100,6 +102,8 @@ def load_cases(path: Path, what: str) -> list[dict[str, Any]]:
 
 
 def select_queries(args: argparse.Namespace) -> list[Query]:
+    if args.query_source == "thesis":
+        return thesis_queries()
     if args.query_source == "dropdown":
         return compare_dropdown_queries(args.index_html)
     if args.query_source == "matrix":
@@ -166,12 +170,19 @@ class Report:
             timeout=self.args.timeout,
         )
 
-    def save_full_snapshot(self, case: dict[str, Any], query: Query, request: dict[str, Any]) -> str:
+    def save_full_snapshot(self, case: dict[str, Any], query: Query, request: dict[str, Any], snapshot: Any = None) -> str:
         self.failure_directory.mkdir(parents=True, exist_ok=True)
-        name = f"{safe_filename(str(case.get('name')))}__{safe_filename(query.label)}.json"
+        # Sanitized labels alone collide, e.g. hoisting by ^ and ^^.
+        identity = json.dumps(
+            [case.get("name"), case.get("localDataStoreId"), case.get("remoteDataStoreId"), query.label, query.query],
+            ensure_ascii=False,
+        )
+        suffix = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
+        name = f"{safe_filename(str(case.get('name')))}__{safe_filename(query.label)}__{suffix}.json"
         path = self.failure_directory / name
         try:
-            snapshot = self.verify(request, "full")
+            if snapshot is None:
+                snapshot = self.verify(request, "full")
         except ScriptError as error:
             error_path = path.with_suffix(".error.txt")
             write_text(error_path, str(error))
@@ -179,7 +190,7 @@ class Report:
         write_text(path, json.dumps(snapshot, indent=2, ensure_ascii=False))
         return str(path)
 
-    def measure_payload(self, request: dict[str, Any]) -> dict[str, Any]:
+    def measure_payload(self, request: dict[str, Any], snapshot: Any = None) -> dict[str, Any]:
         """Compare serialized local and remote payloads.
 
         Absolute line and byte counts depend on this serializer, so compare them
@@ -187,7 +198,8 @@ class Report:
         deltas and percentages, which is what the warning is based on, are
         serializer-independent because both sides go through the same dump.
         """
-        snapshot = self.verify(request, "full")
+        if snapshot is None:
+            snapshot = self.verify(request, "full")
 
         def dump(value: Any) -> str:
             if value is None:
@@ -234,11 +246,13 @@ class Report:
             "Comparison": query.comparison,
             "Group": query.group,
             "Source": query.source,
+            "MinimumLogs": query.minimum_logs,
         }
         started = time.monotonic()
 
         try:
-            response = self.verify(request, "light") or {}
+            full_response = self.args.save_full_snapshots or self.args.measure_payload_size
+            response = self.verify(request, "full" if full_response else "light") or {}
             seconds = round(time.monotonic() - started, 2)
 
             if response.get("comparisonStatus") == "NONDETERMINISTIC_MATCH":
@@ -252,23 +266,35 @@ class Report:
             else:
                 status = "MISMATCH"
 
+            expectation_error = ""
+            if query.minimum_logs and (
+                not response.get("localSuccess") or not response.get("remoteSuccess")
+                or any(not isinstance(response.get(k), int) or response[k] < query.minimum_logs
+                       for k in ("localCount", "remoteCount"))
+            ):
+                status = "ERROR"
+                expectation_error = f"Positive case requires at least {query.minimum_logs} returned logs on each side; "
+                expectation_error += f"got LOCAL={response.get('localCount')}, REFERENCE={response.get('remoteCount')}. "
+
             snapshot_path = ""
             if self.args.save_full_snapshots or (
                 status in ("MISMATCH", "ERROR") and not self.args.skip_failure_snapshots
             ):
-                snapshot_path = self.save_full_snapshot(case, query, request)
+                snapshot_path = self.save_full_snapshot(case, query, request, response if full_response else None)
 
             payload = dict(EMPTY_PAYLOAD)
             if self.args.measure_payload_size:
-                payload = self.measure_payload(request)
+                payload = self.measure_payload(request, response)
 
             return {
                 **base, "Status": status, "Seconds": seconds,
-                "Details": first_comparison_line(response.get("details")),
+                "Details": expectation_error + first_comparison_line(response.get("details")),
                 "LocalSuccess": response.get("localSuccess"),
                 "RemoteSuccess": response.get("remoteSuccess"),
                 "Match": response.get("match"),
                 **payload, "SnapshotPath": snapshot_path,
+                "SnapshotKind": ("same-response" if full_response else "diagnostic-replay") if snapshot_path else "",
+                "LocalCount": response.get("localCount"), "RemoteCount": response.get("remoteCount"),
             }
         except ScriptError as error:
             seconds = round(time.monotonic() - started, 2)
@@ -279,6 +305,8 @@ class Report:
                 **base, "Status": "ERROR", "Seconds": seconds, "Details": str(error),
                 "LocalSuccess": False, "RemoteSuccess": False, "Match": False,
                 **EMPTY_PAYLOAD, "SnapshotPath": snapshot_path,
+                "SnapshotKind": "diagnostic-replay" if snapshot_path else "",
+                "LocalCount": None, "RemoteCount": None,
             }
 
 
@@ -302,6 +330,8 @@ def build_markdown(
         lines.append(f"- Dropdown source file: {args.index_html}")
     elif args.query_source == "discovery":
         lines.append("- Discovery query set: discovery_queries()")
+    elif args.query_source == "thesis":
+        lines.append("- Frozen query set: thesis-compatibility-queries.json (69 named cases)")
     else:
         lines.append(f"- Matrix profile: {args.profile}")
 
@@ -316,6 +346,8 @@ def build_markdown(
 
     lines.append(f"- Checks: {len(results)}")
     lines.append(f"- Matches: {counts['matches']}")
+    lines.append(f"- Strict successful responses: {sum(r['Status'] == 'MATCH' and r['LocalSuccess'] and r['RemoteSuccess'] for r in results)}")
+    lines.append(f"- Matching rejections: {sum(r['Status'] == 'MATCH' and not r['LocalSuccess'] and not r['RemoteSuccess'] for r in results)}")
     lines.append(f"- Accepted compatibility checks: {counts['accepted']}")
     lines.append(f"- Strict problems: {counts['strict']}")
     lines.append(f"- Informational mismatches: {counts['informational']}")
@@ -327,7 +359,7 @@ def build_markdown(
 
     lines.append("")
     lines.append(
-        "Result: all strict compatibility checks matched ProcessM."
+        "Result: no strict problems remain; INFO cases are reported separately from strict matches."
         if counts["strict"] == 0
         else "Result: strict compatibility problems were found."
     )
@@ -399,9 +431,9 @@ def main() -> int:
             else multi_log_compatibility_queries()
         )
 
-    run_id = datetime.now().strftime("%Y%m%d-%H%M%S")
+    run_id = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     output_directory = args.output_root / run_id
-    output_directory.mkdir(parents=True, exist_ok=True)
+    output_directory.mkdir(parents=True, exist_ok=False)
     report = Report(args, output_directory)
 
     checks: list[tuple[dict[str, Any], Query]] = [

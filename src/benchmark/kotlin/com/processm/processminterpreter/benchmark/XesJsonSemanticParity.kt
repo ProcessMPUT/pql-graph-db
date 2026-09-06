@@ -3,6 +3,7 @@ package com.processm.processminterpreter.benchmark
 import com.fasterxml.jackson.core.type.TypeReference
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.processm.processminterpreter.processm.compat.XESJsonComparator
+import com.processm.processminterpreter.processm.json.ProcessMXesJsonParser
 
 /** Untimed semantic parity check using the same strict comparator as compatibility reports. */
 object XesJsonSemanticParity {
@@ -33,5 +34,9 @@ object XesJsonSemanticParity {
     }
 
     private fun parse(body: String): List<Map<String, Any?>>? =
-        runCatching { mapper.readValue(body, listType) }.getOrNull()
+        runCatching {
+            val root = ProcessMXesJsonParser.parse(body)
+            require(root.isArray && root.all { it.isObject }) { "Expected an XES-JSON array" }
+            mapper.convertValue(root, listType)
+        }.getOrNull()
 }

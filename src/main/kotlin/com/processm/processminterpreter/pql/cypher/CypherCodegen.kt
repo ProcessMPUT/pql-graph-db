@@ -19,6 +19,7 @@ class CypherCodegen(propertyMapper: PhysicalAttributeMapper) {
     private val deleteRenderer = CypherDeleteRenderer(filterRenderer)
     private val hierarchyRenderer = CypherHierarchyRenderer(expressions, filterRenderer)
     private val aggregationRenderer = CypherAggregationRenderer(expressions)
+    private val scopedAggregationRenderer = CypherScopedAggregationRenderer(expressions)
     private val projectionRenderer = CypherProjectionRenderer(expressions)
     private val groupByRenderer = CypherGroupByRenderer(expressions)
 
@@ -79,13 +80,12 @@ class CypherCodegen(propertyMapper: PhysicalAttributeMapper) {
     private fun emitPreMatchShapeIfNeeded(s: CypherBuildState): Boolean =
         groupByRenderer.emitCachedActivityVariantCountIfNeeded(s) ||
             aggregationRenderer.emitHierarchyCardinalityIfNeeded(s) ||
+            scopedAggregationRenderer.emitIfNeeded(s) ||
             aggregationRenderer.emitPreMatchIfNeeded(s) ||
             groupByRenderer.emitLimitedBeforeMatchIfNeeded(s)
 
     private fun emitPostMatchShapeIfNeeded(s: CypherBuildState): Boolean =
-        aggregationRenderer.emitPlaceholderHierarchyIfNeeded(s) ||
-            groupByRenderer.emitTraceVariantIfNeeded(s) ||
-            aggregationRenderer.emitTraceGroupAggregateIfNeeded(s) ||
+        groupByRenderer.emitTraceVariantIfNeeded(s) ||
             groupByRenderer.emitEventGroupByOnlyIfNeeded(s) ||
             aggregationRenderer.emitAggregateOrderByIfNeeded(s)
 
